@@ -554,4 +554,137 @@ mod tests {
          now.
         "###);
     }
+
+    #[test]
+    fn test_english_3() {
+        let timeline = init_timeline!(english_3);
+
+        insta::assert_snapshot!(timeline.view(TimelineFilter::default()).to_string(), @r###"
+        0
+        -Okay. Michael, why don't you start us off?
+
+        1
+        -That wasn't much of an introduction. -Ladies and gentlemen,
+
+        0
+        your boss, Michael
+
+        1
+        Scott. Still lame. Okay. Alright. Thank you, Ryan, for that wonderful introduction.
+
+        1
+        Okay. Today we're going to be talking about PowerPoint. PowerPoint. PowerPoint. PowerPoint. Yes, I forgot about Ryan's presentation and yes, it would have been nice to do well with the first presentation that he'd given me. But you know what else would have been nice? Winning the lottery. And the best way to start is to hit start, and up comes the toolbar. That's what she said.
+
+        1
+        What we have to do here is go to run, and then you look up to PowerPoint, and we are in. We are going to register. You hit register. Updates are ready. I should update.
+
+        1
+        Estimated time twelve minutes, so this should take about five or ten minutes.
+
+        0
+        This is the first time you've opened PowerPoint. Why? -You didn't prepare a presentation at all, did you?
+
+        2
+        Know what?
+
+        1
+        I had a really rough night, and my boss can back me up on that.
+
+        0
+        -I'm your boss. -My other boss, Mr. Figaro. -You have another job?
+
+        1
+        -What I do between 05:30 p. M. And one a. M. Is nobody's business but mine and my other businesses.
+
+        0
+        -Are you going to waitress? -You cannot have a second job if it affects your work here.
+
+        1
+        -It won't? -It did already. -Okay. Honestly, it is unlikely that I was gonna figure this out anyway.
+
+        0
+        That is so funny. Why is Daryl here? He works in a warehouse. I invited him. It's not a party. Daryl, back downstairs. This isn't the information you need.
+
+        2
+        This information here? Yeah. You're right. I don't need this. Okay.
+
+        2
+        Hey. Come on.
+
+        0
+        See you later tonight.
+
+        2
+        I got plans later.
+
+        0
+        Okay. Bye, honey. How long until you actually get this presentation ready?
+
+        1
+        Don't you do this presentation? Because I you know how to do it.
+
+        0
+        What I really want, honestly Michael, is for you to know it so that you can communicate it to the people here, to your clients, to whomever.
+
+        1
+        Okay. What? It's whoever not whomever. Not whomever. No whomever is never actually right.
+
+        0
+        Well sometimes it's right.
+
+        1
+        Michael is right. It's a made up word used to trick students.
+
+        3
+        No. Actually whomever is the formal version of the word.
+
+        0
+        Obviously it's a real word but I don't know when to use it correctly.
+
+        1
+        Not a native speaker.
+
+        2
+        I know what's right, but I'm not gonna say because you're all jerks who didn't come see my band last night.
+
+        0
+        Do you really know which one is correct?
+
+        2
+        I don't know.
+
+        0
+        It's whom when it's the object of the sentence and who when it's the subject. Subject. That sounds right.
+
+        1
+        Well, sounds right but is it
+
+        2
+        How did Ryan use it as an object? As
+
+        0
+        an object. Ryan used me as an object.
+
+        2
+        Is he writing about the
+
+        0
+        How did he use it again?
+
+        3
+        It was Ryan wanted Michael, the subject, to explain the computer system, the object.
+
+        1
+        Thank you.
+
+        3
+        To whomever, meaning us, the indirect object, which is the correct usage of the word.
+
+        1
+        No one asked you anything ever, so whomever's name is Toby, why don't you take
+
+        0
+        a letter opener and stick it in your skull? Hey, this doesn't matter, and I don't even care. Michael, you quit the other job or you're fired here.
+        "###);
+    }
 }
