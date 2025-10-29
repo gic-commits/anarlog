@@ -1,11 +1,11 @@
 import { cn } from "@hypr/utils";
 
-import { Link } from "@tanstack/react-router";
-
-export function DownloadButton() {
+export function JoinWaitlistButton() {
   return (
-    <Link
-      to="/download"
+    <a
+      href="https://tally.so/r/mJaRDY"
+      target="_blank"
+      rel="noopener noreferrer"
       className={cn([
         "group px-6 h-12 flex items-center justify-center text-base sm:text-lg",
         "bg-linear-to-t from-stone-600 to-stone-500 text-white rounded-full",
@@ -13,7 +13,7 @@ export function DownloadButton() {
         "transition-all",
       ])}
     >
-      Download now
+      Join waitlist
       <svg
         xmlns="http://www.w3.org/2000/svg"
         fill="none"
@@ -28,6 +28,6 @@ export function DownloadButton() {
           d="m12.75 15 3-3m0 0-3-3m3 3h-7.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
         />
       </svg>
-    </Link>
+    </a>
   );
 }
