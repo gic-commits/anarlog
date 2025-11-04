@@ -3,9 +3,10 @@ import { cn } from "@hypr/utils";
 import { Icon } from "@iconify-icon/react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 
+import { Image } from "@/components/image";
 import { SlashSeparator } from "@/components/slash-separator";
 
-export const Route = createFileRoute("/_view/download")({
+export const Route = createFileRoute("/_view/download/")({
   component: Component,
 });
 
@@ -47,7 +48,7 @@ function Component() {
               <DownloadCard
                 iconName="simple-icons:apple"
                 spec="macOS 14.2+ (Apple Silicon)"
-                downloadUrl="#"
+                downloadUrl="/download/apple-silicon"
                 available={true}
               />
               <DownloadCard
@@ -91,13 +92,9 @@ function Component() {
             </div>
           </div>
         </section>
-
         <SlashSeparator />
-
         <FAQSection />
-
         <SlashSeparator />
-
         <CTASection />
       </div>
     </div>
@@ -124,6 +121,7 @@ function DownloadCard({
         ? (
           <a
             href={downloadUrl}
+            download
             className="group w-full px-4 h-11 flex items-center justify-center bg-linear-to-t from-stone-600 to-stone-500 text-white rounded-full shadow-md hover:shadow-lg hover:scale-[102%] active:scale-[98%] transition-all text-base font-medium"
           >
             Download
@@ -195,9 +193,11 @@ function CTASection() {
     <section className="py-16 bg-linear-to-t from-stone-50/30 to-stone-100/30 px-4 laptop:px-0">
       <div className="flex flex-col gap-6 items-center text-center">
         <div className="mb-4 size-40 shadow-2xl border border-neutral-100 flex justify-center items-center rounded-[48px] bg-transparent">
-          <img
-            src="/hyprnote/icon.png"
+          <Image
+            src="https://ijoptyyjrfqwaqhyxkxj.supabase.co/storage/v1/object/public/public_images/hyprnote/icon.png"
             alt="Hyprnote"
+            width={144}
+            height={144}
             className="size-36 mx-auto rounded-[40px] border border-neutral-100"
           />
         </div>
