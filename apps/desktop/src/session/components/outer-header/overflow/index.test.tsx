@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OverflowButton } from "./index";
@@ -12,6 +18,7 @@ const {
   regenerateTranscriptMock,
   audioExists,
   currentNoteContent,
+  exportModalMock,
   useHasTranscriptMock,
   useListenerMock,
   useConfigValueMock,
@@ -22,6 +29,9 @@ const {
   regenerateTranscriptMock: vi.fn(),
   audioExists: { value: false },
   currentNoteContent: { value: "" },
+  exportModalMock: vi.fn(
+    (_props: { open: boolean; onOpenChange: (open: boolean) => void }) => null,
+  ),
   useHasTranscriptMock: vi.fn(),
   useListenerMock: vi.fn(),
   useConfigValueMock: vi.fn(),
@@ -66,7 +76,7 @@ vi.mock("./delete", () => ({
 }));
 
 vi.mock("./export-modal", () => ({
-  ExportModal: () => null,
+  ExportModal: exportModalMock,
 }));
 
 vi.mock("./listening", () => ({
@@ -233,6 +243,50 @@ describe("OverflowButton", () => {
     );
 
     expect(trigger).not.toBeNull();
+  });
+
+  it("mounts the export modal only after export is selected", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 0;
+    });
+
+    render(
+      <OverflowButton
+        sessionId="session-1"
+        currentView={{ type: "enhanced", id: "note-1" } as EditorView}
+      />,
+    );
+
+    expect(exportModalMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+
+    expect(exportModalMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the export modal mounted after it closes", async () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 0;
+    });
+
+    render(
+      <OverflowButton
+        sessionId="session-1"
+        currentView={{ type: "enhanced", id: "note-1" } as EditorView}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+    exportModalMock.mock.lastCall?.[0].onOpenChange(false);
+
+    await waitFor(() => {
+      expect(exportModalMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ open: false }),
+        undefined,
+      );
+    });
   });
 
   it("hides upload actions when the current note has content", () => {
