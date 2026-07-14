@@ -3521,6 +3521,10 @@
       "name": "nango"
     },
     {
+      "description": "CloudSync credential management",
+      "name": "sync"
+    },
+    {
       "description": "Subscription and trial management",
       "name": "subscription"
     },

@@ -26,7 +26,11 @@ import { commands as openerCommands } from "@hypr/plugin-opener2";
 import { openUrlWithInstruction } from "@hypr/plugin-windows";
 import { deriveBillingInfo } from "@hypr/supabase";
 
-import { supabase } from "./client";
+import { persistAuthSession, supabase } from "./client";
+import {
+  handleCloudsyncAuthChange,
+  prepareCloudsyncSignOut,
+} from "./cloudsync";
 import { clearAuthStorage, isFatalSessionError } from "./errors";
 
 import {
@@ -79,40 +83,28 @@ export function useAuth() {
   return context;
 }
 
-async function clearInvalidSession(
-  _client: SupabaseClient,
-  setSession: (session: Session | null) => void,
-): Promise<void> {
-  await clearAuthStorage();
-  setSession(null);
-}
-
-async function initSession(
+async function loadInitialSession(
   client: SupabaseClient,
-  setSession: (session: Session | null) => void,
-): Promise<void> {
-  const onClear = () => clearInvalidSession(client, setSession);
-
+): Promise<{ clearStorage: boolean; session: Session | null }> {
   try {
     const { data, error } = await client.auth.getSession();
 
     if (error) {
-      if (isFatalSessionError(error)) {
-        await onClear();
-      } else {
-        setSession(null);
-      }
-      return;
+      return {
+        clearStorage: isFatalSessionError(error),
+        session: null,
+      };
     }
 
-    // Always resolve to null so session never stays undefined after init
-    setSession(data.session ?? null);
+    return {
+      clearStorage: false,
+      session: data.session ?? null,
+    };
   } catch (e) {
-    if (isFatalSessionError(e)) {
-      await onClear();
-    } else {
-      setSession(null);
-    }
+    return {
+      clearStorage: isFatalSessionError(e),
+      session: null,
+    };
   }
 }
 
@@ -196,6 +188,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [fingerprint, setFingerprint] = useState<string | null>(null);
   // Prevents double initSession in React StrictMode, which can cause refresh token races
   const initStartedRef = useRef(false);
+  const authTransitionRef = useRef(0);
+  const nonInitialAuthTransitionRef = useRef(0);
+  const authTransitionQueueRef = useRef(Promise.resolve());
+  const authStorageRevisionRef = useRef(0);
 
   useEffect(() => {
     miscCommands.getFingerprint().then((result) => {
@@ -219,8 +215,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (res.error) {
         console.error(res.error);
-      } else {
-        setSession(res.data.session);
       }
     },
     [],
@@ -242,6 +236,141 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [setSessionFromTokens],
   );
 
+  const rejectAuthChange = useCallback(
+    async (transition: number, invalidateClientSession = false) => {
+      if (transition !== authTransitionRef.current) {
+        return;
+      }
+
+      if (invalidateClientSession && supabase) {
+        try {
+          await supabase.auth.stopAutoRefresh();
+        } catch {
+          console.warn("[auth] session refresh could not be stopped");
+        }
+
+        if (transition !== authTransitionRef.current) {
+          return;
+        }
+
+        try {
+          const { error } = await supabase.auth.signOut({ scope: "local" });
+          if (error) {
+            console.warn("[auth] rejected session could not be invalidated");
+          }
+        } catch {
+          console.warn("[auth] rejected session could not be invalidated");
+        }
+
+        if (transition !== authTransitionRef.current) {
+          return;
+        }
+      }
+
+      await clearAuthStorage();
+      authStorageRevisionRef.current += 1;
+
+      if (transition !== authTransitionRef.current) {
+        return;
+      }
+
+      trackedIdentifySignature = null;
+      trackedSignedInUserId = null;
+      await handleCloudsyncAuthChange("SIGNED_OUT", null);
+      if (transition === authTransitionRef.current) {
+        setSession(null);
+      }
+    },
+    [],
+  );
+
+  const applyAuthChange = useCallback(
+    async (
+      event: AuthChangeEvent,
+      nextSession: Session | null,
+      transition: number,
+      storageRevision: number,
+      clearStorage: boolean,
+    ) => {
+      if (transition !== authTransitionRef.current) {
+        return;
+      }
+
+      if (clearStorage || event === "SIGNED_OUT") {
+        await rejectAuthChange(
+          transition,
+          clearStorage && event !== "SIGNED_OUT",
+        );
+        return;
+      }
+
+      if (transition !== authTransitionRef.current) {
+        return;
+      }
+
+      if (nextSession && storageRevision !== authStorageRevisionRef.current) {
+        try {
+          await persistAuthSession(nextSession);
+        } catch {
+          console.warn("[auth] accepted session could not be restored");
+        }
+
+        if (transition !== authTransitionRef.current) {
+          return;
+        }
+      }
+
+      if (nextSession && supabase) {
+        try {
+          await supabase.auth.startAutoRefresh();
+        } catch {
+          console.warn("[auth] session refresh could not be started");
+        }
+
+        if (transition !== authTransitionRef.current) {
+          return;
+        }
+      }
+
+      setSession(nextSession);
+      void trackAuthEvent(event, nextSession);
+
+      const result = await handleCloudsyncAuthChange(event, nextSession);
+      if (
+        result !== "account_mismatch" ||
+        transition !== authTransitionRef.current
+      ) {
+        return;
+      }
+
+      await rejectAuthChange(transition, true);
+    },
+    [rejectAuthChange],
+  );
+
+  const enqueueAuthChange = useCallback(
+    (
+      event: AuthChangeEvent,
+      nextSession: Session | null,
+      clearStorage = false,
+    ) => {
+      const transition = ++authTransitionRef.current;
+      const storageRevision = authStorageRevisionRef.current;
+      const apply = () =>
+        applyAuthChange(
+          event,
+          nextSession,
+          transition,
+          storageRevision,
+          clearStorage,
+        );
+      const queued = authTransitionQueueRef.current.then(apply, apply);
+      authTransitionQueueRef.current = queued.catch(() => {});
+      return queued;
+    },
+    [applyAuthChange],
+  );
+
   useEffect(() => {
     if (!supabase) {
       return;
@@ -249,24 +378,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (!initStartedRef.current) {
       initStartedRef.current = true;
-      void initSession(supabase, setSession);
+      const initialTransition = authTransitionRef.current;
+      const initialNonInitialTransition = nonInitialAuthTransitionRef.current;
+      void loadInitialSession(supabase).then((initial) => {
+        if (initial.clearStorage) {
+          if (
+            initialNonInitialTransition === nonInitialAuthTransitionRef.current
+          ) {
+            void enqueueAuthChange("INITIAL_SESSION", null, true);
+          }
+          return;
+        }
+
+        if (initialTransition === authTransitionRef.current) {
+          void enqueueAuthChange("INITIAL_SESSION", initial.session);
+        }
+      });
     }
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event !== "INITIAL_SESSION") {
+        nonInitialAuthTransitionRef.current += 1;
+      }
       console.log(
         `[auth] onAuthStateChange: ${event}`,
         session ? `expires_at=${session.expires_at}` : "no session",
       );
-      void trackAuthEvent(event, session);
-      setSession(session);
+      void enqueueAuthChange(event, session);
     });
 
     return () => {
       subscription.unsubscribe();
     };
-  }, []);
+  }, [enqueueAuthChange]);
 
   // Tauri's visibilitychange event is broken (always reports "visible" on Windows,
   // only fires on minimize/maximize on macOS — not when hidden behind other windows).
@@ -329,39 +475,61 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    const currentSession = session;
+    if (currentSession) {
+      await prepareCloudsyncSignOut(currentSession);
+    }
+
+    const transition = authTransitionRef.current;
+    let shouldCleanUp = false;
+    let signOutError: unknown = null;
+
     try {
       const { error } = await supabase.auth.signOut({ scope: "local" });
+      if (transition !== authTransitionRef.current) {
+        return;
+      }
+
       if (error) {
         if (
           error instanceof AuthRetryableFetchError ||
           error instanceof AuthSessionMissingError
         ) {
-          trackedIdentifySignature = null;
-          trackedSignedInUserId = null;
-          await clearAuthStorage();
-          setSession(null);
-          return;
+          shouldCleanUp = true;
+        } else {
+          signOutError = error;
         }
-        console.error(error);
+      } else {
+        shouldCleanUp = true;
+      }
+    } catch (e) {
+      if (transition !== authTransitionRef.current) {
         return;
       }
 
-      trackedIdentifySignature = null;
-      trackedSignedInUserId = null;
-      await clearAuthStorage();
-      setSession(null);
-    } catch (e) {
       if (
         e instanceof AuthRetryableFetchError ||
         e instanceof AuthSessionMissingError
       ) {
-        trackedIdentifySignature = null;
-        trackedSignedInUserId = null;
-        await clearAuthStorage();
-        setSession(null);
+        shouldCleanUp = true;
+      } else {
+        signOutError = e;
       }
     }
-  }, []);
+
+    if (signOutError) {
+      if (currentSession) {
+        await handleCloudsyncAuthChange("TOKEN_REFRESHED", currentSession);
+      }
+      throw signOutError;
+    }
+
+    if (!shouldCleanUp || transition !== authTransitionRef.current) {
+      return;
+    }
+
+    await enqueueAuthChange("SIGNED_OUT", null);
+  }, [enqueueAuthChange, session]);
 
   const refreshSessionMutation = useMutation({
     mutationFn: async (): Promise<Session | null> => {
