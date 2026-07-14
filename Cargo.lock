@@ -3466,7 +3466,10 @@ name = "cloudsync"
 version = "0.1.0"
 dependencies = [
  "dirs 6.0.0",
+ "serde",
+ "serde_json",
  "sqlx",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4812,6 +4815,7 @@ version = "0.0.0"
 dependencies = [
  "audio-actual",
  "audio-mock",
+ "db-app",
  "db-core",
  "dirs 6.0.0",
  "host",
@@ -18145,6 +18149,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

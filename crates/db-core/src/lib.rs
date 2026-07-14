@@ -5,13 +5,14 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use sqlx::SqlitePool;
+use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{Sqlite, SqlitePool};
 
 use crate::cloudsync::CloudsyncRuntimeState;
 pub use crate::cloudsync::{
-    CloudsyncAuth, CloudsyncRuntimeConfig, CloudsyncRuntimeError, CloudsyncStatus,
-    CloudsyncTableSpec, cloudsync_begin_alter_on, cloudsync_commit_alter_on,
+    CloudsyncAuth, CloudsyncNetworkResult, CloudsyncRuntimeConfig, CloudsyncRuntimeError,
+    CloudsyncStatus, CloudsyncTableSpec, cloudsync_begin_alter_on, cloudsync_commit_alter_on,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -46,6 +47,8 @@ const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Db {
     pub(crate) cloudsync_enabled: bool,
     pub(crate) cloudsync_path: Option<PathBuf>,
+    pub(crate) cloudsync_connection: Arc<tokio::sync::Mutex<Option<PoolConnection<Sqlite>>>>,
+    pub(crate) cloudsync_lifecycle: Arc<tokio::sync::Mutex<()>>,
     pub(crate) cloudsync_runtime: Arc<Mutex<CloudsyncRuntimeState>>,
     pub(crate) pool: SqlitePool,
     change_notifier: hypr_db_change::ChangeNotifier,
@@ -107,6 +110,8 @@ impl Db {
         Ok(Self {
             cloudsync_enabled: true,
             cloudsync_path: Some(cloudsync_path),
+            cloudsync_connection: Arc::new(tokio::sync::Mutex::new(None)),
+            cloudsync_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             cloudsync_runtime: Arc::new(Mutex::new(CloudsyncRuntimeState::default())),
             pool,
             change_notifier,
@@ -127,6 +132,8 @@ impl Db {
         Ok(Self {
             cloudsync_enabled: true,
             cloudsync_path: Some(cloudsync_path),
+            cloudsync_connection: Arc::new(tokio::sync::Mutex::new(None)),
+            cloudsync_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             cloudsync_runtime: Arc::new(Mutex::new(CloudsyncRuntimeState::default())),
             pool,
             change_notifier,
@@ -147,6 +154,8 @@ impl Db {
         Ok(Self {
             cloudsync_enabled: false,
             cloudsync_path: None,
+            cloudsync_connection: Arc::new(tokio::sync::Mutex::new(None)),
+            cloudsync_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             cloudsync_runtime: Arc::new(Mutex::new(CloudsyncRuntimeState::default())),
             pool,
             change_notifier,
@@ -165,6 +174,8 @@ impl Db {
         Ok(Self {
             cloudsync_enabled: false,
             cloudsync_path: None,
+            cloudsync_connection: Arc::new(tokio::sync::Mutex::new(None)),
+            cloudsync_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             cloudsync_runtime: Arc::new(Mutex::new(CloudsyncRuntimeState::default())),
             pool,
             change_notifier,
@@ -184,6 +195,8 @@ impl Db {
         Ok(Self {
             cloudsync_enabled: false,
             cloudsync_path: None,
+            cloudsync_connection: Arc::new(tokio::sync::Mutex::new(None)),
+            cloudsync_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             cloudsync_runtime: Arc::new(Mutex::new(CloudsyncRuntimeState::default())),
             pool,
             change_notifier,
@@ -244,6 +257,8 @@ async fn connect_with_options(
     Ok(Db {
         cloudsync_enabled: options.cloudsync_enabled,
         cloudsync_path,
+        cloudsync_connection: Arc::new(tokio::sync::Mutex::new(None)),
+        cloudsync_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
         cloudsync_runtime: Arc::new(Mutex::new(CloudsyncRuntimeState::default())),
         pool,
         change_notifier,
@@ -269,7 +284,7 @@ mod tests {
             tables: vec![CloudsyncTableSpec {
                 table_name: "test_sync".to_string(),
                 crdt_algo: None,
-                force_init: None,
+                init_flags: None,
                 enabled: true,
             }],
             sync_interval_ms: 30_000,
@@ -389,6 +404,8 @@ mod tests {
         assert!(!status.network_initialized);
         assert!(!status.cloudsync_enabled);
 
+        db.cloudsync_logout(false).await.unwrap();
+        assert!(!db.cloudsync_status().await.unwrap().configured);
         db.cloudsync_stop().await.unwrap();
     }
 
