@@ -1,9 +1,9 @@
 import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 
 import {
-  claimCloudsyncAccount,
+  bindCloudsyncAccount,
   configureCloudsyncToken,
-  logoutCloudsync,
+  getCloudsyncStatus,
   suspendCloudsync,
 } from "@hypr/plugin-db";
 
@@ -12,8 +12,11 @@ import { env } from "~/env";
 const REFRESH_LEAD_MS = 2 * 60 * 1000;
 const RETRY_DELAY_MS = 60 * 1000;
 const MIN_REFRESH_DELAY_MS = 1000;
+const EXCHANGE_TIMEOUT_MS = 10 * 1000;
 
 export type CloudsyncAuthChangeResult = "ok" | "account_mismatch";
+
+type CloudsyncAccountMismatchHandler = () => Promise<void>;
 
 type CloudsyncCredentials = {
   databaseId: string;
@@ -49,10 +52,10 @@ function enqueuePluginOperation<T>(operation: () => Promise<T>) {
   return next;
 }
 
-export async function claimCloudsyncAccountForAuth(
+export async function bindCloudsyncAccountForAuth(
   accountUserId: string,
 ): Promise<boolean> {
-  return enqueuePluginOperation(() => claimCloudsyncAccount(accountUserId));
+  return enqueuePluginOperation(() => bindCloudsyncAccount(accountUserId));
 }
 
 async function suspendCloudsyncForGeneration(activeGeneration: number) {
@@ -77,6 +80,22 @@ async function suspendCloudsyncForGeneration(activeGeneration: number) {
   return activeGeneration === generation;
 }
 
+async function suspendCloudsyncAfterCredentialRejection(
+  activeGeneration: number,
+) {
+  if (!(await suspendCloudsyncForGeneration(activeGeneration))) {
+    if (activeGeneration === generation) {
+      refreshTimer = setTimeout(() => {
+        if (activeGeneration !== generation) {
+          return;
+        }
+
+        void suspendCloudsyncAfterCredentialRejection(activeGeneration);
+      }, RETRY_DELAY_MS);
+    }
+  }
+}
+
 function isCredentials(value: unknown): value is CloudsyncCredentials {
   if (!value || typeof value !== "object") {
     return false;
@@ -99,6 +118,7 @@ function scheduleExchange(
   session: Session,
   activeGeneration: number,
   delayMs: number,
+  onAccountMismatch?: CloudsyncAccountMismatchHandler,
 ) {
   if (activeGeneration !== generation) {
     return;
@@ -109,25 +129,85 @@ function scheduleExchange(
       return;
     }
 
-    void activateCloudsync(session);
+    void activateCloudsync(session, false, onAccountMismatch).then(
+      async (result) => {
+        if (result !== "account_mismatch" || !onAccountMismatch) {
+          return;
+        }
+
+        try {
+          await onAccountMismatch();
+        } catch {
+          console.warn("[cloudsync] account mismatch rejection failed");
+        }
+      },
+    );
   }, delayMs);
 }
 
 async function activateCloudsync(
   session: Session,
+  suspendBeforeExchange: boolean,
+  onAccountMismatch?: CloudsyncAccountMismatchHandler,
 ): Promise<CloudsyncAuthChangeResult> {
   const activeGeneration = beginTransition();
-  if (!(await suspendCloudsyncForGeneration(activeGeneration))) {
+  if (
+    suspendBeforeExchange &&
+    !(await suspendCloudsyncForGeneration(activeGeneration))
+  ) {
     if (activeGeneration === generation) {
-      scheduleExchange(session, activeGeneration, RETRY_DELAY_MS);
+      scheduleExchange(
+        session,
+        activeGeneration,
+        RETRY_DELAY_MS,
+        onAccountMismatch,
+      );
     }
+    return "ok";
+  }
+
+  let status;
+  try {
+    status = await enqueuePluginOperation(async () => {
+      if (activeGeneration !== generation) {
+        return null;
+      }
+      return getCloudsyncStatus();
+    });
+  } catch {
+    if (activeGeneration === generation) {
+      console.warn("[cloudsync] local sync status unavailable; retrying");
+      scheduleExchange(
+        session,
+        activeGeneration,
+        RETRY_DELAY_MS,
+        onAccountMismatch,
+      );
+    }
+    return "ok";
+  }
+
+  if (activeGeneration !== generation || !status) {
+    return "ok";
+  }
+
+  if (!status.cloudsync_enabled) {
+    console.warn(
+      "[cloudsync] native sync is unavailable; sync remains disabled",
+    );
     return "ok";
   }
 
   const controller = new AbortController();
   exchangeController = controller;
+  let exchangeTimedOut = false;
+  const exchangeTimeout = setTimeout(() => {
+    exchangeTimedOut = true;
+    controller.abort();
+  }, EXCHANGE_TIMEOUT_MS);
 
-  let response: Response;
+  let response: Response | null = null;
+  let credentials: unknown;
   try {
     response = await fetch(new URL("/sync/token", env.VITE_API_URL), {
       method: "POST",
@@ -136,15 +216,32 @@ async function activateCloudsync(
       },
       signal: controller.signal,
     });
+
+    if (response.ok) {
+      credentials = await response.json();
+    }
   } catch {
-    if (activeGeneration !== generation || controller.signal.aborted) {
+    if (
+      activeGeneration !== generation ||
+      (controller.signal.aborted && !exchangeTimedOut)
+    ) {
       return "ok";
     }
 
-    console.warn("[cloudsync] credential exchange unavailable; retrying");
-    scheduleExchange(session, activeGeneration, RETRY_DELAY_MS);
+    console.warn(
+      response === null
+        ? "[cloudsync] credential exchange unavailable; retrying"
+        : "[cloudsync] credential exchange returned an invalid response",
+    );
+    scheduleExchange(
+      session,
+      activeGeneration,
+      RETRY_DELAY_MS,
+      onAccountMismatch,
+    );
     return "ok";
   } finally {
+    clearTimeout(exchangeTimeout);
     if (exchangeController === controller) {
       exchangeController = null;
     }
@@ -156,11 +253,17 @@ async function activateCloudsync(
 
   if (!response.ok) {
     if (response.status === 404 || response.status === 501) {
+      if (!suspendBeforeExchange) {
+        await suspendCloudsyncAfterCredentialRejection(activeGeneration);
+      }
       console.warn("[cloudsync] credential exchange is not configured");
       return "ok";
     }
 
     if (response.status === 403) {
+      if (!suspendBeforeExchange) {
+        await suspendCloudsyncAfterCredentialRejection(activeGeneration);
+      }
       console.warn(
         "[cloudsync] Anarlog Pro is required; sync remains disabled",
       );
@@ -168,27 +271,20 @@ async function activateCloudsync(
     }
 
     if (response.status === 401) {
+      if (!suspendBeforeExchange) {
+        await suspendCloudsyncAfterCredentialRejection(activeGeneration);
+      }
       console.warn("[cloudsync] credential exchange requires a fresh session");
       return "ok";
     }
 
     console.warn("[cloudsync] credential exchange unavailable; retrying");
-    scheduleExchange(session, activeGeneration, RETRY_DELAY_MS);
-    return "ok";
-  }
-
-  let credentials: unknown;
-  try {
-    credentials = await response.json();
-  } catch {
-    if (activeGeneration !== generation) {
-      return "ok";
-    }
-
-    console.warn(
-      "[cloudsync] credential exchange returned an invalid response",
+    scheduleExchange(
+      session,
+      activeGeneration,
+      RETRY_DELAY_MS,
+      onAccountMismatch,
     );
-    scheduleExchange(session, activeGeneration, RETRY_DELAY_MS);
     return "ok";
   }
 
@@ -200,11 +296,19 @@ async function activateCloudsync(
     console.warn(
       "[cloudsync] credential exchange returned an invalid response",
     );
-    scheduleExchange(session, activeGeneration, RETRY_DELAY_MS);
+    scheduleExchange(
+      session,
+      activeGeneration,
+      RETRY_DELAY_MS,
+      onAccountMismatch,
+    );
     return "ok";
   }
 
   if (credentials.workspaceId !== session.user.id) {
+    if (!suspendBeforeExchange) {
+      await suspendCloudsyncAfterCredentialRejection(activeGeneration);
+    }
     console.warn(
       "[cloudsync] credential exchange returned an invalid workspace",
     );
@@ -214,36 +318,41 @@ async function activateCloudsync(
   const expiresAtMs = Date.parse(credentials.expiresAt);
   if (expiresAtMs <= Date.now()) {
     console.warn("[cloudsync] credential exchange returned an expired token");
-    scheduleExchange(session, activeGeneration, RETRY_DELAY_MS);
+    scheduleExchange(
+      session,
+      activeGeneration,
+      RETRY_DELAY_MS,
+      onAccountMismatch,
+    );
     return "ok";
   }
 
   try {
     const configured = await enqueuePluginOperation(async () => {
       if (activeGeneration !== generation) {
-        return true;
+        return "configured" as const;
       }
 
-      const didConfigure = await configureCloudsyncToken(
+      const configuration = await configureCloudsyncToken(
         credentials.databaseId,
         credentials.token,
         credentials.workspaceId,
       );
 
       if (activeGeneration !== generation) {
-        if (didConfigure) {
+        if (configuration === "configured") {
           await suspendCloudsync();
         }
       }
 
-      return didConfigure;
+      return configuration;
     });
 
     if (activeGeneration !== generation) {
       return "ok";
     }
 
-    if (!configured) {
+    if (configured === "account_mismatch") {
       console.warn("[cloudsync] local database belongs to another account");
       return "account_mismatch";
     }
@@ -259,7 +368,12 @@ async function activateCloudsync(
     }
 
     console.warn("[cloudsync] local sync configuration failed; retrying");
-    scheduleExchange(session, activeGeneration, RETRY_DELAY_MS);
+    scheduleExchange(
+      session,
+      activeGeneration,
+      RETRY_DELAY_MS,
+      onAccountMismatch,
+    );
     return "ok";
   }
 
@@ -272,6 +386,7 @@ async function activateCloudsync(
     session,
     activeGeneration,
     Math.max(MIN_REFRESH_DELAY_MS, timeUntilExpiryMs - refreshLeadMs),
+    onAccountMismatch,
   );
   return "ok";
 }
@@ -286,13 +401,23 @@ async function suspendCloudsyncSession(): Promise<void> {
   }
 }
 
-export async function prepareCloudsyncSignOut(session: Session): Promise<void> {
+export async function prepareCloudsyncSignOut(
+  session: Session | null | undefined,
+  onAccountMismatch?: CloudsyncAccountMismatchHandler,
+): Promise<void> {
   const activeGeneration = beginTransition();
 
   try {
-    await enqueuePluginOperation(() => logoutCloudsync(false));
+    await enqueuePluginOperation(suspendCloudsync);
   } catch (error) {
-    scheduleExchange(session, activeGeneration, MIN_REFRESH_DELAY_MS);
+    if (session) {
+      scheduleExchange(
+        session,
+        activeGeneration,
+        MIN_REFRESH_DELAY_MS,
+        onAccountMismatch,
+      );
+    }
     throw error;
   }
 }
@@ -300,11 +425,19 @@ export async function prepareCloudsyncSignOut(session: Session): Promise<void> {
 export async function handleCloudsyncAuthChange(
   _event: AuthChangeEvent,
   session: Session | null,
+  onAccountMismatch?: CloudsyncAccountMismatchHandler,
 ): Promise<CloudsyncAuthChangeResult> {
   if (!session) {
     await suspendCloudsyncSession();
     return "ok";
   }
 
-  return activateCloudsync(session);
+  return activateCloudsync(session, true, onAccountMismatch);
+}
+
+export async function refreshCloudsyncForSession(
+  session: Session,
+  onAccountMismatch?: CloudsyncAccountMismatchHandler,
+): Promise<CloudsyncAuthChangeResult> {
+  return activateCloudsync(session, false, onAccountMismatch);
 }
