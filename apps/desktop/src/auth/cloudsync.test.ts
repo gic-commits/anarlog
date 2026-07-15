@@ -2,14 +2,14 @@ import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
-  claimCloudsyncAccount,
+  bindCloudsyncAccount,
   configureCloudsyncToken,
-  logoutCloudsync,
+  getCloudsyncStatus,
   suspendCloudsync,
 } from "@hypr/plugin-db";
 
 import {
-  claimCloudsyncAccountForAuth,
+  bindCloudsyncAccountForAuth,
   handleCloudsyncAuthChange,
   prepareCloudsyncSignOut,
 } from "./cloudsync";
@@ -50,9 +50,22 @@ describe("CloudSync auth lifecycle", () => {
     vi.setSystemTime(NOW);
     await handleCloudsyncAuthChange("SIGNED_OUT", null);
     vi.clearAllMocks();
-    vi.mocked(claimCloudsyncAccount).mockResolvedValue(true);
-    vi.mocked(configureCloudsyncToken).mockResolvedValue(true);
-    vi.mocked(logoutCloudsync).mockResolvedValue(undefined);
+    vi.mocked(bindCloudsyncAccount).mockResolvedValue(true);
+    vi.mocked(configureCloudsyncToken).mockResolvedValue("configured");
+    vi.mocked(getCloudsyncStatus).mockResolvedValue({
+      cloudsync_enabled: true,
+      extension_loaded: true,
+      configured: false,
+      running: false,
+      network_initialized: false,
+      last_sync: null,
+      last_sync_at_ms: null,
+      has_unsent_changes: null,
+      last_error: null,
+      last_error_kind: null,
+      consecutive_failures: 0,
+    });
+    vi.mocked(suspendCloudsync).mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -62,10 +75,10 @@ describe("CloudSync auth lifecycle", () => {
     vi.useRealTimers();
   });
 
-  test("claims the local account without a token exchange", async () => {
-    await expect(claimCloudsyncAccountForAuth("user-id")).resolves.toBe(true);
+  test("binds the local account without a token exchange", async () => {
+    await expect(bindCloudsyncAccountForAuth("user-id")).resolves.toBe(true);
 
-    expect(claimCloudsyncAccount).toHaveBeenCalledWith("user-id");
+    expect(bindCloudsyncAccount).toHaveBeenCalledWith("user-id");
     expect(configureCloudsyncToken).not.toHaveBeenCalled();
   });
 
@@ -96,6 +109,7 @@ describe("CloudSync auth lifecycle", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(suspendCloudsync).toHaveBeenCalledTimes(1);
   });
 
   test("suspends sync and ignores an exchange completed after sign-out", async () => {
@@ -138,6 +152,25 @@ describe("CloudSync auth lifecycle", () => {
     expect(suspendCloudsync).toHaveBeenCalledTimes(1);
   });
 
+  test.each([404, 501])(
+    "suspends active sync when renewal returns %s",
+    async (status) => {
+      const fetchMock = vi
+        .fn<() => Promise<Response>>()
+        .mockResolvedValueOnce(credentialsResponse())
+        .mockResolvedValueOnce(new Response(null, { status }));
+      vi.stubGlobal("fetch", fetchMock);
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await handleCloudsyncAuthChange("INITIAL_SESSION", session());
+      await vi.advanceTimersByTimeAsync(13 * 60 * 1000);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(configureCloudsyncToken).toHaveBeenCalledTimes(1);
+      expect(suspendCloudsync).toHaveBeenCalledTimes(2);
+    },
+  );
+
   test("keeps sync disabled when the account does not have Pro", async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(
@@ -166,6 +199,118 @@ describe("CloudSync auth lifecycle", () => {
     );
   });
 
+  test("does not retry credential exchange in local-only mode", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(getCloudsyncStatus).mockResolvedValueOnce({
+      cloudsync_enabled: false,
+      extension_loaded: false,
+      configured: false,
+      running: false,
+      network_initialized: false,
+      last_sync: null,
+      last_sync_at_ms: null,
+      has_unsent_changes: null,
+      last_error: null,
+      last_error_kind: null,
+      consecutive_failures: 0,
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleCloudsyncAuthChange("INITIAL_SESSION", session());
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+    expect(getCloudsyncStatus).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(configureCloudsyncToken).not.toHaveBeenCalled();
+  });
+
+  test("does not configure local sync when the session is rejected", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(null, { status: 401 }))),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleCloudsyncAuthChange("INITIAL_SESSION", session());
+
+    expect(configureCloudsyncToken).not.toHaveBeenCalled();
+    expect(suspendCloudsync).toHaveBeenCalledTimes(1);
+  });
+
+  test("suspends active sync when the account loses Pro", async () => {
+    const fetchMock = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(credentialsResponse())
+      .mockResolvedValueOnce(new Response(null, { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleCloudsyncAuthChange("INITIAL_SESSION", session());
+    await vi.advanceTimersByTimeAsync(13 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(configureCloudsyncToken).toHaveBeenCalledTimes(1);
+    expect(suspendCloudsync).toHaveBeenCalledTimes(2);
+  });
+
+  test("retries suspension without exchanging again after Pro rejection", async () => {
+    const fetchMock = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(credentialsResponse())
+      .mockResolvedValueOnce(new Response(null, { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(suspendCloudsync)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("cloudsync suspension failed"))
+      .mockResolvedValueOnce(undefined);
+
+    await handleCloudsyncAuthChange("INITIAL_SESSION", session());
+    await vi.advanceTimersByTimeAsync(13 * 60 * 1000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(suspendCloudsync).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(suspendCloudsync).toHaveBeenCalledTimes(3);
+  });
+
+  test("suspends active sync when the session is rejected", async () => {
+    const fetchMock = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(credentialsResponse())
+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleCloudsyncAuthChange("INITIAL_SESSION", session());
+    await vi.advanceTimersByTimeAsync(13 * 60 * 1000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(suspendCloudsync).toHaveBeenCalledTimes(2);
+  });
+
+  test("suspends active sync when renewed credentials change workspace", async () => {
+    const fetchMock = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(credentialsResponse())
+      .mockResolvedValueOnce(credentialsResponse("different-user"));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleCloudsyncAuthChange("INITIAL_SESSION", session());
+    await vi.advanceTimersByTimeAsync(13 * 60 * 1000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(configureCloudsyncToken).toHaveBeenCalledTimes(1);
+    expect(suspendCloudsync).toHaveBeenCalledTimes(2);
+  });
+
   test("suspends existing sync when the initial session is empty", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -190,11 +335,9 @@ describe("CloudSync auth lifecycle", () => {
     expect(suspendCloudsync).toHaveBeenCalledTimes(1);
   });
 
-  test("suspends existing sync when local configuration is rejected", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(credentialsResponse())),
-    );
+  test("suspends and retries a transient configuration failure", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(credentialsResponse()));
+    vi.stubGlobal("fetch", fetchMock);
     vi.mocked(configureCloudsyncToken).mockRejectedValueOnce(
       new Error("workspace mismatch"),
     );
@@ -205,16 +348,17 @@ describe("CloudSync auth lifecycle", () => {
     ).resolves.toBe("ok");
     await vi.advanceTimersByTimeAsync(60 * 1000);
 
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(configureCloudsyncToken).toHaveBeenCalledTimes(2);
-    expect(suspendCloudsync).toHaveBeenCalledTimes(3);
+    expect(suspendCloudsync).toHaveBeenCalledTimes(2);
   });
 
-  test("reports the durable account mismatch without retrying", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(credentialsResponse())),
+  test("reports a permanent configuration rejection without re-exchanging", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(credentialsResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(configureCloudsyncToken).mockResolvedValueOnce(
+      "account_mismatch",
     );
-    vi.mocked(configureCloudsyncToken).mockResolvedValueOnce(false);
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     await expect(
@@ -222,8 +366,33 @@ describe("CloudSync auth lifecycle", () => {
     ).resolves.toBe("account_mismatch");
     await vi.advanceTimersByTimeAsync(60 * 1000);
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(configureCloudsyncToken).toHaveBeenCalledTimes(1);
     expect(suspendCloudsync).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects auth when a scheduled renewal finds an account mismatch", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(credentialsResponse()));
+    const rejectAccountMismatch = vi.fn(() => Promise.resolve());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(configureCloudsyncToken)
+      .mockResolvedValueOnce("configured")
+      .mockResolvedValueOnce("account_mismatch");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleCloudsyncAuthChange(
+      "INITIAL_SESSION",
+      session(),
+      rejectAccountMismatch,
+    );
+    expect(rejectAccountMismatch).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(13 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(configureCloudsyncToken).toHaveBeenCalledTimes(2);
+    expect(rejectAccountMismatch).toHaveBeenCalledTimes(1);
   });
 
   test("restarts sync after the authenticated user is updated", async () => {
@@ -261,32 +430,96 @@ describe("CloudSync auth lifecycle", () => {
     },
   );
 
-  test("checks for unsent changes before signing out", async () => {
+  test("suspends sync without deleting local rows before signing out", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(credentialsResponse()));
     vi.stubGlobal("fetch", fetchMock);
     await handleCloudsyncAuthChange("SIGNED_IN", session());
+    vi.mocked(suspendCloudsync).mockClear();
 
     await prepareCloudsyncSignOut(session());
     await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
 
-    expect(logoutCloudsync).toHaveBeenCalledWith(false);
+    expect(suspendCloudsync).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  test("resumes token refresh when guarded sign-out is rejected", async () => {
+  test("resumes token refresh when sign-out suspension fails", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(credentialsResponse()));
     vi.stubGlobal("fetch", fetchMock);
-    vi.mocked(logoutCloudsync).mockRejectedValueOnce(
-      new Error("cloudsync has unsent local changes"),
+    vi.mocked(suspendCloudsync).mockRejectedValueOnce(
+      new Error("cloudsync suspension failed"),
     );
 
     await expect(prepareCloudsyncSignOut(session())).rejects.toThrow(
-      "unsent local changes",
+      "suspension failed",
     );
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(configureCloudsyncToken).toHaveBeenCalledTimes(1);
+  });
+
+  test("fails closed when sign-out suspension fails without a session", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(credentialsResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(suspendCloudsync).mockRejectedValueOnce(
+      new Error("cloudsync suspension failed"),
+    );
+
+    await expect(prepareCloudsyncSignOut(null)).rejects.toThrow(
+      "suspension failed",
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(configureCloudsyncToken).not.toHaveBeenCalled();
+  });
+
+  test("bounds a stalled exchange and retries", async () => {
+    const fetchMock = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new Error("aborted"));
+          });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const activation = handleCloudsyncAuthChange("TOKEN_REFRESHED", session());
+    await vi.advanceTimersByTimeAsync(10 * 1000);
+
+    await expect(activation).resolves.toBe("ok");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("bounds a stalled exchange response body and retries", async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(new Error("aborted"));
+            });
+          }),
+      } as Response),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const activation = handleCloudsyncAuthChange("TOKEN_REFRESHED", session());
+    await vi.advanceTimersByTimeAsync(10 * 1000);
+
+    await expect(activation).resolves.toBe("ok");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   test("retries a transient exchange failure without rejecting auth", async () => {
@@ -308,6 +541,6 @@ describe("CloudSync auth lifecycle", () => {
       "sqlite-token",
       "user-id",
     );
-    expect(suspendCloudsync).toHaveBeenCalledTimes(2);
+    expect(suspendCloudsync).toHaveBeenCalledTimes(1);
   });
 });
