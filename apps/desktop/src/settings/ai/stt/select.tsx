@@ -8,7 +8,11 @@ import {
   Loader2,
   Trash2,
 } from "lucide-react";
+<<<<<<< HEAD
 import { useRef, useState } from "react";
+=======
+import { useRef } from "react";
+>>>>>>> my-changes
 
 import {
   commands as localSttCommands,
@@ -24,7 +28,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@hypr/ui/components/ui/select";
+<<<<<<< HEAD
 import { sonnerToast } from "@hypr/ui/components/ui/toast";
+=======
+>>>>>>> my-changes
 import {
   Tooltip,
   TooltipContent,
@@ -35,11 +42,15 @@ import { cn } from "@hypr/utils";
 import { useSttSettings } from "./context";
 import { HealthStatusIndicator, useConnectionHealth } from "./health";
 import { LocalModelBackendBadge, LocalModelLabel } from "./model-icon";
+<<<<<<< HEAD
 import {
   getDefaultSttSelection,
   getLanguageSupportIssue,
   resolveLiveLanguageSupportMode,
 } from "./selection";
+=======
+import { getPreferredProviderModel } from "./selection";
+>>>>>>> my-changes
 import {
   displayModelLabel,
   displayModelTitle,
@@ -49,13 +60,18 @@ import {
   sttModelQueries,
 } from "./shared";
 
+<<<<<<< HEAD
 import { useBillingAccess } from "~/auth/billing-context";
+=======
+import { useBillingAccess } from "~/auth/billing";
+>>>>>>> my-changes
 import { useNotifications } from "~/contexts/notifications";
 import { providerRowId, ProviderIconSlot } from "~/settings/ai/shared";
 import {
   getProviderSelectionBlockers,
   requiresEntitlement,
 } from "~/settings/ai/shared/eligibility";
+<<<<<<< HEAD
 import { PersistAiSelection } from "~/settings/ai/shared/persist-selection";
 import {
   getConfiguredProviderIds,
@@ -68,6 +84,17 @@ import { useSetSettingValues } from "~/settings/queries";
 import { useConfigValues } from "~/shared/config";
 import { useMountEffect } from "~/shared/hooks/useMountEffect";
 import { SettingsAlertToast } from "~/shared/ui/settings-alert";
+=======
+import { listSttModels } from "~/settings/ai/shared/list-stt";
+import { useConfigValues } from "~/shared/config";
+import { useMountEffect } from "~/shared/hooks/useMountEffect";
+import { SettingsAlert } from "~/shared/ui/settings-alert";
+import {
+  showTransientToast,
+  useTransientToast,
+} from "~/sidebar/toast/transient";
+import * as settings from "~/store/tinybase/store/settings";
+>>>>>>> my-changes
 import {
   isConfiguredSttModel,
   isHyprnoteLocalSttModel,
@@ -77,10 +104,13 @@ import {
   isSupportedLanguagesLive,
   isSupportedLocalSttModel,
 } from "~/stt/capabilities";
+<<<<<<< HEAD
 import {
   getDefaultSttModel,
   getPreferredProviderModel,
 } from "~/stt/model-selection";
+=======
+>>>>>>> my-changes
 
 export function SelectProviderAndModel() {
   const { t } = useLingui();
@@ -89,6 +119,7 @@ export function SelectProviderAndModel() {
     "current_stt_model",
   ] as const);
   const billing = useBillingAccess();
+<<<<<<< HEAD
   const { providers: configuredProviders, isReady: providerSettingsReady } =
     useConfiguredMapping();
   const { startDownload, startTrial } = useSttSettings();
@@ -96,6 +127,11 @@ export function SelectProviderAndModel() {
   const [pendingProvider, setPendingProvider] = useState<ProviderId | null>(
     null,
   );
+=======
+  const configuredProviders = useConfiguredMapping();
+  const { startDownload, startTrial } = useSttSettings();
+  const health = useConnectionHealth();
+>>>>>>> my-changes
 
   const selectedSttModel = isConfiguredSttModel(
     current_stt_provider,
@@ -103,6 +139,7 @@ export function SelectProviderAndModel() {
   )
     ? current_stt_model
     : undefined;
+<<<<<<< HEAD
   const selectedProvider = current_stt_provider as ProviderId | undefined;
   const selectedProviderConfigured = selectedProvider
     ? (configuredProviders[selectedProvider]?.configured ?? false)
@@ -160,6 +197,37 @@ export function SelectProviderAndModel() {
   );
 
   const setSelection = useSetSettingValues();
+=======
+  const isConfigured = !!(current_stt_provider && selectedSttModel);
+  const hasError = isConfigured && health.status === "error";
+  const selectedProvider = current_stt_provider as ProviderId | undefined;
+  const selectedModels = selectedProvider
+    ? (configuredProviders[selectedProvider]?.models ?? [])
+    : [];
+  const displayedSttModel =
+    selectedProvider === "custom"
+      ? selectedSttModel
+      : getPreferredProviderModel(selectedSttModel, selectedModels, {
+          keepUnavailableSavedModel: true,
+        });
+  const selectedModel = selectedModels.find(
+    (model) => model.id === displayedSttModel,
+  );
+
+  const handleSelectProvider = settings.UI.useSetValueCallback(
+    "current_stt_provider",
+    (provider: string) => provider,
+    [],
+    settings.STORE_ID,
+  );
+
+  const handleSelectModel = settings.UI.useSetValueCallback(
+    "current_stt_model",
+    (model: string) => model,
+    [],
+    settings.STORE_ID,
+  );
+>>>>>>> my-changes
   const lastSelectedModelsRef = useRef<Record<string, string>>(
     current_stt_provider && selectedSttModel
       ? { [current_stt_provider]: selectedSttModel }
@@ -178,6 +246,7 @@ export function SelectProviderAndModel() {
 
     const providerId = provider as ProviderId;
     const nextModels = configuredProviders[providerId]?.models ?? [];
+<<<<<<< HEAD
     const nextModel =
       getPreferredProviderModel(
         lastSelectedModelsRef.current[provider],
@@ -228,18 +297,64 @@ export function SelectProviderAndModel() {
         variant={hasError ? "error" : "default"}
       />
       {!alertDescription && <TranscriptionLanguageWarningToast />}
+=======
+    const nextModel = getPreferredProviderModel(
+      lastSelectedModelsRef.current[provider],
+      nextModels,
+      { allowSavedModelWithoutChoices: providerId === "custom" },
+    );
+
+    rememberModel(provider, nextModel);
+    handleSelectProvider(provider);
+    handleSelectModel(nextModel);
+  };
+
+  const handleModelChange = (model: string) => {
+    if (!current_stt_provider) {
+      return;
+    }
+
+    rememberModel(current_stt_provider, model);
+    handleSelectModel(model);
+  };
+  return (
+    <div className="flex flex-col gap-4">
+      {!isConfigured && (
+        <SettingsAlert>
+          <Trans>
+            <strong className="font-medium">Transcription model</strong> is
+            needed to make Anarlog listen to your conversations.
+          </Trans>
+        </SettingsAlert>
+      )}
+
+      {hasError && health.message && (
+        <SettingsAlert>{health.message}</SettingsAlert>
+      )}
+>>>>>>> my-changes
 
       <h3 className="text-md font-sans font-semibold">
         <Trans>Model being used</Trans>
       </h3>
       <div className="flex flex-row items-center gap-4">
         <div className="min-w-0 flex-2" data-stt-provider-selector>
+<<<<<<< HEAD
           <Select value={visibleProvider} onValueChange={handleProviderChange}>
+=======
+          <Select
+            value={current_stt_provider || ""}
+            onValueChange={handleProviderChange}
+          >
+>>>>>>> my-changes
             <SelectTrigger className="bg-card shadow-none focus:ring-0">
               <SelectValue placeholder={t`Select a provider`} />
             </SelectTrigger>
             <SelectContent>
+<<<<<<< HEAD
               {providerOptions.map((provider) => {
+=======
+              {PROVIDERS.filter(({ disabled }) => !disabled).map((provider) => {
+>>>>>>> my-changes
                 const configured =
                   configuredProviders[provider.id]?.configured ?? false;
                 const requiresPro = requiresEntitlement(
@@ -282,7 +397,11 @@ export function SelectProviderAndModel() {
 
         <span className="text-muted-foreground">/</span>
 
+<<<<<<< HEAD
         {visibleProvider === "custom" ? (
+=======
+        {current_stt_provider === "custom" ? (
+>>>>>>> my-changes
           <div className="min-w-0 flex-3">
             <Input
               value={displayedSttModel || ""}
@@ -352,6 +471,7 @@ const TRANSCRIPTION_LANGUAGE_WARNING_TOAST_ID =
   "transcription-language-warning";
 const dismissedTranscriptionLanguageWarningKeys = new Set<string>();
 
+<<<<<<< HEAD
 function TranscriptionLanguageWarningToast() {
   const { i18n, t } = useLingui();
   const warning = useTranscriptionLanguageWarning();
@@ -375,12 +495,29 @@ function TranscriptionLanguageWarningToast() {
       warningKey={warning.key}
       description={description}
       actionLabel={t`Got it`}
+=======
+export function TranscriptionLanguageWarningToast() {
+  const warningKey = useTranscriptionLanguageWarningKey();
+
+  if (
+    !warningKey ||
+    dismissedTranscriptionLanguageWarningKeys.has(warningKey)
+  ) {
+    return null;
+  }
+
+  return (
+    <TranscriptionLanguageWarningToastLifecycle
+      key={warningKey}
+      warningKey={warningKey}
+>>>>>>> my-changes
     />
   );
 }
 
 function TranscriptionLanguageWarningToastLifecycle({
   warningKey,
+<<<<<<< HEAD
   description,
   actionLabel,
 }: {
@@ -401,6 +538,32 @@ function TranscriptionLanguageWarningToastLifecycle({
         },
       },
     });
+=======
+}: {
+  warningKey: string;
+}) {
+  useMountEffect(() => {
+    showTransientToast(
+      {
+        id: TRANSCRIPTION_LANGUAGE_WARNING_TOAST_ID,
+        icon: <AlertTriangle className="size-4 shrink-0 text-amber-500" />,
+        description: "Model doesn't support all languages.",
+        anchor: "main-content-panel",
+        actions: [
+          {
+            label: "Dismiss",
+            onClick: () => {
+              dismissedTranscriptionLanguageWarningKeys.add(warningKey);
+              clearTranscriptionLanguageWarningToast();
+            },
+          },
+        ],
+        dismissible: false,
+        variant: "warning",
+      },
+      { durationMs: null },
+    );
+>>>>>>> my-changes
 
     return clearTranscriptionLanguageWarningToast;
   });
@@ -409,10 +572,21 @@ function TranscriptionLanguageWarningToastLifecycle({
 }
 
 function clearTranscriptionLanguageWarningToast() {
+<<<<<<< HEAD
   sonnerToast.dismiss(TRANSCRIPTION_LANGUAGE_WARNING_TOAST_ID);
 }
 
 function useTranscriptionLanguageWarning() {
+=======
+  const { toast, clearToast } = useTransientToast.getState();
+
+  if (toast?.id === TRANSCRIPTION_LANGUAGE_WARNING_TOAST_ID) {
+    clearToast(toast.key);
+  }
+}
+
+function useTranscriptionLanguageWarningKey() {
+>>>>>>> my-changes
   const { current_stt_provider, current_stt_model, spoken_languages } =
     useConfigValues([
       "current_stt_provider",
@@ -441,6 +615,7 @@ function useTranscriptionLanguageWarning() {
       isLiveTranscriptionSupported(current_stt_provider, selectedSttModel),
     enabled: isConfigured,
   });
+<<<<<<< HEAD
   const useLiveMode = resolveLiveLanguageSupportMode({
     isOnDeviceModel,
     useLiveOnDeviceModel,
@@ -448,10 +623,15 @@ function useTranscriptionLanguageWarning() {
   });
 
   const languageSupportIssue = useQuery({
+=======
+
+  const languageSupport = useQuery({
+>>>>>>> my-changes
     queryKey: [
       "stt-language-support",
       current_stt_provider,
       selectedSttModel,
+<<<<<<< HEAD
       useLiveMode,
       spoken_languages,
     ],
@@ -470,6 +650,27 @@ function useTranscriptionLanguageWarning() {
             );
 
       return await getLanguageSupportIssue(spoken_languages ?? [], isSupported);
+=======
+      useLiveOnDeviceModel,
+      liveSupport.data,
+      spoken_languages,
+    ],
+    queryFn: async () => {
+      const useLiveMode = isOnDeviceModel
+        ? useLiveOnDeviceModel && liveSupport.data
+        : liveSupport.data;
+      return useLiveMode
+        ? await isSupportedLanguagesLive(
+            current_stt_provider!,
+            selectedSttModel ?? null,
+            spoken_languages ?? [],
+          )
+        : await isSupportedLanguagesBatch(
+            current_stt_provider!,
+            selectedSttModel ?? null,
+            spoken_languages ?? [],
+          );
+>>>>>>> my-changes
     },
     enabled:
       isConfigured &&
@@ -477,6 +678,7 @@ function useTranscriptionLanguageWarning() {
       !!spoken_languages?.length,
   });
 
+<<<<<<< HEAD
   if (
     !isConfigured ||
     !selectedSttModel ||
@@ -506,6 +708,17 @@ function formatLanguageList(languages: string[]) {
   }
 
   return visibleLanguages.join(", ");
+=======
+  if (!isConfigured || languageSupport.data !== false || hasError) {
+    return null;
+  }
+
+  return [
+    current_stt_provider,
+    selectedSttModel,
+    ...(spoken_languages ?? []),
+  ].join(":");
+>>>>>>> my-changes
 }
 
 type ModelCategory = "latest" | null;
@@ -579,6 +792,7 @@ function getProviderModelMode(
   return undefined;
 }
 
+<<<<<<< HEAD
 function useConfiguredMapping(): {
   providers: Record<
     ProviderId,
@@ -592,6 +806,20 @@ function useConfiguredMapping(): {
   const billing = useBillingAccess();
   const { providers: configuredProviders, isReady } =
     useAiProvidersState("stt");
+=======
+function useConfiguredMapping(): Record<
+  ProviderId,
+  {
+    configured: boolean;
+    models: ModelEntry[];
+  }
+> {
+  const billing = useBillingAccess();
+  const configuredProviders = settings.UI.useResultTable(
+    settings.QUERIES.sttProviders,
+    settings.STORE_ID,
+  );
+>>>>>>> my-changes
 
   const targetArch = useQuery({
     queryKey: ["target-arch"],
@@ -617,7 +845,29 @@ function useConfiguredMapping(): {
     queries: [...soniqoModels.map((m) => sttModelQueries.isDownloaded(m.key))],
   });
 
+<<<<<<< HEAD
   const providers = Object.fromEntries(
+=======
+  const openaiProvider = PROVIDERS.find((p) => p.id === "openai");
+  const openaiConfig = openaiProvider
+    ? (configuredProviders[providerRowId("stt", "openai")] as
+        | AIProviderStorage
+        | undefined)
+    : undefined;
+  const openaiBaseUrl = String(openaiConfig?.base_url || "").trim();
+  const openaiApiKey = String(openaiConfig?.api_key || "").trim();
+  const hasCustomOpenaiUrl =
+    openaiBaseUrl !== "" && openaiBaseUrl !== openaiProvider?.baseUrl;
+
+  const { data: openaiFetchedModels } = useQuery({
+    queryKey: ["stt-models-openai", openaiBaseUrl, openaiApiKey],
+    queryFn: () => listSttModels(openaiBaseUrl, openaiApiKey),
+    enabled: hasCustomOpenaiUrl,
+    staleTime: 60_000,
+  });
+
+  return Object.fromEntries(
+>>>>>>> my-changes
     PROVIDERS.map((provider) => {
       const config = configuredProviders[providerRowId("stt", provider.id)] as
         | AIProviderStorage
@@ -663,15 +913,42 @@ function useConfiguredMapping(): {
         return [provider.id, { configured: true, models: [] }];
       }
 
+<<<<<<< HEAD
+=======
+      let models: ModelEntry[] = provider.models.map((model) => ({
+        id: model,
+        isDownloaded: true,
+        mode: getProviderModelMode(provider.id, model),
+      }));
+
+      if (
+        provider.id === "openai" &&
+        openaiFetchedModels &&
+        openaiFetchedModels.models.length > 0
+      ) {
+        const existingIds = new Set(models.map((m) => m.id));
+        for (const id of openaiFetchedModels.models) {
+          if (!existingIds.has(id)) {
+            models.push({ id, isDownloaded: true });
+            existingIds.add(id);
+          }
+        }
+      }
+
+>>>>>>> my-changes
       return [
         provider.id,
         {
           configured: true,
+<<<<<<< HEAD
           models: provider.models.map((model) => ({
             id: model,
             isDownloaded: true,
             mode: getProviderModelMode(provider.id, model),
           })),
+=======
+          models,
+>>>>>>> my-changes
         },
       ];
     }),
@@ -682,8 +959,11 @@ function useConfiguredMapping(): {
       models: ModelEntry[];
     }
   >;
+<<<<<<< HEAD
 
   return { providers, isReady };
+=======
+>>>>>>> my-changes
 }
 
 function ModelSelectItem({

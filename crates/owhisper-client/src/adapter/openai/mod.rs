@@ -1,4 +1,8 @@
 mod batch;
+<<<<<<< HEAD
+=======
+mod live;
+>>>>>>> my-changes
 
 use openai_transcription::batch::AudioModel;
 
