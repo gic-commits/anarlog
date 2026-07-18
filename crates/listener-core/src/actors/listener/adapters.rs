@@ -61,8 +61,12 @@ pub(super) async fn spawn_rx_task(
         return Ok((result.0, result.1, result.2, "soniqo".to_string()));
     }
 
-    let adapter_kind =
-        AdapterKind::from_url_and_languages(&args.base_url, &args.languages, Some(&args.model));
+    let adapter_kind = AdapterKind::from_url_and_languages(
+        &args.base_url,
+        &args.languages,
+        Some(&args.model),
+        args.provider.as_deref(),
+    );
     let is_dual = matches!(args.mode, crate::actors::ChannelMode::MicAndSpeaker);
 
     macro_rules! dispatch_realtime {
@@ -459,6 +463,7 @@ mod tests {
             session_id: "session".to_string(),
             participant_human_ids: vec![],
             self_human_id: None,
+            provider: None,
         }
     }
 
