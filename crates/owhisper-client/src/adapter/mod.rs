@@ -433,6 +433,7 @@ impl AdapterKind {
         base_url: &str,
         _languages: &[hypr_language::Language],
         _model: Option<&str>,
+        provider_hint: Option<&str>,
     ) -> Self {
         use crate::providers::Provider;
 
@@ -442,6 +443,12 @@ impl AdapterKind {
 
         if is_local_argmax(base_url) {
             return Self::Argmax;
+        }
+
+        if let Some(provider_str) = provider_hint {
+            if let Ok(provider) = provider_str.parse::<Provider>() {
+                return Self::from(provider);
+            }
         }
 
         Provider::from_url(base_url)
@@ -783,7 +790,7 @@ mod tests {
         for (url, langs, model, expected) in cases {
             let langs: Vec<hypr_language::Language> = langs.iter().map(|l| (*l).into()).collect();
             assert_eq!(
-                AdapterKind::from_url_and_languages(url, &langs, *model),
+                AdapterKind::from_url_and_languages(url, &langs, *model, None),
                 *expected,
                 "url={url}, langs={langs:?}, model={model:?}"
             );
@@ -933,7 +940,7 @@ mod tests {
                 let langs: Vec<hypr_language::Language> =
                     langs.iter().map(|l| (*l).into()).collect();
                 assert_eq!(
-                    AdapterKind::from_url_and_languages(url, &langs, Some("cloud")),
+                    AdapterKind::from_url_and_languages(url, &langs, Some("cloud"), None),
                     AdapterKind::Hyprnote,
                     "proxy URL should always select Hyprnote adapter regardless of languages: url={url}, langs={langs:?}"
                 );
@@ -994,19 +1001,19 @@ mod tests {
 
         let en: Vec<hypr_language::Language> = vec![En.into()];
         assert_eq!(
-            AdapterKind::from_url_and_languages("https://api.deepgram.com/v1", &en, None),
+            AdapterKind::from_url_and_languages("https://api.deepgram.com/v1", &en, None, None),
             AdapterKind::Deepgram,
         );
         assert_eq!(
-            AdapterKind::from_url_and_languages("https://api.soniox.com", &en, None),
+            AdapterKind::from_url_and_languages("https://api.soniox.com", &en, None, None),
             AdapterKind::Soniox,
         );
         assert_eq!(
-            AdapterKind::from_url_and_languages("https://api.pyannote.ai", &en, None),
+            AdapterKind::from_url_and_languages("https://api.pyannote.ai", &en, None, None),
             AdapterKind::Pyannote,
         );
         assert_eq!(
-            AdapterKind::from_url_and_languages("http://localhost:50060/v1", &en, None),
+            AdapterKind::from_url_and_languages("http://localhost:50060/v1", &en, None, None),
             AdapterKind::Argmax,
         );
     }
