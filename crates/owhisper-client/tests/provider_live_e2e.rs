@@ -184,3 +184,7 @@ direct_live_test!(fireworks, FireworksAdapter, Provider::Fireworks);
 direct_live_test!(elevenlabs, ElevenLabsAdapter, Provider::ElevenLabs);
 direct_live_test!(dashscope, DashScopeAdapter, Provider::DashScope);
 direct_live_test!(mistral, MistralAdapter, Provider::Mistral);
+<<<<<<< HEAD
+=======
+direct_live_test!(openai, OpenAIAdapter, Provider::OpenAI);
+>>>>>>> my-changes

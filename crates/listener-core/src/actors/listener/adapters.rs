@@ -7,7 +7,11 @@ use ractor::{ActorProcessingErr, ActorRef};
 use owhisper_client::{
     AdapterKind, ArgmaxAdapter, AssemblyAIAdapter, CartesiaAdapter, DashScopeAdapter,
     DeepgramAdapter, ElevenLabsAdapter, FireworksAdapter, GladiaAdapter, HyprnoteAdapter,
+<<<<<<< HEAD
     MistralAdapter, RealtimeSttAdapter, SonioxAdapter, hypr_ws_client,
+=======
+    MistralAdapter, OpenAIAdapter, RealtimeSttAdapter, SonioxAdapter, hypr_ws_client,
+>>>>>>> my-changes
 };
 use owhisper_interface::stream::Extra;
 use owhisper_interface::{ControlMessage, MixedMessage};
@@ -61,8 +65,17 @@ pub(super) async fn spawn_rx_task(
         return Ok((result.0, result.1, result.2, "soniqo".to_string()));
     }
 
+<<<<<<< HEAD
     let adapter_kind =
         AdapterKind::from_url_and_languages(&args.base_url, &args.languages, Some(&args.model));
+=======
+    let adapter_kind = AdapterKind::from_url_and_languages(
+        &args.base_url,
+        &args.languages,
+        Some(&args.model),
+        args.provider.as_deref(),
+    );
+>>>>>>> my-changes
     let is_dual = matches!(args.mode, crate::actors::ChannelMode::MicAndSpeaker);
 
     macro_rules! dispatch_realtime {
@@ -102,7 +115,12 @@ pub(super) async fn spawn_rx_task(
         DashScope => DashScopeAdapter,
         Mistral => MistralAdapter,
         Hyprnote => HyprnoteAdapter,
+<<<<<<< HEAD
     }, batch_only: [OpenAI, AquaVoice, Pyannote])?;
+=======
+        OpenAI => OpenAIAdapter,
+    }, batch_only: [AquaVoice, Pyannote])?;
+>>>>>>> my-changes
 
     Ok((result.0, result.1, result.2, adapter_kind.to_string()))
 }
@@ -458,6 +476,10 @@ mod tests {
             session_id: "session".to_string(),
             participant_human_ids: vec![],
             self_human_id: None,
+<<<<<<< HEAD
+=======
+            provider: None,
+>>>>>>> my-changes
         }
     }
 

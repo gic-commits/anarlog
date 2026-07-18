@@ -380,6 +380,10 @@ fn should_stop_on_listener_failure(state: &SessionState) -> bool {
                 &state.ctx.params.base_url,
                 &state.ctx.params.languages,
                 Some(&state.ctx.params.model),
+<<<<<<< HEAD
+=======
+                None,
+>>>>>>> my-changes
             ),
             AdapterKind::Soniox
         )
@@ -570,6 +574,10 @@ mod tests {
                 keywords: vec![],
                 participant_human_ids: vec![],
                 self_human_id: None,
+<<<<<<< HEAD
+=======
+                provider: None,
+>>>>>>> my-changes
             },
             app_dir: std::env::temp_dir(),
             started_at_instant: Instant::now(),

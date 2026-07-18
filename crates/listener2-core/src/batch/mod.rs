@@ -232,6 +232,10 @@ fn resolve_batch_adapter_kind(
         &params.base_url,
         &listen_params.languages,
         listen_params.model.as_deref(),
+<<<<<<< HEAD
+=======
+        None,
+>>>>>>> my-changes
     )
 }
 

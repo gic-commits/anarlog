@@ -28,6 +28,11 @@ pub struct SessionParams {
     pub participant_human_ids: Vec<String>,
     #[serde(default)]
     pub self_human_id: Option<String>,
+<<<<<<< HEAD
+=======
+    #[serde(default)]
+    pub provider: Option<String>,
+>>>>>>> my-changes
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -103,6 +108,10 @@ mod tests {
             keywords: vec![],
             participant_human_ids: vec![],
             self_human_id: None,
+<<<<<<< HEAD
+=======
+            provider: None,
+>>>>>>> my-changes
         }
     }
 

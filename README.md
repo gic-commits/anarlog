@@ -8,6 +8,8 @@
 
 An open-source AI meeting notetaker that is local-first, privacy-first, and yours to fork.
 
+Forked by gic-commits for custom development.
+
 Granola, rearranged.
 
 ## How to use it

@@ -34,6 +34,11 @@ pub struct CaptureParams {
     pub participant_human_ids: Vec<String>,
     #[serde(default)]
     pub self_human_id: Option<String>,
+<<<<<<< HEAD
+=======
+    #[serde(default)]
+    pub provider: Option<String>,
+>>>>>>> my-changes
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -68,8 +73,17 @@ impl CaptureParams {
             return listener::TranscriptionMode::Batch;
         }
 
+<<<<<<< HEAD
         let adapter_kind =
             AdapterKind::from_url_and_languages(&self.base_url, &self.languages, Some(&self.model));
+=======
+        let adapter_kind = AdapterKind::from_url_and_languages(
+            &self.base_url,
+            &self.languages,
+            Some(&self.model),
+            None,
+        );
+>>>>>>> my-changes
 
         if !adapter_kind.has_live_mode() {
             return listener::TranscriptionMode::Batch;
@@ -227,6 +241,10 @@ impl From<CaptureParams> for listener::actors::SessionParams {
             keywords: value.keywords,
             participant_human_ids: value.participant_human_ids,
             self_human_id: value.self_human_id,
+<<<<<<< HEAD
+=======
+            provider: value.provider,
+>>>>>>> my-changes
         }
     }
 }
