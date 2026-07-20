@@ -237,12 +237,30 @@ impl WebSocketClient {
                         match msg_result {
                             Ok(msg) => {
                                 match msg {
-                                    Message::Text(_) | Message::Binary(_) => {
-                                        match T::from_message(msg) {
+                                    Message::Text(text) => {
+                                        tracing::info!("[DEBUG] WS received text: {}", text);
+                                        match T::from_message(Message::Text(text)) {
                                             Ok(Some(output)) => {
                                                 yield Ok(output);
                                             }
-                                            Ok(None) => {}
+                                            Ok(None) => {
+                                                tracing::info!("[DEBUG] WS text dropped by adapter");
+                                            }
+                                            Err(error) => {
+                                                yield Err(error);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    Message::Binary(data) => {
+                                        tracing::info!("[DEBUG] WS received binary: {} bytes", data.len());
+                                        match T::from_message(Message::Binary(data)) {
+                                            Ok(Some(output)) => {
+                                                yield Ok(output);
+                                            }
+                                            Ok(None) => {
+                                                tracing::info!("[DEBUG] WS binary dropped by adapter");
+                                            }
                                             Err(error) => {
                                                 yield Err(error);
                                                 break;

@@ -58,6 +58,76 @@ Naming rules:
 - Prefer `screen.rs` plus a small local state struct for simple browse/select flows
 - Do not add parent-level action/effect translation layers that proxy child workflows through another command's reducer
 
+## Session Context (Jul 2026)
+
+### 终极目标
+
+让 anarlog 通过 OpenAI provider 配置，接入自建 speaches 服务器（`wss://ztnas.2113111.xyz:28010`），实现**实时语音转录**（WebSocket Realtime API 模式），类似 Deepgram 的实时体验。
+
+Speaches 确认支持的能力：Realtime API (WebSocket)、SSE streaming transcription、OpenAI API 完全兼容。
+
+### 已完成的关键里程碑（禁止改乱）
+
+1. **动态模型列表** - `apps/desktop/src/settings/ai/shared/list-stt.ts` 调用 Rust `fetch_stt_models` 命令，从 `/v1/models` 拉取并过滤 STT 模型，在 `select.tsx` 中用 `useQuery` 展示。用户选择的模型名会保持原样发送。
+
+2. **AudioModel::Custom** - `crates/openai-transcription/src/batch/model.rs` 添加 `Custom(String)` 变体，`FromStr`/`Display` 手动实现。未知模型名透传，不会 fallback 到 `gpt-4o-transcribe-diarize`。
+
+3. **provider 字段贯通** - `CaptureParams` → `SessionParams` → `ListenerArgs` 全部添加 `provider: Option<String>`：
+   - `plugins/transcription/src/api.rs` `CaptureParams` + `From<CaptureParams> for SessionParams` 传递
+   - `crates/listener-core/src/actors/session/types.rs` `SessionParams`
+   - `crates/listener-core/src/actors/listener/mod.rs` `ListenerArgs`
+   - `crates/listener-core/src/actors/session/supervisor/children.rs` 构造 `ListenerArgs` 时传入
+
+4. **default_transcription_mode 修复** - `plugins/transcription/src/api.rs:77-93`：
+   - `from_url_and_languages` 传 `self.provider.as_deref()` 作为 `provider_hint`
+   - Speaches 自定义 URL 正确解析为 `AdapterKind::OpenAI`（而不是回退到 `Deepgram`）
+   - OpenAI 适配器 `has_live_mode() == true` 且 `is_supported_languages_live() == true` → 走 Live 模式
+   - 测试 `31/31 通过`
+
+5. **should_stop_on_listener_failure** - `crates/listener-core/src/actors/session/supervisor.rs:383` 同样传 `provider_hint`
+
+### 关键文件
+
+- `plugins/transcription/src/api.rs` - `CaptureParams`, `default_transcription_mode`, `TranscriptionParams`
+- `crates/listener-core/src/actors/session/supervisor.rs` - `should_stop_on_listener_failure`
+- `crates/listener-core/src/actors/session/supervisor/children.rs` - `spawn_listener`
+- `crates/owhisper-client/src/adapter/openai/live.rs` - OpenAI WebSocket 实时适配器
+- `crates/owhisper-client/src/adapter/openai/batch.rs` - OpenAI HTTP batch 适配器
+- `crates/owhisper-client/src/adapter/openai/mod.rs` - `resolve_batch_model`, `supports_progressive_batch_model`
+- `crates/openai-transcription/src/batch/response.rs` - `CreateTranscriptionResponse`, `deserialize_vec_or_null`
+
+### 路线图
+
+Phase 1 — 实时转录通路打通（当前）
+  [x] Provider/model 配置 UI + 动态模型列表
+  [x] 自定义模型名透传 (AudioModel::Custom)
+  [x] provider_hint 贯通使 AdapterKind 正确识别
+  [x] default_transcription_mode 返回 Live
+  [x] 编译 + WebSocket 连接成功验证（speaches Realtime API 成功连接）
+  [x] Batch 转录验证成功（curl 直接调 `/v1/audio/transcriptions` 可正确转写）
+  [x] Realtime 转录：裸测验证成功，返回中文转录 "謝謝大家"
+  [x] 样本率修复：OpenAI Realtime API 要求 24000 Hz（`live.rs:16`）
+  [x] session.update 结构修复：`input_audio_transcription` 在 session 顶层而非 `audio.input` 内（`realtime.rs:14-21`）
+  [x] URL 修复：移除 `intent=transcription`，URL model 用对话模型而非 STT 模型（`live.rs:50`）
+  [x] VAD 开启：`threshold=0.9`, `silence_duration_ms=1500`, `create_response=false`
+  [x] 测试通过：48/48, 0 warnings
+  [x] 最终方案：`intent=transcription` + URL 模型名 + `finalize_message` 发 `commit`（匹配工作测试流程）
+  [x] `logprobs: null` 反序列化修复（speaches 用 null 代替 []，`realtime.rs:213,222`）
+  [x] 实时转录中断后自动重连
+  [x] Batch fallback `logprobs: null` 反序列化修复（`batch/response.rs` `deserialize_vec_or_null`）
+  [x] 纯 URL 参数连接验证成功（`initial_message: None`）：WebSocket ✅ VAD ✅ 转写 ✅
+  [x] Batch API 验证成功：curl 直接调返回正确中文 "产品配置方案零十二零配置數據中心終於清島清水中心"
+
+Phase 2 — 功能完善（后续）
+  [ ] VAD 参数调优（silence_duration_ms, threshold 等）
+  [ ] 多语言实时转录支持
+  [ ] Speaker diarization（说话人分离）
+  [ ] 自定义 prompt/关键词实时生效
+
+Phase 3 — UI 增强（按需）
+  [ ] 如果 OpenAI provider + 自建服务器与原生 OpenAI 行为差异过大，加 toggle 开关
+  [ ] 实时转录延迟/状态指示器
+
 ## Misc
 
 - Do not create summary docs or example code files unless requested.

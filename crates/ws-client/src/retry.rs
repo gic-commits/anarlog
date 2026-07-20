@@ -134,7 +134,10 @@ async fn try_connect(
 
     let connect_result = tokio::time::timeout(timeout, connect_async(req)).await;
     let (ws_stream, _) = match connect_result {
-        Ok(Ok(stream)) => stream,
+        Ok(Ok(stream)) => {
+            tracing::info!(attempt, max_attempts, "connect_async_succeeded");
+            stream
+        }
         Ok(Err(error)) => {
             tracing::error!(
                 attempt,

@@ -1,78 +1,100 @@
 use serde::{Deserialize, Serialize};
-use strum::{AsRefStr, Display, EnumString};
+use std::fmt;
+use std::str::FromStr;
 
 use super::request::AudioResponseFormat;
 
-pub const MODEL_WHISPER_1: AudioModel = AudioModel::Whisper1;
-pub const MODEL_GPT_4O_TRANSCRIBE: AudioModel = AudioModel::Gpt4oTranscribe;
-pub const MODEL_GPT_4O_MINI_TRANSCRIBE: AudioModel = AudioModel::Gpt4oMiniTranscribe;
-pub const MODEL_GPT_4O_MINI_TRANSCRIBE_2025_12_15: AudioModel =
-    AudioModel::Gpt4oMiniTranscribe20251215;
-pub const MODEL_GPT_4O_TRANSCRIBE_DIARIZE: AudioModel = AudioModel::Gpt4oTranscribeDiarize;
+pub const MODEL_WHISPER_1: &str = "whisper-1";
+pub const MODEL_GPT_4O_TRANSCRIBE: &str = "gpt-4o-transcribe";
+pub const MODEL_GPT_4O_MINI_TRANSCRIBE: &str = "gpt-4o-mini-transcribe";
+pub const MODEL_GPT_4O_MINI_TRANSCRIBE_2025_12_15: &str = "gpt-4o-mini-transcribe-2025-12-15";
+pub const MODEL_GPT_4O_TRANSCRIBE_DIARIZE: &str = "gpt-4o-transcribe-diarize";
 
 pub fn supports_timestamp_granularities(model: impl AsRef<str>) -> bool {
-    model
-        .as_ref()
-        .parse()
-        .is_ok_and(AudioModel::supports_timestamp_granularities)
+    match model.as_ref().parse::<AudioModel>() {
+        Ok(m) => m.supports_timestamp_granularities(),
+        Err(_) => false,
+    }
 }
 
 pub fn default_response_format(model: impl AsRef<str>) -> AudioResponseFormat {
-    model
-        .as_ref()
-        .parse()
-        .map(AudioModel::default_response_format)
-        .unwrap_or(AudioResponseFormat::Json)
+    match model.as_ref().parse::<AudioModel>() {
+        Ok(m) => m.default_response_format(),
+        Err(_) => AudioResponseFormat::Json,
+    }
 }
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumString, Display, AsRefStr,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AudioModel {
     #[serde(rename = "whisper-1")]
-    #[strum(serialize = "whisper-1")]
     Whisper1,
     #[serde(rename = "gpt-4o-transcribe")]
-    #[strum(serialize = "gpt-4o-transcribe")]
     Gpt4oTranscribe,
     #[serde(rename = "gpt-4o-mini-transcribe")]
-    #[strum(serialize = "gpt-4o-mini-transcribe")]
     Gpt4oMiniTranscribe,
     #[serde(rename = "gpt-4o-mini-transcribe-2025-12-15")]
-    #[strum(serialize = "gpt-4o-mini-transcribe-2025-12-15")]
     Gpt4oMiniTranscribe20251215,
     #[serde(rename = "gpt-4o-transcribe-diarize")]
-    #[strum(serialize = "gpt-4o-transcribe-diarize")]
     Gpt4oTranscribeDiarize,
+    Custom(String),
+}
+
+impl fmt::Display for AudioModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Whisper1 => write!(f, "whisper-1"),
+            Self::Gpt4oTranscribe => write!(f, "gpt-4o-transcribe"),
+            Self::Gpt4oMiniTranscribe => write!(f, "gpt-4o-mini-transcribe"),
+            Self::Gpt4oMiniTranscribe20251215 => write!(f, "gpt-4o-mini-transcribe-2025-12-15"),
+            Self::Gpt4oTranscribeDiarize => write!(f, "gpt-4o-transcribe-diarize"),
+            Self::Custom(name) => write!(f, "{}", name),
+        }
+    }
+}
+
+impl FromStr for AudioModel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "whisper-1" => Ok(Self::Whisper1),
+            "gpt-4o-transcribe" => Ok(Self::Gpt4oTranscribe),
+            "gpt-4o-mini-transcribe" => Ok(Self::Gpt4oMiniTranscribe),
+            "gpt-4o-mini-transcribe-2025-12-15" => Ok(Self::Gpt4oMiniTranscribe20251215),
+            "gpt-4o-transcribe-diarize" => Ok(Self::Gpt4oTranscribeDiarize),
+            other => Ok(Self::Custom(other.to_string())),
+        }
+    }
 }
 
 impl AudioModel {
-    pub fn supports_timestamp_granularities(self) -> bool {
+    pub fn supports_timestamp_granularities(&self) -> bool {
         matches!(self, Self::Whisper1)
     }
 
-    pub fn supports_streaming(self) -> bool {
+    pub fn supports_streaming(&self) -> bool {
         !matches!(self, Self::Whisper1)
     }
 
-    pub fn supports_prompt(self) -> bool {
+    pub fn supports_prompt(&self) -> bool {
         !matches!(self, Self::Gpt4oTranscribeDiarize)
     }
 
-    pub fn supports_logprobs(self) -> bool {
+    pub fn supports_logprobs(&self) -> bool {
         matches!(
             self,
             Self::Gpt4oTranscribe | Self::Gpt4oMiniTranscribe | Self::Gpt4oMiniTranscribe20251215
         )
     }
 
-    pub fn default_response_format(self) -> AudioResponseFormat {
+    pub fn default_response_format(&self) -> AudioResponseFormat {
         match self {
             Self::Whisper1 => AudioResponseFormat::VerboseJson,
             Self::Gpt4oTranscribe
             | Self::Gpt4oMiniTranscribe
             | Self::Gpt4oMiniTranscribe20251215
-            | Self::Gpt4oTranscribeDiarize => AudioResponseFormat::Json,
+            | Self::Gpt4oTranscribeDiarize
+            | Self::Custom(_) => AudioResponseFormat::Json,
         }
     }
 }
@@ -102,7 +124,9 @@ impl TryFrom<AudioModel> for GptTranscriptionModel {
             AudioModel::Gpt4oTranscribe => Ok(Self::Gpt4oTranscribe),
             AudioModel::Gpt4oMiniTranscribe => Ok(Self::Gpt4oMiniTranscribe),
             AudioModel::Gpt4oMiniTranscribe20251215 => Ok(Self::Gpt4oMiniTranscribe20251215),
-            other => Err(other),
+            AudioModel::Custom(_) | AudioModel::Whisper1 | AudioModel::Gpt4oTranscribeDiarize => {
+                Err(value)
+            }
         }
     }
 }

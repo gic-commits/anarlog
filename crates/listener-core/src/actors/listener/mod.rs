@@ -58,10 +58,7 @@ pub struct ListenerArgs {
     pub session_id: String,
     pub participant_human_ids: Vec<String>,
     pub self_human_id: Option<String>,
-<<<<<<< HEAD
-=======
     pub provider: Option<String>,
->>>>>>> my-changes
 }
 
 pub struct ListenerState {
@@ -75,6 +72,17 @@ pub struct ListenerState {
 pub(super) enum ChannelSender {
     Single(tokio::sync::mpsc::Sender<MixedMessage<Bytes, ControlMessage>>),
     Dual(tokio::sync::mpsc::Sender<MixedMessage<(Bytes, Bytes), ControlMessage>>),
+}
+
+fn mix_pcm16(a: &[u8], b: &[u8]) -> Vec<u8> {
+    let max_len = a.len().max(b.len());
+    let mut mixed = Vec::with_capacity(max_len);
+    for i in (0..max_len).step_by(2) {
+        let sa = i16::from_le_bytes([a.get(i).copied().unwrap_or(0), a.get(i + 1).copied().unwrap_or(0)]);
+        let sb = i16::from_le_bytes([b.get(i).copied().unwrap_or(0), b.get(i + 1).copied().unwrap_or(0)]);
+        mixed.extend_from_slice(&sa.saturating_add(sb).to_le_bytes());
+    }
+    mixed
 }
 
 pub struct ListenerActor;
@@ -115,6 +123,14 @@ impl Actor for ListenerActor {
         let span = session_span(&session_id);
 
         async {
+            tracing::info!(
+                "[DEBUG] ListenerActor pre_start: model={} base_url={} provider={:?} transcription_mode={:?}",
+                args.model,
+                args.base_url,
+                args.provider,
+                args.transcription_mode,
+            );
+
             args.runtime
                 .emit_progress(SessionProgressEvent::Connecting {
                     session_id: session_id.clone(),
@@ -200,10 +216,13 @@ impl Actor for ListenerActor {
             },
 
             ListenerMsg::AudioDual(mic, spk) => match &state.tx {
+                ChannelSender::Single(tx) => {
+                    let mixed = mix_pcm16(&mic, &spk);
+                    let _ = tx.try_send(MixedMessage::Audio(mixed.into()));
+                }
                 ChannelSender::Dual(tx) => {
                     let _ = tx.try_send(MixedMessage::Audio((mic, spk)));
                 }
-                ChannelSender::Single(_) => {}
             },
 
             ListenerMsg::UpdateConfig(update) => {

@@ -118,6 +118,48 @@ pub async fn install_embedded_cli<R: tauri::Runtime>(
     crate::embedded_cli::install(&app)
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn fetch_stt_models<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+    url: String,
+    token: Option<String>,
+) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::new();
+    let mut request = client.get(&url);
+    if let Some(key) = &token {
+        if !key.is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", key));
+        }
+    }
+
+    let response = request.send().await.map_err(|e| format!("request failed: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("API returned {}: {}", status.as_u16(), body));
+    }
+
+    let json: serde_json::Value = response.json().await.map_err(|e| format!("parse error: {e}"))?;
+    let models = json["data"]
+        .as_array()
+        .ok_or_else(|| "expected 'data' array in response".to_string())?
+        .iter()
+        .filter_map(|m| {
+            let id = m["id"].as_str()?;
+            let task = m["task"].as_str();
+            let is_stt = task == Some("automatic-speech-recognition")
+                || id.to_lowercase().contains("transcribe")
+                || id.to_lowercase().contains("whisper")
+                || id.to_lowercase().contains("speech")
+                || id.to_lowercase().contains("audio");
+            if is_stt { Some(id.to_string()) } else { None }
+        })
+        .collect();
+
+    Ok(models)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

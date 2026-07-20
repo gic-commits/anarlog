@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use strum::{AsRefStr, Display, EnumString};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,10 +118,27 @@ impl CreateTranscriptionResponse {
     }
 }
 
+fn deserialize_vec_or_null<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum VecOrNull<T> {
+        Vec(Vec<T>),
+        Null,
+    }
+    match VecOrNull::<T>::deserialize(deserializer)? {
+        VecOrNull::Vec(v) => Ok(v),
+        VecOrNull::Null => Ok(vec![]),
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct TranscriptionResponse {
     pub text: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_or_null")]
     pub logprobs: Vec<TranscriptionLogprob>,
     pub usage: Option<TranscriptionUsage>,
 }
@@ -263,13 +280,13 @@ pub enum TranscriptionStreamEvent {
     #[serde(rename = "transcript.text.delta")]
     TextDelta {
         delta: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "deserialize_vec_or_null")]
         logprobs: Vec<TranscriptionLogprob>,
     },
     #[serde(rename = "transcript.text.done")]
     TextDone {
         text: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "deserialize_vec_or_null")]
         logprobs: Vec<TranscriptionLogprob>,
         usage: Option<TranscriptionUsage>,
     },

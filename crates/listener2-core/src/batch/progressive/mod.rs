@@ -52,10 +52,7 @@ fn resolve_progressive_provider(
         &params.base_url,
         &listen_params.languages,
         listen_params.model.as_deref(),
-<<<<<<< HEAD
-=======
         None,
->>>>>>> my-changes
     );
 
     match adapter_kind {

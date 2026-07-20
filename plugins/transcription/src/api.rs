@@ -34,11 +34,8 @@ pub struct CaptureParams {
     pub participant_human_ids: Vec<String>,
     #[serde(default)]
     pub self_human_id: Option<String>,
-<<<<<<< HEAD
-=======
     #[serde(default)]
     pub provider: Option<String>,
->>>>>>> my-changes
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -54,42 +51,71 @@ pub struct CaptureConfigUpdate {
 impl CaptureParams {
     fn default_transcription_mode(&self) -> listener::TranscriptionMode {
         if self.transcription_mode == Some(listener::TranscriptionMode::Batch) {
+            tracing::info!("[DEBUG] default_transcription_mode: explicit Batch via field");
             return listener::TranscriptionMode::Batch;
         }
 
         if let Some(model) =
             hypr_transcribe_soniqo::local_model_from_request(&self.base_url, &self.model)
         {
-            return if model.supports_live_on_current_platform()
+            let mode = if model.supports_live_on_current_platform()
                 && model.supports_languages(&self.languages)
             {
                 listener::TranscriptionMode::Live
             } else {
                 listener::TranscriptionMode::Batch
             };
+            tracing::info!(
+                "[DEBUG] default_transcription_mode: soniqo local model -> {:?}",
+                mode
+            );
+            return mode;
         }
 
         if hypr_transcribe_soniqo::is_local_base_url(&self.base_url) {
+            tracing::info!("[DEBUG] default_transcription_mode: local base url -> Batch");
             return listener::TranscriptionMode::Batch;
         }
 
-<<<<<<< HEAD
-        let adapter_kind =
-            AdapterKind::from_url_and_languages(&self.base_url, &self.languages, Some(&self.model));
-=======
+        if self
+            .model
+            .parse::<hypr_transcribe_soniqo::SoniqoModel>()
+            .is_ok()
+        {
+            tracing::info!(
+                "[DEBUG] default_transcription_mode: soniqo model on non-local url -> Batch"
+            );
+            return listener::TranscriptionMode::Batch;
+        }
+
         let adapter_kind = AdapterKind::from_url_and_languages(
             &self.base_url,
             &self.languages,
             Some(&self.model),
-            None,
+            self.provider.as_deref(),
         );
->>>>>>> my-changes
+
+        tracing::info!(
+            "[DEBUG] default_transcription_mode: adapter_kind={:?} has_live={} base_url={} provider={}",
+            adapter_kind,
+            adapter_kind.has_live_mode(),
+            &self.base_url,
+            self.provider.as_deref().unwrap_or("none"),
+        );
 
         if !adapter_kind.has_live_mode() {
+            tracing::info!("[DEBUG] default_transcription_mode: adapter has no live mode -> Batch");
             return listener::TranscriptionMode::Batch;
         }
 
-        if adapter_kind.is_supported_languages_live(&self.languages, Some(&self.model)) {
+        let langs_supported =
+            adapter_kind.is_supported_languages_live(&self.languages, Some(&self.model));
+        tracing::info!(
+            "[DEBUG] default_transcription_mode: is_supported_languages_live={}",
+            langs_supported
+        );
+
+        if langs_supported {
             listener::TranscriptionMode::Live
         } else {
             listener::TranscriptionMode::Batch
@@ -241,10 +267,7 @@ impl From<CaptureParams> for listener::actors::SessionParams {
             keywords: value.keywords,
             participant_human_ids: value.participant_human_ids,
             self_human_id: value.self_human_id,
-<<<<<<< HEAD
-=======
             provider: value.provider,
->>>>>>> my-changes
         }
     }
 }
@@ -395,6 +418,7 @@ mod tests {
             transcription_mode: None,
             participant_human_ids: vec![],
             self_human_id: None,
+            provider: None,
         }
     }
 
@@ -463,13 +487,10 @@ mod tests {
     }
 
     #[test]
-    fn defaults_openai_capture_to_batch_mode() {
+    fn defaults_openai_capture_to_live_mode() {
         let params = capture_params("https://api.openai.com/v1", "gpt-4o-transcribe");
 
-        assert_eq!(
-            params.default_transcription_mode(),
-            TranscriptionMode::Batch
-        );
+        assert_eq!(params.default_transcription_mode(), TranscriptionMode::Live);
     }
 
     #[test]

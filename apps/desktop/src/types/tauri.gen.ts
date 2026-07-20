@@ -95,6 +95,14 @@ async checkEmbeddedCli() : Promise<Result<EmbeddedCliStatus, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async fetchSttModels(url: string, token?: string) : Promise<Result<string[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("fetch_stt_models", { url, token: token ?? null }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async installEmbeddedCli() : Promise<Result<EmbeddedCliStatus, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("install_embedded_cli") };
