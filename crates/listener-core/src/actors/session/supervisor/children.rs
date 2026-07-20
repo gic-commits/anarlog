@@ -23,7 +23,7 @@ pub(super) const RESTART_BUDGET: RestartBudget = RestartBudget {
     reset_after: Some(Duration::from_secs(30)),
 };
 
-const RETRY_STRATEGY: RetryStrategy = RetryStrategy {
+pub(super) const RETRY_STRATEGY: RetryStrategy = RetryStrategy {
     max_attempts: 3,
     base_delay: Duration::from_millis(100),
 };
@@ -122,10 +122,7 @@ pub(super) async fn spawn_listener(
             session_id: ctx.params.session_id.clone(),
             participant_human_ids: ctx.params.participant_human_ids.clone(),
             self_human_id: ctx.params.self_human_id.clone(),
-<<<<<<< HEAD
-=======
             provider: ctx.params.provider.clone(),
->>>>>>> my-changes
         },
         supervisor_cell,
     )
@@ -249,6 +246,9 @@ pub(super) async fn sync_source_recorder(state: &SessionState) {
 }
 
 pub(super) async fn shutdown_children(state: &mut SessionState, reason: &str) {
+    if let Some(task) = state.reconnect_task.take() {
+        task.abort();
+    }
     if let Some(cell) = state.source_cell.take() {
         stop_child(&cell, reason, "source").await;
     }

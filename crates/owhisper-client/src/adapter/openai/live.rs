@@ -3,17 +3,13 @@ use owhisper_interface::ListenParams;
 use owhisper_interface::stream::{Alternatives, Channel, Metadata, StreamResponse};
 
 use openai_transcription::realtime::{
-    AudioConfig, AudioFormat, AudioFormatType, AudioInputConfig, ClientEventType,
-    InputAudioBufferAppendEvent, InputAudioBufferClearEvent, ServerEvent, SessionConfig,
-    SessionType, SessionUpdateEvent, TranscriptionConfig, TurnDetectionConfig, TurnDetectionType,
+    ClientEventType, InputAudioBufferAppendEvent, InputAudioBufferCommitEvent, ServerEvent,
 };
 
 use crate::adapter::RealtimeSttAdapter;
 use crate::adapter::parsing::{WordBuilder, calculate_time_span, parse_speaker_id};
 
 use super::OpenAIAdapter;
-
-const DEFAULT_SAMPLE_RATE: u32 = 16000;
 
 impl RealtimeSttAdapter for OpenAIAdapter {
     fn provider_name(&self) -> &'static str {
@@ -54,6 +50,12 @@ impl RealtimeSttAdapter for OpenAIAdapter {
             }
         }
 
+        tracing::info!(
+            "[DEBUG] OpenAI live build_ws_url: api_base={} final_url={} model={}",
+            api_base,
+            url,
+            model
+        );
         url
     }
 
@@ -66,9 +68,9 @@ impl RealtimeSttAdapter for OpenAIAdapter {
     }
 
     fn finalize_message(&self) -> Message {
-        let msg = InputAudioBufferClearEvent {
+        let msg = InputAudioBufferCommitEvent {
             event_id: None,
-            event_type: ClientEventType::InputAudioBufferClear,
+            event_type: ClientEventType::InputAudioBufferCommit,
         };
         Message::Text(serde_json::to_string(&msg).unwrap().into())
     }
@@ -87,69 +89,14 @@ impl RealtimeSttAdapter for OpenAIAdapter {
     fn initial_message(
         &self,
         _api_key: Option<&str>,
-        params: &ListenParams,
+        _params: &ListenParams,
         _channels: u8,
     ) -> Option<Message> {
-        let language = params
-            .languages
-            .first()
-            .map(|l| l.iso639().code().to_string());
-
-        let sample_rate = if params.sample_rate == 0 {
-            DEFAULT_SAMPLE_RATE
-        } else {
-            params.sample_rate
-        };
-
-        let default_model = crate::providers::Provider::OpenAI.default_live_model();
-        let model = match params.model.as_deref() {
-            Some(m) if crate::providers::is_meta_model(m) => default_model,
-            Some(m) => m,
-            None => default_model,
-        };
-
-        let session_update = SessionUpdateEvent {
-            event_id: None,
-            event_type: ClientEventType::SessionUpdate,
-            session: SessionConfig {
-                session_type: SessionType::Transcription,
-                audio: Some(AudioConfig {
-                    input: Some(AudioInputConfig {
-                        format: Some(AudioFormat {
-                            format_type: AudioFormatType::AudioPcm,
-                            rate: Some(sample_rate),
-                        }),
-                        noise_reduction: None,
-                        transcription: Some(TranscriptionConfig {
-                            model: model.to_string(),
-                            language,
-                            prompt: None,
-                        }),
-                        turn_detection: Some(TurnDetectionConfig {
-                            detection_type: TurnDetectionType::ServerVad,
-                            create_response: Some(false),
-                            interrupt_response: None,
-                            idle_timeout_ms: None,
-                            eagerness: None,
-                            threshold: Some(0.5),
-                            prefix_padding_ms: Some(300),
-                            silence_duration_ms: Some(500),
-                        }),
-                    }),
-                }),
-                include: None,
-            },
-        };
-
-        let json = serde_json::to_string(&session_update).ok()?;
-        tracing::debug!(
-            hyprnote.payload.size_bytes = json.len() as u64,
-            "openai_session_update_payload"
-        );
-        Some(Message::Text(json.into()))
+        None
     }
 
     fn parse_response(&self, raw: &str) -> Vec<StreamResponse> {
+        tracing::info!("[DEBUG] OpenAI parse_response: raw={}", raw);
         let event: ServerEvent = match serde_json::from_str(raw) {
             Ok(e) => e,
             Err(e) => {

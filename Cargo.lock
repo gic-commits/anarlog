@@ -4830,6 +4830,7 @@ dependencies = [
  "intercept",
  "pico-args",
  "ractor",
+ "reqwest 0.13.2",
  "sentry",
  "serde",
  "serde_json",

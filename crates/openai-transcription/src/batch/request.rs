@@ -70,10 +70,18 @@ impl Default for CreateDiarizedTranscriptionOptions {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CreateCustomTranscriptionOptions {
+    pub model: String,
+    pub common: CommonTranscriptionOptions,
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum CreateTranscriptionOptions {
     Whisper(CreateWhisperTranscriptionOptions),
     Gpt(CreateGptTranscriptionOptions),
     Diarize(CreateDiarizedTranscriptionOptions),
+    Custom(CreateCustomTranscriptionOptions),
 }
 
 impl CreateTranscriptionOptions {
@@ -107,6 +115,11 @@ impl CreateTranscriptionOptions {
                     ..Default::default()
                 })
             }
+            AudioModel::Custom(name) => Self::Custom(CreateCustomTranscriptionOptions {
+                model: name,
+                common: CommonTranscriptionOptions::default(),
+                language: None,
+            }),
         }
     }
 
@@ -130,6 +143,7 @@ impl CreateTranscriptionOptions {
             Self::Whisper(_) => AudioModel::Whisper1,
             Self::Gpt(options) => options.model.into(),
             Self::Diarize(_) => AudioModel::Gpt4oTranscribeDiarize,
+            Self::Custom(options) => AudioModel::Custom(options.model.clone()),
         }
     }
 
@@ -138,6 +152,7 @@ impl CreateTranscriptionOptions {
             Self::Whisper(options) => &options.common,
             Self::Gpt(options) => &options.common,
             Self::Diarize(options) => &options.common,
+            Self::Custom(options) => &options.common,
         }
     }
 
@@ -146,11 +161,15 @@ impl CreateTranscriptionOptions {
             Self::Whisper(options) => &mut options.common,
             Self::Gpt(options) => &mut options.common,
             Self::Diarize(options) => &mut options.common,
+            Self::Custom(options) => &mut options.common,
         }
     }
 
     pub fn push_language(&mut self, language: impl Into<String>) {
-        self.common_mut().language = Some(language.into());
+        match self {
+            Self::Custom(options) => options.language = Some(language.into()),
+            _ => self.common_mut().language = Some(language.into()),
+        }
     }
 
     pub fn multipart_text_fields(&self) -> Result<Vec<MultipartTextField>, serde_json::Error> {
@@ -225,6 +244,14 @@ impl CreateTranscriptionOptions {
                     fields.push(MultipartTextField {
                         name: "stream",
                         value: stream.to_string(),
+                    });
+                }
+            }
+            Self::Custom(options) => {
+                if let Some(language) = &options.language {
+                    fields.push(MultipartTextField {
+                        name: "language",
+                        value: language.clone(),
                     });
                 }
             }

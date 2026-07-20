@@ -433,10 +433,7 @@ impl AdapterKind {
         base_url: &str,
         _languages: &[hypr_language::Language],
         _model: Option<&str>,
-<<<<<<< HEAD
-=======
         provider_hint: Option<&str>,
->>>>>>> my-changes
     ) -> Self {
         use crate::providers::Provider;
 
@@ -448,15 +445,12 @@ impl AdapterKind {
             return Self::Argmax;
         }
 
-<<<<<<< HEAD
-=======
         if let Some(provider_str) = provider_hint {
             if let Ok(provider) = provider_str.parse::<Provider>() {
                 return Self::from(provider);
             }
         }
 
->>>>>>> my-changes
         Provider::from_url(base_url)
             .map(Self::from)
             .unwrap_or(Self::Deepgram)
@@ -464,14 +458,9 @@ impl AdapterKind {
 
     pub fn has_live_mode(&self) -> bool {
         match self {
-<<<<<<< HEAD
-            Self::AquaVoice | Self::Argmax | Self::OpenAI | Self::Pyannote => false,
-            Self::Soniox
-=======
             Self::AquaVoice | Self::Argmax | Self::Pyannote => false,
             Self::OpenAI
             | Self::Soniox
->>>>>>> my-changes
             | Self::Cartesia
             | Self::Fireworks
             | Self::Deepgram
@@ -499,11 +488,7 @@ impl AdapterKind {
             Self::Soniox => SonioxAdapter::language_support_live(languages),
             Self::AssemblyAI => AssemblyAIAdapter::language_support_live(languages),
             Self::Gladia => GladiaAdapter::language_support_live(languages),
-<<<<<<< HEAD
-            Self::OpenAI => LanguageSupport::NotSupported,
-=======
             Self::OpenAI => OpenAIAdapter::language_support_batch(languages),
->>>>>>> my-changes
             Self::Fireworks => FireworksAdapter::language_support_live(languages),
             Self::ElevenLabs => ElevenLabsAdapter::language_support_live(languages),
             Self::DashScope => DashScopeAdapter::language_support_live(languages),
@@ -805,11 +790,7 @@ mod tests {
         for (url, langs, model, expected) in cases {
             let langs: Vec<hypr_language::Language> = langs.iter().map(|l| (*l).into()).collect();
             assert_eq!(
-<<<<<<< HEAD
-                AdapterKind::from_url_and_languages(url, &langs, *model),
-=======
                 AdapterKind::from_url_and_languages(url, &langs, *model, None),
->>>>>>> my-changes
                 *expected,
                 "url={url}, langs={langs:?}, model={model:?}"
             );
@@ -828,10 +809,7 @@ mod tests {
             AdapterKind::DashScope,
             AdapterKind::Mistral,
             AdapterKind::Hyprnote,
-<<<<<<< HEAD
-=======
             AdapterKind::OpenAI,
->>>>>>> my-changes
         ];
         for kind in live {
             assert!(kind.has_live_mode(), "{kind:?} should support live mode");
@@ -840,10 +818,6 @@ mod tests {
         let batch_only = [
             AdapterKind::AquaVoice,
             AdapterKind::Argmax,
-<<<<<<< HEAD
-            AdapterKind::OpenAI,
-=======
->>>>>>> my-changes
             AdapterKind::Pyannote,
         ];
         for kind in batch_only {
@@ -966,11 +940,7 @@ mod tests {
                 let langs: Vec<hypr_language::Language> =
                     langs.iter().map(|l| (*l).into()).collect();
                 assert_eq!(
-<<<<<<< HEAD
-                    AdapterKind::from_url_and_languages(url, &langs, Some("cloud")),
-=======
                     AdapterKind::from_url_and_languages(url, &langs, Some("cloud"), None),
->>>>>>> my-changes
                     AdapterKind::Hyprnote,
                     "proxy URL should always select Hyprnote adapter regardless of languages: url={url}, langs={langs:?}"
                 );
@@ -1031,21 +1001,6 @@ mod tests {
 
         let en: Vec<hypr_language::Language> = vec![En.into()];
         assert_eq!(
-<<<<<<< HEAD
-            AdapterKind::from_url_and_languages("https://api.deepgram.com/v1", &en, None),
-            AdapterKind::Deepgram,
-        );
-        assert_eq!(
-            AdapterKind::from_url_and_languages("https://api.soniox.com", &en, None),
-            AdapterKind::Soniox,
-        );
-        assert_eq!(
-            AdapterKind::from_url_and_languages("https://api.pyannote.ai", &en, None),
-            AdapterKind::Pyannote,
-        );
-        assert_eq!(
-            AdapterKind::from_url_and_languages("http://localhost:50060/v1", &en, None),
-=======
             AdapterKind::from_url_and_languages("https://api.deepgram.com/v1", &en, None, None),
             AdapterKind::Deepgram,
         );
@@ -1059,7 +1014,6 @@ mod tests {
         );
         assert_eq!(
             AdapterKind::from_url_and_languages("http://localhost:50060/v1", &en, None, None),
->>>>>>> my-changes
             AdapterKind::Argmax,
         );
     }

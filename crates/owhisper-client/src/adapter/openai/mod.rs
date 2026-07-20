@@ -1,8 +1,5 @@
 mod batch;
-<<<<<<< HEAD
-=======
 mod live;
->>>>>>> my-changes
 
 use openai_transcription::batch::AudioModel;
 
@@ -31,9 +28,9 @@ impl OpenAIAdapter {
             Some(value) if crate::providers::is_meta_model(value) => {
                 default.parse().expect("invalid_default_openai_batch_model")
             }
-            Some(value) => value
-                .parse()
-                .unwrap_or_else(|_| default.parse().expect("invalid_default_openai_batch_model")),
+            Some(value) => value.parse().unwrap_or_else(|_| {
+                AudioModel::Custom(value.to_string())
+            }),
             None => default.parse().expect("invalid_default_openai_batch_model"),
         }
     }

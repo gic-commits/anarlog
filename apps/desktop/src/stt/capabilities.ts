@@ -192,13 +192,17 @@ export async function getLiveTranscriptionConfig({
   languages: readonly string[];
 }): Promise<LiveTranscriptionConfig> {
   if (isHyprnoteLocalSttModel(provider, model)) {
-    return getOnDeviceTranscriptionConfig(model, languages);
+    const result = getOnDeviceTranscriptionConfig(model, languages);
+    console.log("[DEBUG] getLiveTranscriptionConfig: local model, returning", result);
+    return result;
   }
 
   const config = {
     languages: [...languages],
     transcriptionMode: undefined as TranscriptionMode | undefined,
   } satisfies LiveTranscriptionConfig;
+
+  console.log("[DEBUG] getLiveTranscriptionConfig: provider=%s model=%s langs=%o returning transcriptionMode=%s", provider, model, languages, config.transcriptionMode);
 
   if (!provider || languages.length <= 1) {
     return config;

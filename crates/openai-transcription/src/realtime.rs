@@ -1,5 +1,22 @@
 use crate::batch::{TranscriptionLogprob, TranscriptionUsage};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+fn deserialize_vec_or_null<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum VecOrNull<T> {
+        Vec(Vec<T>),
+        Null,
+    }
+    match VecOrNull::<T>::deserialize(deserializer)? {
+        VecOrNull::Vec(v) => Ok(v),
+        VecOrNull::Null => Ok(vec![]),
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionUpdateEvent {
@@ -12,12 +29,14 @@ pub struct SessionUpdateEvent {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionConfig {
-    #[serde(rename = "type")]
-    pub session_type: SessionType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include: Option<Vec<SessionInclude>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_audio_transcription: Option<TranscriptionConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_detection: Option<TurnDetectionConfig>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -32,10 +51,6 @@ pub struct AudioInputConfig {
     pub format: Option<AudioFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub noise_reduction: Option<NoiseReductionConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transcription: Option<TranscriptionConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_detection: Option<TurnDetectionConfig>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -211,7 +226,7 @@ pub enum ServerEvent {
         content_index: u32,
         transcript: String,
         usage: Option<TranscriptionUsage>,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "deserialize_vec_or_null")]
         logprobs: Vec<TranscriptionLogprob>,
     },
     #[serde(rename = "conversation.item.input_audio_transcription.delta")]
@@ -220,7 +235,7 @@ pub enum ServerEvent {
         item_id: String,
         content_index: Option<u32>,
         delta: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "deserialize_vec_or_null")]
         logprobs: Vec<TranscriptionLogprob>,
         obfuscation: Option<String>,
     },
@@ -273,7 +288,6 @@ mod tests {
             event_id: Some("event-123".to_string()),
             event_type: ClientEventType::SessionUpdate,
             session: SessionConfig {
-                session_type: SessionType::Transcription,
                 audio: Some(AudioConfig {
                     input: Some(AudioInputConfig {
                         format: Some(AudioFormat {
@@ -283,31 +297,31 @@ mod tests {
                         noise_reduction: Some(NoiseReductionConfig {
                             noise_reduction_type: NoiseReductionType::NearField,
                         }),
-                        transcription: Some(TranscriptionConfig {
-                            model: "gpt-4o-transcribe".to_string(),
-                            language: Some("en".to_string()),
-                            prompt: Some("expect technical terms".to_string()),
-                        }),
-                        turn_detection: Some(TurnDetectionConfig {
-                            detection_type: TurnDetectionType::ServerVad,
-                            create_response: None,
-                            interrupt_response: Some(true),
-                            idle_timeout_ms: Some(5_000),
-                            eagerness: None,
-                            threshold: Some(0.5),
-                            prefix_padding_ms: Some(300),
-                            silence_duration_ms: Some(500),
-                        }),
                     }),
                 }),
                 include: Some(vec![SessionInclude::InputAudioTranscriptionLogprobs]),
+                input_audio_transcription: Some(TranscriptionConfig {
+                    model: "gpt-4o-transcribe".to_string(),
+                    language: Some("en".to_string()),
+                    prompt: Some("expect technical terms".to_string()),
+                }),
+                turn_detection: Some(TurnDetectionConfig {
+                    detection_type: TurnDetectionType::ServerVad,
+                    create_response: None,
+                    interrupt_response: Some(true),
+                    idle_timeout_ms: Some(5_000),
+                    eagerness: None,
+                    threshold: Some(0.5),
+                    prefix_padding_ms: Some(300),
+                    silence_duration_ms: Some(500),
+                }),
             },
         })
         .expect("serialize session");
 
         assert_eq!(json["type"], "session.update");
         assert_eq!(json["event_id"], "event-123");
-        assert_eq!(json["session"]["type"], "transcription");
+        assert!(!json["session"].as_object().unwrap().contains_key("type"));
         assert_eq!(
             json["session"]["audio"]["input"]["format"]["type"],
             "audio/pcm"
@@ -318,13 +332,10 @@ mod tests {
             "near_field"
         );
         assert_eq!(
-            json["session"]["audio"]["input"]["transcription"]["prompt"],
+            json["session"]["input_audio_transcription"]["prompt"],
             "expect technical terms"
         );
-        assert_eq!(
-            json["session"]["audio"]["input"]["turn_detection"]["idle_timeout_ms"],
-            5_000
-        );
+        assert_eq!(json["session"]["turn_detection"]["idle_timeout_ms"], 5_000);
     }
 
     #[test]

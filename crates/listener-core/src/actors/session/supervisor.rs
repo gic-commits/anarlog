@@ -2,6 +2,7 @@ mod children;
 mod mode;
 
 use ractor::{Actor, ActorCell, ActorProcessingErr, ActorRef, SupervisionEvent};
+use std::time::Duration;
 use tracing::Instrument;
 
 use crate::DegradedError;
@@ -11,8 +12,9 @@ use crate::actors::session::types::{
 use crate::actors::{ListenerConfigUpdate, ListenerMsg};
 use owhisper_client::AdapterKind;
 
-use self::children::{ChildKind, RESTART_BUDGET};
+use self::children::{ChildKind, RESTART_BUDGET, RETRY_STRATEGY};
 use self::mode::SessionModeState;
+use hypr_supervisor::spawn_with_retry;
 
 pub struct SessionState {
     ctx: SessionContext,
@@ -20,9 +22,12 @@ pub struct SessionState {
     listener_cell: Option<ActorCell>,
     recorder_cell: Option<ActorCell>,
     source_restarts: hypr_supervisor::RestartTracker,
+    listener_restarts: hypr_supervisor::RestartTracker,
     recorder_restarts: hypr_supervisor::RestartTracker,
     mode: SessionModeState,
     shutting_down: bool,
+    reconnect_attempts: u32,
+    reconnect_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 pub struct SessionActor;
@@ -31,6 +36,7 @@ pub struct SessionActor;
 pub enum SessionMsg {
     Shutdown,
     UpdateConfig(SessionConfigUpdate),
+    RetryLive,
 }
 
 #[ractor::async_trait]
@@ -72,9 +78,12 @@ impl Actor for SessionActor {
                 listener_cell: None,
                 recorder_cell,
                 source_restarts: hypr_supervisor::RestartTracker::new(),
+                listener_restarts: hypr_supervisor::RestartTracker::new(),
                 recorder_restarts: hypr_supervisor::RestartTracker::new(),
                 mode,
                 shutting_down: false,
+                reconnect_attempts: 0,
+                reconnect_task: None,
             })
         }
         .instrument(span)
@@ -138,6 +147,9 @@ impl Actor for SessionActor {
             SessionMsg::UpdateConfig(update) => {
                 update_config(myself, state, update).await;
             }
+            SessionMsg::RetryLive => {
+                handle_retry_live(myself, state).await;
+            }
         }
         Ok(())
     }
@@ -152,6 +164,7 @@ impl Actor for SessionActor {
         let _guard = span.enter();
 
         state.source_restarts.maybe_reset(&RESTART_BUDGET);
+        state.listener_restarts.maybe_reset(&RESTART_BUDGET);
         state.recorder_restarts.maybe_reset(&RESTART_BUDGET);
 
         if state.shutting_down {
@@ -260,10 +273,63 @@ async fn emit_active_lifecycle_event(state: &SessionState, error: Option<Degrade
     );
 }
 
-async fn enter_batch_fallback(state: &mut SessionState, degraded: DegradedError) {
+async fn enter_batch_fallback(
+    myself: &ActorRef<SessionMsg>,
+    state: &mut SessionState,
+    degraded: DegradedError,
+) {
     state.mode.enter_batch_fallback();
     children::attach_listener_to_source(state).await;
     emit_active_lifecycle_event(state, Some(degraded)).await;
+    state.reconnect_attempts = 0;
+    schedule_reconnect(state, myself.clone(), 0);
+}
+
+fn reconnect_delay(attempts: u32) -> Duration {
+    let secs = match attempts {
+        0 => 10,
+        1 => 20,
+        2 => 40,
+        _ => 60,
+    };
+    Duration::from_secs(secs)
+}
+
+fn schedule_reconnect(state: &mut SessionState, myself: ActorRef<SessionMsg>, attempts: u32) {
+    if let Some(old) = state.reconnect_task.take() {
+        old.abort();
+    }
+    state.reconnect_task = Some(tokio::spawn(async move {
+        tokio::time::sleep(reconnect_delay(attempts)).await;
+        let _ = myself.cast(SessionMsg::RetryLive);
+    }));
+}
+
+async fn handle_retry_live(myself: ActorRef<SessionMsg>, state: &mut SessionState) {
+    if state.shutting_down {
+        return;
+    }
+
+    if state.mode.should_spawn_listener() {
+        return;
+    }
+
+    match children::spawn_listener(myself.get_cell(), &state.ctx, None).await {
+        Ok(listener_cell) => {
+            state.reconnect_attempts = 0;
+            state.reconnect_task = None;
+            state.listener_cell = Some(listener_cell);
+            state.mode.on_listener_attached();
+            children::attach_listener_to_source(state).await;
+            emit_active_lifecycle_event(state, None).await;
+            tracing::info!("live_reconnection_successful");
+        }
+        Err(error) => {
+            tracing::warn!(?error, "live_retry_failed");
+            state.reconnect_attempts += 1;
+            schedule_reconnect(state, myself, state.reconnect_attempts);
+        }
+    }
 }
 
 async fn update_config(
@@ -368,8 +434,45 @@ async fn handle_listener_failure(
     if should_stop_on_listener_failure(state) {
         tracing::warn!("listener_failed_stopping_session");
         stop_after_listener_failure(myself, state, degraded).await;
+    } else if is_transient_error(&degraded) && try_restart_listener(myself, state).await {
+        state.reconnect_attempts = 0;
+        tracing::info!("listener_reconnected");
     } else {
-        enter_batch_fallback(state, degraded).await;
+        enter_batch_fallback(myself, state, degraded).await;
+    }
+}
+
+fn is_transient_error(degraded: &DegradedError) -> bool {
+    !matches!(degraded, DegradedError::AuthenticationFailed { .. })
+}
+
+async fn try_restart_listener(myself: &ActorRef<SessionMsg>, state: &mut SessionState) -> bool {
+    if !state.listener_restarts.record_restart(&RESTART_BUDGET) {
+        tracing::warn!("listener_restart_budget_exhausted");
+        return false;
+    }
+
+    let replay_offset_secs = state.ctx.started_at_instant.elapsed().as_secs_f64();
+
+    let sup = myself.get_cell();
+    let ctx = state.ctx.clone();
+
+    let cell = spawn_with_retry(&RETRY_STRATEGY, || {
+        let sup = sup.clone();
+        let ctx = ctx.clone();
+        async move { children::spawn_listener(sup, &ctx, Some(replay_offset_secs)).await }
+    })
+    .await;
+
+    match cell {
+        Some(c) => {
+            state.listener_cell = Some(c);
+            state.mode.on_listener_attached();
+            children::attach_listener_to_source(state).await;
+            emit_active_lifecycle_event(state, None).await;
+            true
+        }
+        None => false,
     }
 }
 
@@ -380,10 +483,7 @@ fn should_stop_on_listener_failure(state: &SessionState) -> bool {
                 &state.ctx.params.base_url,
                 &state.ctx.params.languages,
                 Some(&state.ctx.params.model),
-<<<<<<< HEAD
-=======
-                None,
->>>>>>> my-changes
+                state.ctx.params.provider.as_deref(),
             ),
             AdapterKind::Soniox
         )
@@ -574,10 +674,7 @@ mod tests {
                 keywords: vec![],
                 participant_human_ids: vec![],
                 self_human_id: None,
-<<<<<<< HEAD
-=======
                 provider: None,
->>>>>>> my-changes
             },
             app_dir: std::env::temp_dir(),
             started_at_instant: Instant::now(),
@@ -592,9 +689,12 @@ mod tests {
             listener_cell: None,
             recorder_cell: None,
             source_restarts: RestartTracker::new(),
+            listener_restarts: RestartTracker::new(),
             recorder_restarts: RestartTracker::new(),
             mode: SessionModeState::new(TranscriptionMode::Live, TranscriptionMode::Live),
             shutting_down: false,
+            reconnect_attempts: 0,
+            reconnect_task: None,
         }
     }
 
@@ -770,9 +870,12 @@ mod tests {
             listener_cell: Some(listener_ref.get_cell()),
             recorder_cell: Some(recorder_ref.get_cell()),
             source_restarts: RestartTracker::new(),
+            listener_restarts: RestartTracker::new(),
             recorder_restarts: RestartTracker::new(),
             mode: SessionModeState::new(TranscriptionMode::Live, TranscriptionMode::Live),
             shutting_down: false,
+            reconnect_attempts: 0,
+            reconnect_task: None,
         };
 
         children::shutdown_children(&mut state, "test_shutdown").await;
