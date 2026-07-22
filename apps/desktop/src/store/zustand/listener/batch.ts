@@ -351,12 +351,24 @@ function transformBatch(
       },
     );
 
+    const segmentIndices = (response.metadata as Record<string, unknown> | undefined)?.["segment_indices"] as (number | null | undefined)[] | undefined;
+
+    if (import.meta.env.DEV) {
+      console.log("[batch] metadata:", response.metadata);
+      console.log("[batch] segmentIndices:", segmentIndices);
+    }
+
     const [words, hints] = transformWordEntries(
       wordEntries,
       alternative.transcript,
       channelIndex,
-      { timingSource },
+      { timingSource, segmentIndices },
     );
+
+    if (import.meta.env.DEV && words.length > 0) {
+      console.log("[batch] first word metadata:", words[0].metadata);
+      console.log("[batch] last word metadata:", words[words.length - 1].metadata);
+    }
 
     hints.forEach((hint) => {
       allHints.push({
@@ -622,16 +634,11 @@ function getWordTimingSourceForBatchResponse(
   hasProviderWords: boolean,
   fallbackWithoutWords: TranscriptTimingSource,
 ): TranscriptTimingSource {
-  if (!hasProviderWords) {
-    return fallbackWithoutWords;
+  if (hasProviderWords) {
+    return getBatchResponseTimingSource(response) ?? "provider_word";
   }
 
-  const explicitSource = getBatchResponseTimingSource(response);
-  if (explicitSource) {
-    return explicitSource;
-  }
-
-  return "provider_word";
+  return getBatchResponseTimingSource(response) ?? fallbackWithoutWords;
 }
 
 function getBatchResponseTimingSource(response: {

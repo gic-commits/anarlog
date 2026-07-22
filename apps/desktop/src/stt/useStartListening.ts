@@ -189,7 +189,11 @@ export function useStartListening(sessionId: string) {
       self_human_id: session?.user_id || null,
     };
 
-    console.log("[DEBUG] useStartListening: conn=%o startParams=%o", conn, startParams);
+    console.log(
+      "[DEBUG] useStartListening: conn=%o startParams=%o",
+      conn,
+      startParams,
+    );
 
     const started = await start(startParams, {
       handlePersist,

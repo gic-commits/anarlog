@@ -116,10 +116,13 @@ Phase 1 — 实时转录通路打通（当前）
   [x] 实时转录中断后自动重连
   [x] Batch fallback `logprobs: null` 反序列化修复（`batch/response.rs` `deserialize_vec_or_null`）
   [x] 纯 URL 参数连接验证成功（`initial_message: None`）：WebSocket ✅ VAD ✅ 转写 ✅
-  [x] Batch API 验证成功：curl 直接调返回正确中文 "产品配置方案零十二零配置數據中心終於清島清水中心"
+  [x] Batch API 验证成功：curl 直接调返回正确中文
+  [x] `initial_message` 握手（`session.update` 通过 WS 发送）
+  [x] `prefix_padding_ms` 降级为 non-fatal warning
+  [x] `hadLiveWords` batch fallback 参数
 
-Phase 2 — 功能完善（后续）
-  [ ] VAD 参数调优（silence_duration_ms, threshold 等）
+Phase 2 — 功能完善（当前）
+  [ ] 推理速度优化 — server 端 whisper 4-8× 实时，需优化 CPU 线程或换 GPU
   [ ] 多语言实时转录支持
   [ ] Speaker diarization（说话人分离）
   [ ] 自定义 prompt/关键词实时生效
@@ -127,6 +130,45 @@ Phase 2 — 功能完善（后续）
 Phase 3 — UI 增强（按需）
   [ ] 如果 OpenAI provider + 自建服务器与原生 OpenAI 行为差异过大，加 toggle 开关
   [ ] 实时转录延迟/状态指示器
+
+### Jul 22 — 状态总结
+
+**服务器端最近一轮部署（回合 3-7）：**
+- Semaphore(2) 并发限制
+- `WHISPER__CPU_THREADS=2`, `OMP_NUM_THREADS=2` (chunk time 80-100s → 7-10s, 仍为 4× 实时)
+- 移除 `asyncio.shield` → WS cancel 正确释放信号量
+- `MAX_SPEECH_DURATION_MS=30000` 强制 30s 分段
+- 模型预加载（session create 时）
+- 启动时 heartbeat delta（非空）
+- keepalive 空 `delta:""` 每 ~2s
+- `prefix_padding_ms` 降级 warning-only
+- 代码行号变化：`_handler:281` → `_handler:237`（handler 逻辑修改）
+- **`Delta transcription chunk timed out` 不再出现** — chunk timeout 问题已解决
+
+**客户端侧改动（已编译，未部署上线）：**
+- `FINALIZE_STREAM_TIMEOUT`: `mod.rs:24` 5s → 10s
+- `TRAILING_MESSAGE_GRACE`: `client.rs:11` 5s → 10s
+- `live.rs` item_id 时序修复：`build_transcript_response` 用 `item_id` 生成 fake timing
+- 事件类型日志：`parse_response` 加 `event_label` + `raw_type` 日志
+
+**最新测试 Session `7f365064`（14:39 UTC）：**
+- VAD 正常：speech_started → speech_stopped → committed，第二段 3.68s 音频
+- 非空 delta 到达：`"是不是很兴趣嗎?有個Settings是什麼?"` — 转录端到端可用
+- 连接稳定：keepalive 每 ~2s 空 delta，无 proxy timeout 断开
+- samples_dropped 持续出现 — 音频缓冲区跟不上
+- **第一段转录延迟 ~100s**（13.6s 语音，whisper 4× 实时推理）
+- 会话仍在运行（14:41:48 UTC 最新活动）
+
+### Jul 22 PM — Batch 段落分段修复
+
+- `propagate_identity` 在 `collect.rs:62-84` 合并同 key 段前新增 `provider_segment_index` 边界检查，防止把 server 分好的段落又合并
+- 修复后 UI 正确显示段落分段，单词点击跳转正常
+- 71/71 测试通过
+
+**剩余问题：**
+- 推理速度慢：whisper 4-8× 实时（CPU），3s 音频需 11.7s 推理
+- samples_dropped：音频缓冲区下溢
+- 客户端改动尚未部署上线
 
 ## Misc
 

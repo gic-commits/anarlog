@@ -14,6 +14,7 @@ fn fw(text: &str, start: i64, end: i64, ch: i32) -> FinalizedWord {
         channel: ch,
         state: WordState::Final,
         speaker_index: None,
+        provider_segment_index: None,
     }
 }
 
@@ -26,6 +27,7 @@ fn fw_si(text: &str, start: i64, end: i64, ch: i32, si: i32) -> FinalizedWord {
         channel: ch,
         state: WordState::Final,
         speaker_index: Some(si),
+        provider_segment_index: None,
     }
 }
 

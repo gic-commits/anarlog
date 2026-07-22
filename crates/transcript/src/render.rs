@@ -15,6 +15,8 @@ pub struct RenderTranscriptWordInput {
     pub channel: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker_index: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_segment_index: Option<i32>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -156,6 +158,7 @@ fn offset_transcript_data(
             channel: w.channel,
             state: WordState::Final,
             speaker_index: w.speaker_index,
+            provider_segment_index: w.provider_segment_index,
         })
         .collect();
 
@@ -251,6 +254,7 @@ mod tests {
             end_ms,
             channel,
             speaker_index: None,
+            provider_segment_index: None,
         }
     }
 
@@ -269,6 +273,7 @@ mod tests {
             end_ms,
             channel,
             speaker_index: Some(speaker_index),
+            provider_segment_index: None,
         }
     }
 

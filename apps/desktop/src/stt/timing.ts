@@ -1,6 +1,7 @@
 export type TranscriptTimingSource =
   | "provider_word"
   | "provider_segment_interpolated"
+  | "synthetic_segment_interpolated"
   | "synthetic_text";
 
 export type TranscriptWordMetadata = Record<string, unknown>;
@@ -50,6 +51,7 @@ export function getValidTimingSource(
 ): TranscriptTimingSource | undefined {
   return source === "provider_word" ||
     source === "provider_segment_interpolated" ||
+    source === "synthetic_segment_interpolated" ||
     source === "synthetic_text"
     ? source
     : undefined;

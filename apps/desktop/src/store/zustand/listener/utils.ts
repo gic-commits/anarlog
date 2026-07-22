@@ -50,6 +50,7 @@ export function transformWordEntries(
   channel: number,
   options: {
     timingSource?: TranscriptTimingSource;
+    segmentIndices?: (number | null | undefined)[];
   } = {},
 ): [WordLike[], RuntimeSpeakerHint[]] {
   const words: WordLike[] = [];
@@ -64,16 +65,21 @@ export function transformWordEntries(
   for (let i = 0; i < entries.length; i++) {
     const word = entries[i];
     const text = textsWithSpacing[i];
+    const metadata = createTranscriptTimingMetadata(
+      options.timingSource ?? "provider_word",
+      word.metadata,
+    );
+    const segIdx = options.segmentIndices?.[i];
+    if (segIdx != null) {
+      metadata.provider_segment_index = segIdx;
+    }
 
     words.push({
       text,
       start_ms: Math.round(word.start * 1000),
       end_ms: Math.round(word.end * 1000),
       channel: typeof word.channel === "number" ? word.channel : channel,
-      metadata: createTranscriptTimingMetadata(
-        options.timingSource ?? "provider_word",
-        word.metadata,
-      ),
+      metadata,
     });
 
     if (typeof word.speaker === "number") {

@@ -74,6 +74,8 @@ pub struct CreateCustomTranscriptionOptions {
     pub model: String,
     pub common: CommonTranscriptionOptions,
     pub language: Option<String>,
+    pub response_format: Option<WhisperResponseFormat>,
+    pub timestamp_granularities: Vec<TimestampGranularity>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -119,6 +121,8 @@ impl CreateTranscriptionOptions {
                 model: name,
                 common: CommonTranscriptionOptions::default(),
                 language: None,
+                response_format: use_response_format.then_some(WhisperResponseFormat::VerboseJson),
+                timestamp_granularities: Vec::new(),
             }),
         }
     }
@@ -252,6 +256,20 @@ impl CreateTranscriptionOptions {
                     fields.push(MultipartTextField {
                         name: "language",
                         value: language.clone(),
+                    });
+                }
+
+                if let Some(response_format) = options.response_format {
+                    fields.push(MultipartTextField {
+                        name: "response_format",
+                        value: AudioResponseFormat::from(response_format).to_string(),
+                    });
+                }
+
+                for granularity in &options.timestamp_granularities {
+                    fields.push(MultipartTextField {
+                        name: "timestamp_granularities[]",
+                        value: granularity.to_string(),
                     });
                 }
             }

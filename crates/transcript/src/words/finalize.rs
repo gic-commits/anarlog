@@ -23,6 +23,7 @@ pub(crate) fn finalize_words(words: Vec<RawWord>, state: WordState) -> Vec<Final
             channel: word.channel,
             state,
             speaker_index: word.speaker,
+            provider_segment_index: None,
         })
         .collect()
 }
