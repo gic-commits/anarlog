@@ -8,7 +8,7 @@ pub use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Utf8Bytes, protoc
 
 pub use crate::retry::{WebSocketConnectPolicy, WebSocketRetryCallback, WebSocketRetryEvent};
 
-const TRAILING_MESSAGE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+const TRAILING_MESSAGE_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Debug)]
 enum ControlCommand {
@@ -20,6 +20,7 @@ struct OutputDropGuard(Option<tokio::sync::oneshot::Sender<()>>);
 impl Drop for OutputDropGuard {
     fn drop(&mut self) {
         if let Some(cancel_tx) = self.0.take() {
+            tracing::info!("ws_output_drop_guard_fired");
             let _ = cancel_tx.send(());
         }
     }
@@ -101,6 +102,8 @@ impl WebSocketClient {
         ),
         crate::Error,
     > {
+        tracing::info!("ws_client_version=v2_no_trailing_grace");
+
         let keep_alive_config = self.keep_alive.clone();
         let ws_stream = crate::retry::connect_with_retry(
             self.request.clone(),
@@ -117,6 +120,7 @@ impl WebSocketClient {
         let handle = WebSocketHandle { control_tx };
 
         let _send_task = tokio::spawn(async move {
+            #[derive(Debug)]
             enum SendLoopExit {
                 Finalize,
                 InputEnded,
@@ -135,8 +139,6 @@ impl WebSocketClient {
             let mut last_outbound_at = tokio::time::Instant::now();
             let mut audio_closed = false;
             let mut control_closed = false;
-            let mut input_end_deadline: Option<tokio::time::Instant> = None;
-            let mut waited_for_input_end = false;
 
             let exit_reason = loop {
                 if audio_closed && control_closed {
@@ -149,11 +151,6 @@ impl WebSocketClient {
                     } else {
                         pending().boxed()
                     }
-                } else {
-                    pending().boxed()
-                };
-                let mut input_end_fut = if let Some(deadline) = input_end_deadline {
-                    tokio::time::sleep_until(deadline).boxed()
                 } else {
                     pending().boxed()
                 };
@@ -187,13 +184,8 @@ impl WebSocketClient {
                             }
                             None => {
                                 audio_closed = true;
-                                input_end_deadline = Some(tokio::time::Instant::now() + TRAILING_MESSAGE_GRACE);
                             }
                         }
-                    }
-                    _ = input_end_fut.as_mut(), if input_end_deadline.is_some() => {
-                        waited_for_input_end = true;
-                        break SendLoopExit::InputEnded;
                     }
                     command = control_rx.recv(), if !control_closed => {
                         match command {
@@ -214,15 +206,21 @@ impl WebSocketClient {
                 }
             };
 
-            if matches!(exit_reason, SendLoopExit::Finalize)
-                || (matches!(exit_reason, SendLoopExit::InputEnded) && !waited_for_input_end)
-            {
+            tracing::info!(
+                exit_reason = ?exit_reason,
+                audio_closed,
+                control_closed,
+                "ws_send_loop_exit"
+            );
+
+            if matches!(exit_reason, SendLoopExit::Finalize) {
                 tokio::select! {
                     _ = tokio::time::sleep(TRAILING_MESSAGE_GRACE) => {}
                     _ = &mut cancel_rx => {}
                 }
             }
 
+            tracing::info!("ws_sender_close_calling");
             let _ = ws_sender.close().await;
         });
 
@@ -269,6 +267,14 @@ impl WebSocketClient {
                                     }
                                     Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
                                     Message::Close(frame) => {
+                                        let close_code = frame.as_ref().map(|f| u16::from(f.code));
+                                        let close_reason = frame.as_ref().map(|f| f.reason.to_string());
+                                        tracing::info!(
+                                            close_code = ?close_code,
+                                            close_reason = ?close_reason,
+                                            "ws_received_close_frame"
+                                        );
+
                                         if let Ok(error) = error_rx.try_recv() {
                                             yield Err(error);
                                             break;

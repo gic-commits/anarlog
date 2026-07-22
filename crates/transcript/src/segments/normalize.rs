@@ -19,6 +19,7 @@ pub(super) fn normalize_words(
         id: Some(word.id.clone()),
         order: 0,
         speaker_index: word.speaker_index,
+        provider_segment_index: word.provider_segment_index,
     }));
 
     combined.extend(partial_words.iter().map(|word| NormalizedWord {
@@ -30,6 +31,7 @@ pub(super) fn normalize_words(
         id: None,
         order: 0,
         speaker_index: word.speaker_index,
+        provider_segment_index: None,
     }));
 
     combined.sort_by_key(|word| word.start_ms);

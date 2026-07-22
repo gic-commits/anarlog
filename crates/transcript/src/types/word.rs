@@ -41,4 +41,6 @@ pub struct FinalizedWord {
     pub state: WordState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker_index: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_segment_index: Option<i32>,
 }

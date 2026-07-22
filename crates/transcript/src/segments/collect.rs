@@ -16,11 +16,24 @@ pub(super) fn collect_segments(
     for frame in frames {
         let key = determine_key(&frame, &segments, &last_segment_by_channel);
 
-        let should_merge = segments.last().is_some_and(|last| {
-            last.key == key
-                && (frame.word.start_ms - last.words.last().map_or(0, |word| word.word.end_ms))
-                    <= max_gap_ms
+        let segment_boundary = segments.last().is_some_and(|last| {
+            let last_seg_idx = last
+                .words
+                .last()
+                .and_then(|w| w.word.provider_segment_index);
+            let this_seg_idx = frame.word.provider_segment_index;
+            this_seg_idx.is_some() && last_seg_idx.is_some() && this_seg_idx != last_seg_idx
         });
+
+        let should_merge = if segment_boundary {
+            false
+        } else {
+            segments.last().is_some_and(|last| {
+                last.key == key
+                    && (frame.word.start_ms - last.words.last().map_or(0, |word| word.word.end_ms))
+                        <= max_gap_ms
+            })
+        };
 
         if should_merge {
             segments.last_mut().unwrap().words.push(frame);
@@ -47,7 +60,27 @@ pub(super) fn propagate_identity(segments: &mut Vec<ProtoSegment>, speaker_state
         assign_complete_channel_human_id(&mut segments[read_index], speaker_state);
 
         let should_merge = last_kept_key.as_ref().is_some_and(|last_key| {
-            *last_key == segments[read_index].key && segments[read_index].key.has_speaker_identity()
+            if *last_key != segments[read_index].key
+                || !segments[read_index].key.has_speaker_identity()
+            {
+                return false;
+            }
+
+            if let Some(kept_idx) = last_kept_idx {
+                let kept_end = segments[kept_idx]
+                    .words
+                    .last()
+                    .and_then(|w| w.word.provider_segment_index);
+                let read_start = segments[read_index]
+                    .words
+                    .first()
+                    .and_then(|w| w.word.provider_segment_index);
+                if kept_end.is_some() && read_start.is_some() && kept_end != read_start {
+                    return false;
+                }
+            }
+
+            true
         });
 
         if should_merge {

@@ -201,6 +201,9 @@ function buildRenderTranscriptRequest(
 
       wordIndexById.set(word.id, words.length);
       const metadata = normalizeWordMetadata(word.metadata);
+      const provider_segment_index = typeof metadata?.provider_segment_index === "number"
+        ? metadata.provider_segment_index
+        : undefined;
       const renderWord: RenderTranscriptInput["words"][number] & {
         metadata?: TranscriptWordMetadata;
       } = {
@@ -210,6 +213,7 @@ function buildRenderTranscriptRequest(
         end_ms: word.end_ms,
         channel: typeof word.channel === "number" ? word.channel : 0,
         speaker_index: null,
+        ...(provider_segment_index !== undefined ? { provider_segment_index } : {}),
         ...(metadata ? { metadata } : {}),
       };
       words.push(renderWord);

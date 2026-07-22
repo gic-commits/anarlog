@@ -304,6 +304,23 @@ describe("useStartListening", () => {
       await result.current();
     });
 
+    const handlePersist = startMock.mock.calls[0]?.[1]?.handlePersist;
+    act(() => {
+      handlePersist?.({
+        new_words: [
+          {
+            id: "live-word",
+            text: "hello",
+            start_ms: 0,
+            end_ms: 200,
+            channel: 0,
+          },
+        ],
+        replaced_ids: [],
+        partials: [],
+      });
+    });
+
     const onStopped = startMock.mock.calls[0]?.[1]?.onStopped;
 
     await act(async () => {

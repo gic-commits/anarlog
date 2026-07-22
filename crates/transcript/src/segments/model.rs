@@ -12,6 +12,7 @@ pub(super) struct NormalizedWord {
     pub(super) id: Option<String>,
     pub(super) order: usize,
     pub(super) speaker_index: Option<i32>,
+    pub(super) provider_segment_index: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default)]

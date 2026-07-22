@@ -168,8 +168,28 @@ fn build_transcription_options(
         }
     }
 
+    if let CreateTranscriptionOptions::Custom(options) = &mut options {
+        if options.response_format.is_some() {
+            options
+                .timestamp_granularities
+                .push(TimestampGranularity::Word);
+            options
+                .timestamp_granularities
+                .push(TimestampGranularity::Segment);
+        }
+    }
+
     if let Some(lang) = params.languages.first() {
         options.push_language(lang.iso639().code().to_string());
+    }
+
+    if !params.keywords.is_empty() {
+        let prompt = params.keywords.join(" ");
+        match &mut options {
+            CreateTranscriptionOptions::Whisper(opts) => opts.prompt = Some(prompt),
+            CreateTranscriptionOptions::Gpt(opts) => opts.prompt = Some(prompt),
+            _ => {}
+        }
     }
 
     options
@@ -357,39 +377,128 @@ fn convert_response(response: CreateTranscriptionResponse) -> BatchResponse {
             convert_text_response(response.text.trim().to_string(), response.usage)
         }
         CreateTranscriptionResponse::Verbose(response) => {
-            let words = response
-                .words
+            let segments: Vec<serde_json::Value> = response
+                .segments
                 .iter()
-                .map(|w| {
-                    let normalized = strip_punctuation(&w.word);
-                    Word {
-                        word: if normalized.is_empty() {
-                            w.word.clone()
-                        } else {
-                            normalized
-                        },
-                        start: w.start,
-                        end: w.end,
-                        confidence: 1.0,
-                        channel: 0,
-                        speaker: None,
-                        punctuated_word: Some(w.word.clone()),
-                    }
+                .map(|s| {
+                    serde_json::json!({
+                        "start": s.start,
+                        "end": s.end,
+                        "text": s.text,
+                    })
                 })
                 .collect();
 
-            build_batch_response(
-                response.text.trim().to_string(),
-                words,
-                serde_json::json!({
-                    "language": response.language,
-                    "duration": response.duration,
-                    "timing_source": "provider_word",
-                }),
-            )
+            let (words, segment_indices) = if !response.words.is_empty() {
+                let provider_words: Vec<Word> = response
+                    .words
+                    .iter()
+                    .map(|w| {
+                        let normalized = strip_punctuation(&w.word);
+                        Word {
+                            word: if normalized.is_empty() {
+                                w.word.clone()
+                            } else {
+                                normalized
+                            },
+                            start: w.start,
+                            end: w.end,
+                            confidence: 1.0,
+                            channel: 0,
+                            speaker: None,
+                            punctuated_word: Some(w.word.clone()),
+                        }
+                    })
+                    .collect();
+                let segment_indices: Vec<Option<usize>> = if segments.is_empty() {
+                    vec![None; provider_words.len()]
+                } else {
+                    provider_words
+                        .iter()
+                        .map(|w| {
+                            let idx = segments
+                                .iter()
+                                .position(|s| {
+                                    let s = s.as_object().expect("segment is object");
+                                    let seg_start = s["start"].as_f64().unwrap_or(0.0);
+                                    let seg_end = s["end"].as_f64().unwrap_or(f64::MAX);
+                                    w.start >= seg_start && w.start < seg_end
+                                });
+                            idx
+                        })
+                        .collect()
+                };
+                (provider_words, segment_indices)
+            } else {
+                let mut segment_indices: Vec<Option<usize>> = Vec::new();
+                let words: Vec<Word> = response
+                    .segments
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(seg_idx, segment)| {
+                        let tokens: Vec<&str> = segment.text.split_whitespace().collect();
+                        if tokens.is_empty() {
+                            return vec![];
+                        }
+                        let seg_duration = (segment.end - segment.start).max(0.001);
+                        let word_duration = seg_duration / tokens.len() as f64;
+                        tokens
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, token)| {
+                                let start = segment.start + word_duration * i as f64;
+                                let end = segment.start + word_duration * (i + 1) as f64;
+                                let normalized = strip_punctuation(token);
+                                segment_indices.push(Some(seg_idx));
+                                Word {
+                                    word: if normalized.is_empty() {
+                                        token.to_string()
+                                    } else {
+                                        normalized
+                                    },
+                                    start,
+                                    end,
+                                    confidence: 1.0,
+                                    channel: 0,
+                                    speaker: None,
+                                    punctuated_word: Some(token.to_string()),
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                (words, segment_indices)
+            };
+
+            let mut metadata = serde_json::json!({
+                "language": response.language,
+                "duration": response.duration,
+                "timing_source": if response.words.is_empty() {
+                    "synthetic_segment_interpolated"
+                } else {
+                    "provider_word"
+                },
+            });
+            if !segments.is_empty() {
+                metadata["segments"] = serde_json::json!(segments);
+            }
+            if segment_indices.iter().any(|i| i.is_some()) {
+                metadata["segment_indices"] = serde_json::json!(segment_indices);
+            }
+
+            build_batch_response(response.text.trim().to_string(), words, metadata)
         }
         CreateTranscriptionResponse::Diarized(response) => {
             let (words, speaker_labels) = convert_diarized_words(&response);
+            let mut segment_indices: Vec<Option<usize>> = Vec::new();
+            for (seg_idx, segment) in response.segments.iter().enumerate() {
+                let tokens: Vec<&str> = segment.text.split_whitespace().collect();
+                if tokens.is_empty() {
+                    continue;
+                }
+                segment_indices.extend(std::iter::repeat(Some(seg_idx)).take(tokens.len()));
+            }
+
             let speaker_segments = response
                 .segments
                 .iter()
@@ -405,15 +514,20 @@ fn convert_response(response: CreateTranscriptionResponse) -> BatchResponse {
                 })
                 .collect::<Vec<_>>();
 
+            let mut metadata = serde_json::json!({
+                "duration": response.duration,
+                "speaker_labels": speaker_labels,
+                "speaker_segments": speaker_segments,
+                "timing_source": "provider_segment_interpolated",
+            });
+            if segment_indices.len() == words.len() {
+                metadata["segment_indices"] = serde_json::json!(segment_indices);
+            }
+
             build_batch_response(
                 response.text.trim().to_string(),
                 words,
-                serde_json::json!({
-                    "duration": response.duration,
-                    "speaker_labels": speaker_labels,
-                    "speaker_segments": speaker_segments,
-                    "timing_source": "provider_segment_interpolated",
-                }),
+                metadata,
             )
         }
     }
