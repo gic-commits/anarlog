@@ -98,7 +98,7 @@ Speaches 确认支持的能力：Realtime API (WebSocket)、SSE streaming transc
 
 ### 路线图
 
-Phase 1 — 实时转录通路打通（当前）
+Phase 1 — 实时转录通路打通（已结案 ✅）
   [x] Provider/model 配置 UI + 动态模型列表
   [x] 自定义模型名透传 (AudioModel::Custom)
   [x] provider_hint 贯通使 AdapterKind 正确识别
@@ -116,20 +116,28 @@ Phase 1 — 实时转录通路打通（当前）
   [x] 实时转录中断后自动重连
   [x] Batch fallback `logprobs: null` 反序列化修复（`batch/response.rs` `deserialize_vec_or_null`）
   [x] 纯 URL 参数连接验证成功（`initial_message: None`）：WebSocket ✅ VAD ✅ 转写 ✅
-  [x] Batch API 验证成功：curl 直接调返回正确中文
   [x] `initial_message` 握手（`session.update` 通过 WS 发送）
   [x] `prefix_padding_ms` 降级为 non-fatal warning
   [x] `hadLiveWords` batch fallback 参数
 
-Phase 2 — 功能完善（当前）
-  [ ] 推理速度优化 — server 端 whisper 4-8× 实时，需优化 CPU 线程或换 GPU
-  [ ] 多语言实时转录支持
+Phase 2 — 功能完善（已收敛 ⏸️）
+  [-] 推理速度优化 — 由 Phase 4 Progressive Batch 方案解决（batch 分段并行抵消推理延迟）
+  [-] 多语言实时转录支持 — batch 模式天然支持，不阻塞
   [ ] Speaker diarization（说话人分离）
   [ ] 自定义 prompt/关键词实时生效
 
-Phase 3 — UI 增强（按需）
+Phase 3 — UI 增强（待定）
   [ ] 如果 OpenAI provider + 自建服务器与原生 OpenAI 行为差异过大，加 toggle 开关
   [ ] 实时转录延迟/状态指示器
+
+Phase 4 — Progressive Batch 混合模式（下一阶段目标 🎯）
+  [ ] 设计文档定稿（见 `docs/progressive-batch-hybrid-design.md`）
+  [ ] 固定时长分段（30s + 1s overlap，支持 60s）
+  [ ] PCM raw → WAV header 转换
+  [ ] 提交队列（N=2 并发硬上限）
+  [ ] 客户端结果拼接与时间轴去重对齐
+  [ ] Provider 选项：Live / Batch / Progressive Batch 三种模式可选
+  [ ] 服务端改动：无（batch 端点无信号量限制）
 
 ### Jul 22 — 状态总结
 
@@ -165,6 +173,31 @@ Phase 3 — UI 增强（按需）
 - 修复后 UI 正确显示段落分段，单词点击跳转正常
 - 71/71 测试通过
 
+### Jul 23 — 本地 ggml 兜底 + Speaches 远端模型对比结案 + Progressive Batch 设计评审
+
+**服务端评审结论：** 设计方案可行，服务端不需要改任何东西。
+- batch 端点不受信号量限制，N=2 并发直接用
+- N100 仅 4 核，建议 `max_concurrency` 默认 2、硬上限 2
+- 服务端 batch 端点额外有一层 VAD，会在客户端分段之上再裁剪静音
+- 1s overlap + stitcher 时间戳去重即可，无服务端配合需求
+- 分段越大效率越高，允许用户配置 30s / 60s
+
+**已完成：**
+- 本地 Whisper ggml（Tiny 42MB / Small 252MB）可作为无网络兜底方案，基础链路跑通
+- 模型显示名修复：`shared.tsx` 中 `displayModelLabel` 改为优先用 `displayName`
+- `prefix_padding_ms` 降级修复（`live.rs` 检查 `"not supported"`），服务端反馈不再复现
+- Speaches 远端模型横向对比（同一段 264.8s 中文音频）：
+
+  | 模型 | RTF | 备注 |
+  |------|-----|------|
+  | ggml-tiny-q8_0 (本地) | 0.69× | 质量差，仅保底 |
+  | ggml-small-q8_0 (本地) | 3.85× | 慢且质量不如远端 |
+  | faster-whisper-small (远端) | **0.54×** | ⭐ 最优解 |
+  | faster-whisper-medium (远端) | 1.7× | 质量提升不明显 |
+  | Systran/faster-distil-whisper-large-v3 (远端) | 极慢 | 不支持中文，不可用 |
+
+**结论：** Speaches faster-whisper-small 是当前中文 STT 最优解。
+
 ### Jul 22 PM — ⭐ 关键里程碑
 
 Batch 模式下，Speaches 首次实现 **处理时间 < 音频时间**（4m24s 音频 → 124s 推理，约 2.1× 实时）。消费速度首次超过生产速度，为后续优化提供了最基本的数学和逻辑条件。
@@ -180,5 +213,7 @@ Batch 模式下，Speaches 首次实现 **处理时间 < 音频时间**（4m24s 
 - 客户端改动尚未部署上线
 
 ## Misc
+
+- Do not create summary docs or example code files unless requested.
 
 - Do not create summary docs or example code files unless requested.

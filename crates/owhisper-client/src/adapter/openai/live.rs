@@ -324,7 +324,7 @@ impl RealtimeSttAdapter for OpenAIAdapter {
             }
             ServerEvent::Error { error, .. } => {
                 let msg = error.message.as_deref().unwrap_or_default();
-                if msg.contains("prefix_padding_ms") {
+                if msg.contains("not supported") {
                     tracing::warn!(
                         error.type = ?error.error_type,
                         error = ?msg,

@@ -3,6 +3,13 @@ pub use hypr_local_model::{AmModel, LocalModel, SoniqoModel, WhisperModel};
 pub static SUPPORTED_MODELS: &[LocalModel] = &[
     LocalModel::Soniqo(SoniqoModel::ParakeetStreaming),
     LocalModel::Soniqo(SoniqoModel::ParakeetBatch),
+    LocalModel::Whisper(WhisperModel::QuantizedTiny),
+    LocalModel::Whisper(WhisperModel::QuantizedTinyEn),
+    LocalModel::Whisper(WhisperModel::QuantizedBase),
+    LocalModel::Whisper(WhisperModel::QuantizedBaseEn),
+    LocalModel::Whisper(WhisperModel::QuantizedSmall),
+    LocalModel::Whisper(WhisperModel::QuantizedSmallEn),
+    LocalModel::Whisper(WhisperModel::QuantizedLargeTurbo),
     LocalModel::Am(AmModel::ParakeetV2),
     LocalModel::Am(AmModel::ParakeetV3),
     LocalModel::Am(AmModel::WhisperLargeV3),

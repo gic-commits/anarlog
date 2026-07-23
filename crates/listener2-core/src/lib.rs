@@ -66,6 +66,10 @@ pub fn is_supported_languages_batch(
         return Ok(true);
     }
 
+    if provider == "whispercpp" {
+        return Ok(true);
+    }
+
     if provider == "soniqo" {
         let model = model
             .ok_or_else(|| "missing_model: soniqo".to_string())?

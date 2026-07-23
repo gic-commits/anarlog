@@ -630,9 +630,14 @@ function useConfiguredMapping(): {
 
   const localModels = supportedModels.data ?? [];
   const soniqoModels = localModels.filter((m) => m.model_type === "soniqo");
+  const whisperModels = localModels.filter((m) => m.model_type === "whispercpp");
 
   const soniqoDownloaded = useQueries({
     queries: [...soniqoModels.map((m) => sttModelQueries.isDownloaded(m.key))],
+  });
+
+  const whisperDownloaded = useQueries({
+    queries: [...whisperModels.map((m) => sttModelQueries.isDownloaded(m.key))],
   });
 
   const openaiConfig = configuredProviders[providerRowId("stt", "openai")] as
@@ -688,6 +693,17 @@ function useConfiguredMapping(): {
             });
           });
         }
+
+        whisperModels.forEach((model, i) => {
+          models.push({
+            id: model.key,
+            isDownloaded: whisperDownloaded[i]?.data ?? false,
+            displayName: model.display_name,
+            sizeBytes: model.size_bytes,
+            mode: "batch",
+            category: "latest",
+          });
+        });
 
         return [provider.id, { configured: true, models }];
       }

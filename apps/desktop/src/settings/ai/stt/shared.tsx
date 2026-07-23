@@ -139,11 +139,15 @@ function isOnDeviceModelId(model: string) {
 }
 
 export function displayModelLabel(model: string, displayName?: string) {
+  if (displayName) {
+    return displayName;
+  }
+
   if (isOnDeviceModelId(model)) {
     return "On device";
   }
 
-  return displayName ?? displayModelId(model);
+  return displayModelId(model);
 }
 
 export function displayModelTitle(model: string, displayName?: string) {
