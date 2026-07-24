@@ -49,6 +49,10 @@ impl SessionParams {
             return TranscriptionMode::Batch;
         }
 
+        if self.transcription_mode == TranscriptionMode::ProgressiveBatch {
+            return TranscriptionMode::ProgressiveBatch;
+        }
+
         if let Some(model) =
             hypr_transcribe_soniqo::local_model_from_request(&self.base_url, &self.model)
         {

@@ -10654,6 +10654,7 @@ dependencies = [
  "owhisper-client",
  "owhisper-interface",
  "ractor",
+ "reqwest 0.13.2",
  "serde",
  "serde_json",
  "specta",
@@ -10666,6 +10667,8 @@ dependencies = [
  "tracing",
  "transcribe-core",
  "transcribe-soniqo",
+ "url",
+ "uuid",
 ]
 
 [[package]]

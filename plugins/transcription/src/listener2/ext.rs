@@ -42,6 +42,7 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Listener2<'a, R, M> {
                 let state = match lock_terminal_state(&control) {
                     Ok(state) => *state,
                     Err(error) => {
+                        tracing::warn!("[DEBUG] lock_terminal_state failed, removing entry: {}", error);
                         let entry = sessions.remove(&session_id);
                         drop(sessions);
 
@@ -52,7 +53,14 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Listener2<'a, R, M> {
                     }
                 };
 
+                tracing::info!(
+                    "[DEBUG] existing session {} found with state {:?}",
+                    session_id,
+                    state,
+                );
+
                 if state == BatchTerminalState::Running {
+                    tracing::error!("[DEBUG] session already running: {}", session_id);
                     return Err(core::Error::BatchError(
                         "session already running".to_string(),
                     ));
@@ -91,7 +99,9 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Listener2<'a, R, M> {
             let control = control.clone();
             let session_id = session_id.clone();
             async move {
-                let _ = core::run_batch(runtime, params.into()).await;
+                tracing::info!("[DEBUG] core::run_batch starting for session {}", session_id);
+                let result = core::run_batch(runtime, params.into()).await;
+                tracing::info!("[DEBUG] core::run_batch finished for session {}: {:?}", session_id, result.as_ref().err());
                 finish_batch_session(&registry, &session_id, &control);
             }
         });
@@ -225,8 +235,11 @@ struct TauriBatchRuntime {
 impl core::BatchRuntime for TauriBatchRuntime {
     fn emit(&self, event: core::BatchEvent) {
         if !should_emit_event(&self.control, &event) {
+            tracing::info!("[DEBUG] TauriBatchRuntime emit: skipped (terminal state)");
             return;
         }
+
+        tracing::info!("[DEBUG] TauriBatchRuntime emit: event={:?}", event);
 
         if matches!(
             event,
@@ -487,6 +500,8 @@ mod tests {
             num_speakers: None,
             min_speakers: None,
             max_speakers: None,
+            progressive_batch: false,
+            segment_duration_ms: None,
         }
     }
 

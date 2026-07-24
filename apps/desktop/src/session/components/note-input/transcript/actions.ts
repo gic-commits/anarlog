@@ -12,6 +12,8 @@ export function useRegenerateTranscript(sessionId: string) {
   const handleBatchFailed = useListener((state) => state.handleBatchFailed);
 
   return useCallback(async () => {
+    console.log("[DEBUG] regenerateTranscript: sessionId=%s", sessionId);
+
     const result = await fsSyncCommands.audioPath(sessionId);
     if (result.status === "error") {
       sonnerToast.error("Recording not found. It may have been deleted.", {

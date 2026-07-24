@@ -1,5 +1,6 @@
 mod accumulator;
 mod progressive;
+mod progressive_batch;
 mod simple;
 
 use std::sync::Arc;
@@ -9,9 +10,10 @@ use owhisper_client::{AdapterKind, OpenAIAdapter};
 use crate::{BatchEvent, BatchRuntime};
 
 use progressive::run_progressive_batch_session;
+use progressive_batch::run_progressive_batch_from_file;
 use simple::{run_direct_batch_for_adapter_kind, run_soniqo_batch};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumString)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
@@ -78,6 +80,10 @@ pub struct BatchParams {
     pub min_speakers: Option<u32>,
     #[serde(default)]
     pub max_speakers: Option<u32>,
+    #[serde(default)]
+    pub progressive_batch: bool,
+    #[serde(default)]
+    pub segment_duration_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -100,6 +106,14 @@ pub async fn run_batch(
     runtime: Arc<dyn BatchRuntime>,
     params: BatchParams,
 ) -> crate::Result<BatchRunOutput> {
+    tracing::info!(
+        "[DEBUG] core::run_batch: session_id={} provider={:?} model={:?} progressive_batch={}",
+        params.session_id,
+        params.provider,
+        params.model,
+        params.progressive_batch,
+    );
+
     runtime.emit(BatchEvent::BatchStarted {
         session_id: params.session_id.clone(),
     });
@@ -190,6 +204,15 @@ async fn run_batch_inner(
     };
 
     let listen_params = build_listen_params(&params, metadata.channels, metadata.sample_rate);
+
+    if params.progressive_batch {
+        return run_progressive_batch_from_file(
+            params,
+            metadata.sample_rate,
+            metadata.channels,
+        )
+        .await;
+    }
 
     match params.provider {
         BatchProvider::Am => {
@@ -331,6 +354,8 @@ mod tests {
             num_speakers: None,
             min_speakers: None,
             max_speakers: None,
+            progressive_batch: false,
+            segment_duration_ms: None,
         }
     }
 

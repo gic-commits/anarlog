@@ -62,6 +62,7 @@ export function useStartListening(sessionId: string) {
   const aiLanguage = useConfigValue("ai_language");
   const spokenLanguages = useConfigValue("spoken_languages");
   const dictionaryTerms = useConfigValue("personalization_dictionary_terms");
+  const sttMode = useConfigValue("stt_mode");
   const audioRetention = normalizeAudioRetention(
     useConfigValue("audio_retention"),
   );
@@ -173,7 +174,14 @@ export function useStartListening(sessionId: string) {
       provider: conn?.provider,
       model: conn?.model,
       languages,
+      sttMode,
     });
+
+    console.log(
+      "[DEBUG] useStartListening transcriptionConfig: sttMode=%s transcriptionMode=%s",
+      sttMode,
+      liveTranscriptionConfig.transcriptionMode,
+    );
 
     const startParams = {
       session_id: sessionId,
@@ -234,6 +242,7 @@ export function useStartListening(sessionId: string) {
     sessionId,
     start,
     spokenLanguages,
+    sttMode,
     setLeftSidebarExpanded,
   ]);
 

@@ -23,6 +23,7 @@ hound = { workspace = true }
 owhisper-client = { workspace = true, features = ["local"] }
 owhisper-interface = { workspace = true }
 
+reqwest = { workspace = true, features = ["json", "multipart"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 specta = { workspace = true, optional = true }
@@ -30,11 +31,13 @@ strum = { workspace = true, features = ["derive"] }
 tauri-specta = { workspace = true, optional = true, features = ["derive"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
 
 ractor = { workspace = true, features = ["async-trait"] }
 
 futures-util = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 tokio-stream = { workspace = true }
 tracing = { workspace = true }
 

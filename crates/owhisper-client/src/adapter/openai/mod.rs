@@ -1,7 +1,7 @@
 mod batch;
 mod live;
 
-use openai_transcription::batch::AudioModel;
+use openai_transcription::batch::{AudioModel, CreateTranscriptionResponse};
 
 use crate::providers::Provider;
 
@@ -42,6 +42,12 @@ impl OpenAIAdapter {
                 | AudioModel::Gpt4oMiniTranscribe
                 | AudioModel::Gpt4oMiniTranscribe20251215
         )
+    }
+
+    pub fn parse_batch_response(body: &str) -> Result<owhisper_interface::batch::Response, String> {
+        let openai_response: CreateTranscriptionResponse =
+            serde_json::from_str(body).map_err(|e| format!("failed to parse OpenAI response: {e}"))?;
+        Ok(self::batch::convert_response(openai_response))
     }
 }
 

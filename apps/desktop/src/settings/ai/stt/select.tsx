@@ -360,6 +360,13 @@ export function SelectProviderAndModel() {
           </div>
         )}
       </div>
+
+      {visibleProvider === "openai" && isConfigured && (
+        <SttModeSection
+          providerId={visibleProvider}
+          model={effectiveSelection.model}
+        />
+      )}
     </div>
   );
 }
@@ -883,6 +890,84 @@ function ModelSelectedValue({ model }: { model: ModelEntry }) {
         labelClassName={cn([isDeprecated && "text-muted-foreground"])}
       />
       <ModelModeBadge mode={model.mode} />
+    </div>
+  );
+}
+
+function SttModeSection({
+  providerId,
+  model,
+}: {
+  providerId: string;
+  model: string;
+}) {
+  const { stt_mode, stt_segment_duration } = useConfigValues([
+    "stt_mode",
+    "stt_segment_duration",
+  ] as const) as {
+    stt_mode: string | undefined;
+    stt_segment_duration: number | undefined;
+  };
+  const setSettings = useSetSettingValues();
+
+  const modeActions = {
+    setMode: (mode: string) => setSettings({ stt_mode: mode }),
+    setSegmentDuration: (ms: number) =>
+      setSettings({ stt_segment_duration: ms }),
+  };
+
+  const mode = stt_mode ?? "batch";
+  const segmentDuration = stt_segment_duration ?? 30000;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <h4 className="text-sm font-medium">
+        <Trans>Transcription mode</Trans>
+      </h4>
+      <div className="flex items-center gap-2">
+        <Select
+          value={mode}
+          onValueChange={modeActions.setMode}
+        >
+          <SelectTrigger className="bg-card h-8 text-xs shadow-none">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="live">
+              <Trans>Live</Trans>
+            </SelectItem>
+            <SelectItem value="batch">
+              <Trans>Batch</Trans>
+            </SelectItem>
+            <SelectItem value="progressive">
+              <Trans>Progressive Batch</Trans>
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {mode === "progressive" && (
+        <div className="mt-1 flex items-center gap-2">
+          <span className="text-muted-foreground text-xs">
+            <Trans>Segment duration</Trans>
+          </span>
+          <Select
+            value={String(segmentDuration)}
+            onValueChange={(v) => modeActions.setSegmentDuration(Number(v))}
+          >
+            <SelectTrigger className="bg-card h-7 text-xs shadow-none">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="30000">30s</SelectItem>
+              <SelectItem value="60000">60s</SelectItem>
+              <SelectItem value="180000">3m</SelectItem>
+              <SelectItem value="300000">5m</SelectItem>
+              <SelectItem value="600000">10m</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      )}
     </div>
   );
 }

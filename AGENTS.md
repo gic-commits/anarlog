@@ -212,6 +212,46 @@ Batch 模式下，Speaches 首次实现 **处理时间 < 音频时间**（4m24s 
 - samples_dropped：音频缓冲区下溢
 - 客户端改动尚未部署上线
 
+## Known Bugs (Jul 24)
+
+### Bug Tracking
+
+| # | 模块 | Bug | 复现 | 状态 |
+|---|------|-----|------|------|
+| 1 | `capabilities.ts:185-227` | `getLiveTranscriptionConfig` 忽略 `stt_mode`，新录音永远走 Live | ✅ 6/6 tests | 🔧 修复中 |
+| 2 | `useRunBatch.ts:212-229` | Re-transcription batch target 可能回退到本地 whispercpp | ❓ 未验证（因 Bug 3 block） | 📝 待验证 |
+| 3 | `commands.rs / general-batch.ts` | Re-transcription (`startTranscription`) 调用后转圈闪一下即消失，无日志无结果 | ✅ 4/4 re-transcript tests | 📝 待修复 |
+
+### Bug 1: `getLiveTranscriptionConfig` ignores `stt_mode` (fresh recording flow)
+
+`apps/desktop/src/stt/capabilities.ts:185-227` — `getLiveTranscriptionConfig` 不读取 `stt_mode` 配置。对于远程 provider（如 Speaches OpenAI），始终返回 `transcriptionMode: undefined`。Rust 端 `default_transcription_mode` 自动检测后走 `Live` 模式，用户选的 Stream/Batch/ProgressiveBatch 全部被忽略。
+
+**复现率**：100%（所有新录音测试均复现）
+**影响**：用户设了任何模式（Batch/Progressive Batch），新录音仍走 Live Realtime 模式
+**修复方向**：`getLiveTranscriptionConfig` 读取 `stt_mode`，映射为 `TranscriptionMode`（`"live"` → `"live"`，`"batch"` → `"batch"`，`"progressive"` → `"progressiveBatch"`）
+
+### Bug 2: Re-transcription 可能走错 batch target
+
+`apps/desktop/src/stt/useRunBatch.ts:212-229` — 代码已正确读取 `stt_mode` 并设 `progressive_batch`，但 `canUseBatchTarget` 对 Speaches OpenAI 可能返回 false，导致 fallback 到本地 whispercpp。
+
+**影响**：Re-transcribe 已有音频时，可能用本地模型而不是 Speaches
+**状态**：因 Bug 3 阻塞，无法验证
+
+### Bug 3: Re-transcription (startTranscription) 调用后无响应
+
+**现象**：
+- 点击 Re-transcribe → 转圈显示一瞬间 → 消失
+- 转录结果不变
+- WebView Console 无 `[runBatch]`/`startTranscription` 相关日志
+- Rust 侧无 `listener2_core::batch::*` 日志
+- 无错误提示
+
+**复现率**：100%（4次 retranscript 均复现，与选择的模式无关）
+**可能原因**：
+1. `startTranscription` Tauri command 在 Rust 侧立即返回错误但 JS 端静默处理
+2. Event listener 设置时序问题（先 listen 再 invoke，但事件可能丢失）
+3. Session 已有状态（如 `running_batch`）导致立即拒绝
+
 ## Misc
 
 - Do not create summary docs or example code files unless requested.

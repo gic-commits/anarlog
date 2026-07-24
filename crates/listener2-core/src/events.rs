@@ -22,9 +22,10 @@ pub enum BatchErrorCode {
     ProgressiveStartFailed,
     ProgressiveStreamError,
     ProgressiveStreamTimeout,
+    ProgressiveBatchFailed,
 }
 
-#[derive(serde::Serialize, Clone)]
+#[derive(Debug, serde::Serialize, Clone)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[cfg_attr(feature = "tauri-event", derive(tauri_specta::Event))]
 #[serde(tag = "type")]

@@ -11,10 +11,27 @@ pub async fn start_transcription<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     params: TranscriptionParams,
 ) -> Result<(), String> {
-    app.listener2()
+    tracing::info!(
+        "[DEBUG] start_transcription command: session_id={} provider={:?} model={:?} progressive_batch={} file_path={} base_url={}",
+        params.session_id,
+        params.provider,
+        params.model,
+        params.progressive_batch,
+        params.file_path,
+        params.base_url,
+    );
+
+    let result = app.listener2()
         .start_transcription(params)
-        .await
-        .map_err(|e| e.to_string())
+        .await;
+
+    if let Err(ref e) = result {
+        tracing::error!("[DEBUG] start_transcription failed: {}", e);
+    } else {
+        tracing::info!("[DEBUG] start_transcription returned Ok");
+    }
+
+    result.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

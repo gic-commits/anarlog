@@ -31,6 +31,7 @@ pub struct Snapshot {
 pub enum TranscriptionMode {
     Live,
     Batch,
+    ProgressiveBatch,
 }
 
 impl Default for TranscriptionMode {

@@ -150,6 +150,14 @@ export const SETTING_DEFINITIONS = {
     type: "string",
     path: ["ai", "current_stt_model"],
   },
+  stt_mode: {
+    type: "string",
+    path: ["ai", "stt_mode"],
+  },
+  stt_segment_duration: {
+    type: "number",
+    path: ["ai", "stt_segment_duration"],
+  },
   timezone: {
     type: "string",
     path: ["general", "timezone"],

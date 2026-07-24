@@ -194,8 +194,20 @@ export const runBatchSession = async <T extends BatchStore>(
   };
 
   await new Promise<void>((resolve, reject) => {
+    console.log(
+      "[DEBUG] runBatchSession setting up event listener for sessionId=%s",
+      sessionId,
+    );
+
     transcriptionEvents.transcriptionEvent
       .listen(({ payload }) => {
+        console.log(
+          "[DEBUG] runBatchSession event: type=%s sessionId=%s settled=%s",
+          payload.type,
+          payload.session_id,
+          settled,
+        );
+
         if (settled || payload.session_id !== sessionId) {
           return;
         }
@@ -227,6 +239,11 @@ export const runBatchSession = async <T extends BatchStore>(
         }
 
         if (payload.type === "failed") {
+          console.error(
+            "[DEBUG] runBatchSession batch failed: error=%s code=%s",
+            payload.error,
+            payload.code,
+          );
           rejectFailure(payload.error, reject, {
             terminalReason:
               payload.code === "timed_out" ? "timed_out" : "failed",
@@ -237,9 +254,19 @@ export const runBatchSession = async <T extends BatchStore>(
       .then((fn) => {
         unlisten = fn;
 
+        console.log(
+          "[DEBUG] runBatchSession calling startTranscription cmd",
+        );
+
         transcriptionCommands
           .startTranscription(params)
           .then((result) => {
+            console.log(
+              "[DEBUG] runBatchSession startTranscription result: status=%s error=%s",
+              result.status,
+              result.status === "error" ? result.error : "null",
+            );
+
             if (settled) {
               return;
             }
@@ -250,12 +277,12 @@ export const runBatchSession = async <T extends BatchStore>(
             }
           })
           .catch((error) => {
-            console.error(error);
+            console.error("[DEBUG] runBatchSession startTranscription exception", error);
             rejectFailure(error, reject);
           });
       })
       .catch((error) => {
-        console.error(error);
+        console.error("[DEBUG] runBatchSession listen setup failed", error);
         rejectFailure(error, reject);
       });
   });
@@ -317,6 +344,18 @@ function isLocalHost(hostname: string) {
   return (
     hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
   );
+}
+
+export function shouldUseProgressiveBatch(params: {
+  provider: string;
+  baseUrl: string;
+  model?: string | null;
+}) {
+  if (params.provider === "openai") {
+    return !isOpenAIUrl(params.baseUrl);
+  }
+
+  return false;
 }
 
 export function syntheticBatchProgress(elapsedMs: number) {

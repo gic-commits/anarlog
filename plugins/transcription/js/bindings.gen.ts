@@ -201,7 +201,7 @@ transcriptionEvent: "plugin:transcription:transcription-event"
 
 export type BatchAlternatives = { transcript: string; confidence: number; words?: BatchWord[] }
 export type BatchChannel = { alternatives: BatchAlternatives[] }
-export type BatchErrorCode = "unknown" | "timed_out" | "audio_metadata_join_failed" | "audio_metadata_read_failed" | "batch_capability_unsupported" | "direct_batch_unsupported" | "progressive_batch_unsupported" | "direct_request_failed" | "progressive_actor_spawn_failed" | "progressive_start_cancelled" | "progressive_stopped_without_completion_signal" | "progressive_finished_without_status" | "progressive_start_failed" | "progressive_stream_error" | "progressive_stream_timeout"
+export type BatchErrorCode = "unknown" | "timed_out" | "audio_metadata_join_failed" | "audio_metadata_read_failed" | "batch_capability_unsupported" | "direct_batch_unsupported" | "progressive_batch_unsupported" | "direct_request_failed" | "progressive_actor_spawn_failed" | "progressive_start_cancelled" | "progressive_stopped_without_completion_signal" | "progressive_finished_without_status" | "progressive_start_failed" | "progressive_stream_error" | "progressive_stream_timeout" | "progressive_batch_failed"
 export type BatchProvider = "argmax" | "whispercpp" | "deepgram" | "soniox" | "assemblyai" | "fireworks" | "openai" | "gladia" | "elevenlabs" | "pyannote" | "dashscope" | "mistral" | "hyprnote" | "am" | "soniqo" | "aquavoice" | "cartesia"
 export type BatchResponse = { metadata: JsonValue; results: BatchResults }
 export type BatchResults = { channels: BatchChannel[] }
@@ -219,7 +219,7 @@ export type ChannelProfile = "DirectMic" | "RemoteParty" | "MixedCapture"
 export type DegradedError = { type: "authentication_failed"; provider: string } | { type: "upstream_unavailable"; message: string } | { type: "connection_timeout" } | { type: "stream_error"; message: string }
 export type DenoiseEvent = { type: "denoiseStarted"; session_id: string } | { type: "denoiseProgress"; session_id: string; percentage: number } | { type: "denoiseCompleted"; session_id: string } | { type: "denoiseFailed"; session_id: string; error: string }
 export type DenoiseParams = { session_id: string; input_path: string; output_path: string }
-export type FinalizedWord = { id: string; text: string; start_ms: number; end_ms: number; channel: number; state: WordState; speaker_index?: number | null }
+export type FinalizedWord = { id: string; text: string; start_ms: number; end_ms: number; channel: number; state: WordState; speaker_index?: number | null; provider_segment_index?: number | null }
 export type IdentityAssignment = { human_id: string; scope: IdentityScope }
 export type IdentityScope = { kind: "channel"; channel: ChannelProfile } | { kind: "channel_speaker"; channel: ChannelProfile; speaker_index: number } | { kind: "words"; word_ids: string[] }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
@@ -230,7 +230,7 @@ export type PartialWord = { text: string; start_ms: number; end_ms: number; chan
 export type RenderTranscriptHuman = { human_id: string; name: string }
 export type RenderTranscriptInput = { started_at: number | null; words: RenderTranscriptWordInput[]; assignments: IdentityAssignment[] }
 export type RenderTranscriptRequest = { transcripts: RenderTranscriptInput[]; participant_human_ids: string[]; self_human_id: string | null; humans: RenderTranscriptHuman[] }
-export type RenderTranscriptWordInput = { id: string; text: string; start_ms: number; end_ms: number; channel: number; speaker_index?: number | null }
+export type RenderTranscriptWordInput = { id: string; text: string; start_ms: number; end_ms: number; channel: number; speaker_index?: number | null; provider_segment_index?: number | null }
 export type RenderedTranscriptSegment = { id: string; key: SegmentKey; speaker_label: string; start_ms: number; end_ms: number; text: string; words: SegmentWord[] }
 export type SegmentKey = { channel: ChannelProfile; speaker_index?: number | null; speaker_human_id?: string | null }
 export type SegmentWord = { text: string; start_ms: number; end_ms: number; channel: ChannelProfile; is_final: boolean; id?: string | null }
@@ -244,8 +244,8 @@ export type StreamWord = { word: string; start: number; end: number; confidence:
 export type Subtitle = { tokens: Token[] }
 export type Token = { text: string; start_time: number; end_time: number; speaker: string | null }
 export type TranscriptionEvent = { type: "started"; session_id: string } | { type: "progress"; session_id: string; event: BatchStreamEvent } | { type: "completed"; session_id: string; response: BatchResponse; mode: BatchRunMode } | { type: "stopped"; session_id: string } | { type: "failed"; session_id: string; code: BatchErrorCode; error: string }
-export type TranscriptionMode = "live" | "batch"
-export type TranscriptionParams = { session_id: string; provider: BatchProvider; file_path: string; model?: string | null; base_url: string; api_key: string; languages?: string[]; keywords?: string[]; num_speakers?: number | null; min_speakers?: number | null; max_speakers?: number | null }
+export type TranscriptionMode = "live" | "batch" | "progressiveBatch"
+export type TranscriptionParams = { session_id: string; provider: BatchProvider; file_path: string; model?: string | null; base_url: string; api_key: string; languages?: string[]; keywords?: string[]; num_speakers?: number | null; min_speakers?: number | null; max_speakers?: number | null; progressive_batch?: boolean; segment_duration_ms?: number | null }
 export type VttWord = { text: string; start_ms: number; end_ms: number; speaker: string | null }
 /**
  * Whether a finalized word is stable or awaiting correction.

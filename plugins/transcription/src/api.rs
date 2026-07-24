@@ -50,6 +50,13 @@ pub struct CaptureConfigUpdate {
 
 impl CaptureParams {
     fn default_transcription_mode(&self) -> listener::TranscriptionMode {
+        if self.transcription_mode == Some(listener::TranscriptionMode::ProgressiveBatch) {
+            tracing::info!(
+                "[DEBUG] default_transcription_mode: explicit ProgressiveBatch via field"
+            );
+            return listener::TranscriptionMode::ProgressiveBatch;
+        }
+
         if self.transcription_mode == Some(listener::TranscriptionMode::Batch) {
             tracing::info!("[DEBUG] default_transcription_mode: explicit Batch via field");
             return listener::TranscriptionMode::Batch;
@@ -217,6 +224,10 @@ pub struct TranscriptionParams {
     pub min_speakers: Option<u32>,
     #[serde(default)]
     pub max_speakers: Option<u32>,
+    #[serde(default)]
+    pub progressive_batch: bool,
+    #[serde(default)]
+    pub segment_duration_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -388,6 +399,8 @@ impl From<TranscriptionParams> for listener2::BatchParams {
             num_speakers: value.num_speakers,
             min_speakers: value.min_speakers,
             max_speakers: value.max_speakers,
+            progressive_batch: value.progressive_batch,
+            segment_duration_ms: value.segment_duration_ms,
         }
     }
 }

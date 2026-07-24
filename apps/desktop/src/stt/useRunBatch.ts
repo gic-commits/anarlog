@@ -17,6 +17,7 @@ import {
 import { useSession, useSessionParticipants } from "~/session/queries";
 import { useConfigValue } from "~/shared/config";
 import { id } from "~/shared/utils";
+import { shouldUseProgressiveBatch } from "~/store/zustand/listener/general-batch";
 import type { BatchPersistCallback } from "~/store/zustand/listener/transcript";
 import {
   getTranscriptionLanguages,
@@ -176,6 +177,8 @@ export const useRunBatch = (sessionId: string) => {
   const aiLanguage = useConfigValue("ai_language");
   const spokenLanguages = useConfigValue("spoken_languages");
   const dictionaryTerms = useConfigValue("personalization_dictionary_terms");
+  const sttMode = useConfigValue("stt_mode");
+  const sttSegmentDuration = useConfigValue("stt_segment_duration");
   const audioRetention = normalizeAudioRetention(
     useConfigValue("audio_retention"),
   );
@@ -224,6 +227,14 @@ export const useRunBatch = (sessionId: string) => {
       const target = shouldUseSelectedTarget
         ? (selectedTarget ?? fallbackTarget)
         : fallbackTarget;
+
+      console.log(
+        "[DEBUG] useRunBatch target: selectedTarget=%o selectedTargetSupported=%s shouldUseSelectedTarget=%s fallbackTarget=%o",
+        selectedTarget,
+        selectedTargetSupported,
+        shouldUseSelectedTarget,
+        fallbackTarget,
+      );
 
       if (!shouldUseSelectedTarget) {
         sonnerToast.message("Using a batch transcription provider", {
@@ -350,6 +361,25 @@ export const useRunBatch = (sessionId: string) => {
           }
         });
 
+      const progressiveBatch =
+        sttMode === "progressive"
+          ? true
+          : sttMode === "batch"
+            ? false
+            : shouldUseProgressiveBatch({
+                provider: target.provider,
+                baseUrl: target.baseUrl,
+                model: target.model,
+              });
+
+      console.log(
+        "[DEBUG] useRunBatch params: sttMode=%s progressiveBatch=%s provider=%s model=%s",
+        sttMode,
+        progressiveBatch,
+        target.provider,
+        target.model,
+      );
+
       const params: TranscriptionParams = {
         session_id: sessionId,
         provider: target.provider,
@@ -362,9 +392,14 @@ export const useRunBatch = (sessionId: string) => {
         num_speakers: options?.numSpeakers ?? inferredNumSpeakers,
         min_speakers: options?.minSpeakers,
         max_speakers: options?.maxSpeakers,
+        progressive_batch: progressiveBatch,
+        segment_duration_ms: progressiveBatch
+          ? (sttSegmentDuration ?? undefined)
+          : undefined,
       };
 
       try {
+        console.log("[DEBUG] useRunBatch calling startTranscription");
         await startTranscription(params, { handlePersist: persist });
       } finally {
         await lastTranscriptWrite;

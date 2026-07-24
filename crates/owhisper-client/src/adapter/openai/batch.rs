@@ -371,7 +371,7 @@ fn convert_text_response(transcript: String, usage: Option<TranscriptionUsage>) 
     build_batch_response(transcript, Vec::new(), metadata)
 }
 
-fn convert_response(response: CreateTranscriptionResponse) -> BatchResponse {
+pub fn convert_response(response: CreateTranscriptionResponse) -> BatchResponse {
     match response {
         CreateTranscriptionResponse::Standard(response) => {
             convert_text_response(response.text.trim().to_string(), response.usage)

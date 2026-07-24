@@ -32,6 +32,8 @@ pub enum BatchFailure {
     ProgressiveStreamError { provider: String, message: String },
     #[error("Timed out waiting for progressive batch stream response.")]
     ProgressiveStreamTimeout,
+    #[error("{message}")]
+    ProgressiveBatchFailed { message: String },
 }
 
 impl BatchFailure {
@@ -54,6 +56,7 @@ impl BatchFailure {
             Self::ProgressiveStartFailed { .. } => BatchErrorCode::ProgressiveStartFailed,
             Self::ProgressiveStreamError { .. } => BatchErrorCode::ProgressiveStreamError,
             Self::ProgressiveStreamTimeout => BatchErrorCode::ProgressiveStreamTimeout,
+            Self::ProgressiveBatchFailed { .. } => BatchErrorCode::ProgressiveBatchFailed,
         }
     }
 }
