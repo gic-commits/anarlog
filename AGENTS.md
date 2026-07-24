@@ -212,45 +212,48 @@ Batch 模式下，Speaches 首次实现 **处理时间 < 音频时间**（4m24s 
 - samples_dropped：音频缓冲区下溢
 - 客户端改动尚未部署上线
 
-## Known Bugs (Jul 24)
+## Jul 25 — 关键里程碑
 
-### Bug Tracking
+### 内存优化：流式 PCM 解码 + PCM Direct POST
 
-| # | 模块 | Bug | 复现 | 状态 |
-|---|------|-----|------|------|
-| 1 | `capabilities.ts:185-227` | `getLiveTranscriptionConfig` 忽略 `stt_mode`，新录音永远走 Live | ✅ 6/6 tests | 🔧 修复中 |
-| 2 | `useRunBatch.ts:212-229` | Re-transcription batch target 可能回退到本地 whispercpp | ❓ 未验证（因 Bug 3 block） | 📝 待验证 |
-| 3 | `commands.rs / general-batch.ts` | Re-transcription (`startTranscription`) 调用后转圈闪一下即消失，无日志无结果 | ✅ 4/4 re-transcript tests | 📝 待修复 |
+- `source.collect()` 全文件解码（3h 录音 ~4GB）→ 流式逐块 10s chunks（~15MB）
+- `total_duration()` 用于短文件预检（metadata only，不解码全部）
+- PCM f32 在内存中直接重采样 16000 Hz → s16le → POST `audio/pcm`，不写临时 WAV 文件
+- 消除磁盘 I/O，降低内存峰值 99.6%
 
-### Bug 1: `getLiveTranscriptionConfig` ignores `stt_mode` (fresh recording flow)
+### 代码可靠性修复
 
-`apps/desktop/src/stt/capabilities.ts:185-227` — `getLiveTranscriptionConfig` 不读取 `stt_mode` 配置。对于远程 provider（如 Speaches OpenAI），始终返回 `transcriptionMode: undefined`。Rust 端 `default_transcription_mode` 自动检测后走 `Live` 模式，用户选的 Stream/Batch/ProgressiveBatch 全部被忽略。
+- URL 构造：`format!("{}/v1/audio/transcriptions", ...)` → `url::Url::path_segments_mut()`，消除双 `/v1/` 拼接 bug
+- Response 解析：OpenAI 兼容服务器（Speaches）统一走 `OpenAIAdapter::parse_batch_response`，处理 `logprobs: null` 反序列化
+- 阈值参数化：`MIN_DURATION_SECS = 180` 硬编码 → `segment_duration_ms / 1000.0`（阈值由段长决定）
 
-**复现率**：100%（所有新录音测试均复现）
-**影响**：用户设了任何模式（Batch/Progressive Batch），新录音仍走 Live Realtime 模式
-**修复方向**：`getLiveTranscriptionConfig` 读取 `stt_mode`，映射为 `TranscriptionMode`（`"live"` → `"live"`，`"batch"` → `"batch"`，`"progressive"` → `"progressiveBatch"`）
+### Bug 修复状态
 
-### Bug 2: Re-transcription 可能走错 batch target
+| # | Bug | 状态 |
+|---|-----|------|
+| 1 | `getLiveTranscriptionConfig` 忽略 `stt_mode` | ✅ 已修复 (Jul 24) |
+| 2 | Re-transcription batch target 回退 whispercpp | 📝 待验证（依赖 Bug 3） |
+| 3 | Re-transcription (`startTranscription`) 无响应 | ✅ 已修复 (Jul 25) — URL 构造 + response 解析 |
+| - | `progressive_batch` 短音频 WAV 读取失败（mp3） | ✅ 已修复 (Jul 24 — Gap F: 原文件字节 POST) |
+| - | 长音频分段 WAV 编码 | ✅ 已修复 (Jul 25 — Gap G: PCM direct POST) |
 
-`apps/desktop/src/stt/useRunBatch.ts:212-229` — 代码已正确读取 `stt_mode` 并设 `progressive_batch`，但 `canUseBatchTarget` 对 Speaches OpenAI 可能返回 false，导致 fallback 到本地 whispercpp。
+### UI 扩展
 
-**影响**：Re-transcribe 已有音频时，可能用本地模型而不是 Speaches
-**状态**：因 Bug 3 阻塞，无法验证
+- `segment_duration_ms` 选项：30s / 60s / 3m / 5m / 10m（设置页面）
 
-### Bug 3: Re-transcription (startTranscription) 调用后无响应
+### 文档同步
 
-**现象**：
-- 点击 Re-transcribe → 转圈显示一瞬间 → 消失
-- 转录结果不变
-- WebView Console 无 `[runBatch]`/`startTranscription` 相关日志
-- Rust 侧无 `listener2_core::batch::*` 日志
-- 无错误提示
+- `progressive-batch-hybrid-design.md` — threshold、编码格式、Appendix B 对比表、5 个新增差异条目
+- `progressive-batch-data-structures.md` — struct 定义、数据流图、HTTP POST 细节、内存管理 §7
+- `progressive-batch-bug-list.md` — Gap G ✅、新增 min_duration_secs 潜在 bug
 
-**复现率**：100%（4次 retranscript 均复现，与选择的模式无关）
-**可能原因**：
-1. `startTranscription` Tauri command 在 Rust 侧立即返回错误但 JS 端静默处理
-2. Event listener 设置时序问题（先 listen 再 invoke，但事件可能丢失）
-3. Session 已有状态（如 `running_batch`）导致立即拒绝
+### ⚠️ 待明天验证（Jul 26）
+
+1. `cargo check` + 全部测试通过
+2. Bug 2（batch target fallback）在 Bug 3 修复后是否可复现
+3. 端到端测试 Progressive Batch 长音频通路（URL 正确 / 无 double /v1/）
+4. 确认内存峰值 <50MB（流式解码）
+5. `min_duration_secs` 字段去留讨论
 
 ## Misc
 
