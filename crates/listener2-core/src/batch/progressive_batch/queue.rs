@@ -387,8 +387,7 @@ async fn submit_segment_http(
 
     let mut form = reqwest::multipart::Form::new()
         .part("file", file_part)
-        .text("response_format", "verbose_json")
-        .text("timestamp_granularities[]", "word");
+        .text("response_format", "verbose_json");
 
     if let Some(ref model) = config.model {
         form = form.text("model", model.clone());
