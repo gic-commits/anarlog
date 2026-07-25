@@ -189,11 +189,24 @@ impl ProgressiveBatchManager {
                 stitcher,
             } => {
                 let segments = segmenter.feed(samples);
+                if !segments.is_empty() {
+                    tracing::debug!(
+                        "[progressive] active: produced {} segments",
+                        segments.len(),
+                    );
+                }
                 for seg in segments {
                     let path = segments_dir.join(format!("seg_{}.wav", seg.index));
                     write_queue.push((path, seg));
                 }
-                for result in queue.poll_completed() {
+                let completed = queue.poll_completed();
+                if !completed.is_empty() {
+                    tracing::debug!(
+                        "[progressive] active: {} segments completed via poll",
+                        completed.len(),
+                    );
+                }
+                for result in completed {
                     if let SegmentResult::Completed {
                         index,
                         global_start_ms,
@@ -234,12 +247,20 @@ impl ProgressiveBatchManager {
         }
 
         if let Some(buf) = transition {
+            tracing::debug!(
+                "[progressive] transitioning Accumulating→Active: buf_samples={}",
+                buf.len(),
+            );
             let mut segmenter = Segmenter::new(SegmenterConfig {
                 sample_rate: self.config.sample_rate,
                 segment_duration_ms: self.config.segment_duration_ms,
                 overlap_ms: self.config.overlap_ms,
             });
             let segments = segmenter.feed(&buf);
+            tracing::debug!(
+                "[progressive] transition: segmenter produced {} segments from buffer",
+                segments.len(),
+            );
             let qc = self.queue_config();
             let mut queue = BatchQueue::with_submit_fn(qc, self.submit_fn.clone());
             let stitcher = Stitcher::new(StitcherConfig {
@@ -285,6 +306,10 @@ impl ProgressiveBatchManager {
                     };
                     return Err("no audio recorded".to_string());
                 }
+                tracing::debug!(
+                    "[progressive] finish: Accumulating state with buffer of {} samples",
+                    buffer.len(),
+                );
                 let mut segmenter = Segmenter::new(SegmenterConfig {
                     sample_rate: self.config.sample_rate,
                     segment_duration_ms: self.config.segment_duration_ms,
@@ -310,6 +335,10 @@ impl ProgressiveBatchManager {
                 stitcher,
             } => {
                 let flushed = segmenter.flush();
+                tracing::debug!(
+                    "[progressive] finish: flushed {} segments from segmenter",
+                    flushed.len(),
+                );
                 for seg in &flushed {
                     self.write_and_enqueue(seg, &mut queue);
                 }
@@ -329,7 +358,22 @@ impl ProgressiveBatchManager {
             }
         };
 
+        let qp_before = queue.progress();
+        tracing::debug!(
+            "[progressive] finish: segments total={} pending={} inflight={} completed={} failed={}",
+            qp_before.total,
+            qp_before.pending,
+            qp_before.inflight,
+            qp_before.completed,
+            qp_before.failed.len(),
+        );
+
         let drain_results = queue.drain().await;
+
+        tracing::debug!(
+            "[progressive] finish: drain returned {} results",
+            drain_results.len(),
+        );
 
         // Check for permanent failures before stitching
         let qp = queue.progress();

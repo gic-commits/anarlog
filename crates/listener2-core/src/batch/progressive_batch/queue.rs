@@ -178,6 +178,13 @@ impl BatchQueue {
     }
 
     pub fn enqueue(&mut self, segment: QueuedSegment) {
+        tracing::debug!(
+            "[progressive] queue enqueue idx={} start_ms={} samples={} sample_rate={}",
+            segment.index,
+            segment.global_start_ms,
+            segment.samples.len(),
+            segment.sample_rate,
+        );
         self.segments.push(SegmentEntry {
             index: segment.index,
             global_start_ms: segment.global_start_ms,
@@ -257,9 +264,19 @@ impl BatchQueue {
                 .any(|s| matches!(s.status, SegmentStatus::Pending));
             if !has_inflight && !has_pending {
                 results.extend(polled);
+                tracing::debug!(
+                    "[progressive] drain complete: {} results",
+                    results.len(),
+                );
                 break;
             }
             results.extend(polled);
+            tracing::debug!(
+                "[progressive] drain waiting... inflight={} pending={} results={}",
+                if has_inflight { 1 } else { 0 },
+                if has_pending { 1 } else { 0 },
+                results.len(),
+            );
             if let Some(mut result) = self.result_rx.recv().await {
                 self.apply_result(&mut result);
                 results.push(result);
@@ -370,8 +387,8 @@ async fn submit_segment_http(
 
     let mut form = reqwest::multipart::Form::new()
         .part("file", file_part)
-        .text("response_format", "json")
-        .text("timestamp_granularities", "word");
+        .text("response_format", "verbose_json")
+        .text("timestamp_granularities[]", "word");
 
     if let Some(ref model) = config.model {
         form = form.text("model", model.clone());
@@ -392,6 +409,14 @@ async fn submit_segment_http(
             .push("audio/transcriptions");
     }
 
+    tracing::debug!(
+        "[progressive] submit_segment_http idx={} url={} model={:?} lang={:?}",
+        segment.index,
+        url,
+        config.model,
+        config.language,
+    );
+
     let client = reqwest::Client::new();
     let mut req = client.post(url).multipart(form);
     if !config.api_key.is_empty() {
@@ -402,6 +427,12 @@ async fn submit_segment_http(
         .send()
         .await
         .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+    tracing::debug!(
+        "[progressive] submit_segment_http idx={} status={}",
+        segment.index,
+        resp.status(),
+    );
 
     if !resp.status().is_success() {
         let status = resp.status();

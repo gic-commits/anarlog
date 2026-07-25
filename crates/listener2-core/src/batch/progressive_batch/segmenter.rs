@@ -105,6 +105,17 @@ impl Segmenter {
             self.next_index += 1;
         }
 
+        if !segments.is_empty() {
+            tracing::debug!(
+                "[progressive] segmenter feed produced {} segments (idx {}-{}, buffer_len={}, total_samples={})",
+                segments.len(),
+                segments.first().map(|s| s.index).unwrap_or(0),
+                segments.last().map(|s| s.index).unwrap_or(0),
+                self.buffer.len(),
+                self.total_samples,
+            );
+        }
+
         segments
     }
 
