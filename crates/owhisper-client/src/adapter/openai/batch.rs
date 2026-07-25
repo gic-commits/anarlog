@@ -114,6 +114,28 @@ impl OpenAIAdapter {
 
         Ok(Box::pin(event_stream))
     }
+
+    /// Build the transcription URL from an api_base (OpenAI-compatible).
+    /// Appends `audio/transcriptions` path segment if missing.
+    pub fn transcription_url(api_base: &str) -> Result<url::Url, Error> {
+        transcription_url(api_base)
+    }
+
+    /// Build a multipart Form for a batch transcription request.
+    ///
+    /// `file_part` is the audio data (file or in-memory PCM).
+    /// `params` provides model, language, keywords, etc.
+    /// `use_response_format` controls whether response_format and timestamp_granularities are set.
+    /// `enable_streaming` controls whether the `stream` parameter is sent.
+    pub fn build_batch_multipart(
+        file_part: Part,
+        params: &ListenParams,
+        use_response_format: bool,
+        enable_streaming: bool,
+    ) -> Result<Form, Error> {
+        let options = build_transcription_options(params, use_response_format, enable_streaming);
+        build_multipart_form(file_part, options)
+    }
 }
 
 async fn do_transcribe_file(

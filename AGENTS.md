@@ -245,7 +245,7 @@ Batch 模式下，Speaches 首次实现 **处理时间 < 音频时间**（4m24s 
 
 - `progressive-batch-hybrid-design.md` — threshold、编码格式、Appendix B 对比表、5 个新增差异条目
 - `progressive-batch-data-structures.md` — struct 定义、数据流图、HTTP POST 细节、内存管理 §7
-- `progressive-batch-bug-list.md` — Gap G ✅、新增 min_duration_secs 潜在 bug
+- `progressive-batch-bug-list.md` — Gap G ✅
 
 ### ⚠️ 待明天验证（Jul 26）
 
@@ -253,7 +253,59 @@ Batch 模式下，Speaches 首次实现 **处理时间 < 音频时间**（4m24s 
 2. Bug 2（batch target fallback）在 Bug 3 修复后是否可复现
 3. 端到端测试 Progressive Batch 长音频通路（URL 正确 / 无 double /v1/）
 4. 确认内存峰值 <50MB（流式解码）
-5. `min_duration_secs` 字段去留讨论
+5. 删除 `min_duration_secs` 字段（冗余，由 `segment_duration_ms` 替代）
+
+## Jul 26 — 分段增量显示 + 分段分隔显示
+
+### 完成
+
+1. **BatchSegmentResult 事件通路**
+   - `listener2-core/events.rs`: 新增 `BatchSegmentResult { session_id, segment_index, response }` 变体
+   - `plugins/transcription/src/api.rs`: 新增 `TranscriptionEvent::SegmentResult` + `From` 转换
+   - `plugins/transcription/src/listener2/ext.rs`: 更新 `last_activity_tx` 匹配包含 `BatchSegmentResult`
+   - 运行 `cargo test export_types` 重新生成 `bindings.gen.ts`
+
+2. **Runtime 贯通 Progressive Batch**
+   - `ProgressiveBatchConfig`: 新增 `session_id` 字段
+   - `ProgressiveBatchManager`: 新增 `runtime: Option<Arc<dyn BatchRuntime>>` + `with_runtime()` 方法
+   - `run_progressive_batch_from_file`: 接收 `runtime` 参数并透传
+   - `submit_file_direct`: 同样接收 `runtime`，单段音频也 emit `BatchSegmentResult`
+   - 在 `on_audio_frame()` 和 `finish()` 的 `poll_completed` 循环中 emit
+
+3. **Segment boundaries 元数据**
+   - `stitcher.rs`: 重构 `stitch()` 用 `TaggedWord` 追踪词源分段索引，输出 `segment_boundaries: Vec<usize>`（各段在拼合结果中的起始词下标）
+
+4. **前端增量显示**
+   - `batch.ts`: 新增 `batchSegments: Record<string, Record<number, BatchResponse>>` + `handleBatchSegmentResult` action；`handleBatchResponse` / `clearBatchSession` 自动清理
+   - `general-batch.ts`: 新分支 `payload.type === "segmentResult"` → `handleBatchSegmentResult`
+   - `state.ts`: `running_batch` screen 新增 `segmentResponses` 字段
+   - `index.tsx`: 新增 `SegmentPreview` 组件，在 `running_batch` 进度下方按序展示已完成的片段+虚线分隔
+   - `empty.tsx`: 新增 `segmentCount` 属性显示 "N segments transcribed"
+   - `segment.tsx`: 检测 `word.metadata.segment_boundary`，渲染虚线分隔标记
+
+5. **代码生成**：`plugins/transcription` codegen 测试（`export_types`）更新 `bindings.gen.ts`
+
+### 验证
+- `cargo check`: ✅
+- `cargo test -p listener2-core`: 109/109 ✅
+- `pnpm -F @hypr/desktop typecheck`: ✅（仅剩一个 pre-existing warning）
+- `pnpm exec dprint fmt`: ✅
+
+## Jul 26 — Sprint 2 设计定稿（启动前 Commit）
+
+Sprint 2 分四个 Phase：
+
+| Phase | 内容 | 关键改动 |
+|-------|------|----------|
+| **A** | Source pipeline PCM 集成 | `ListenerRouting::ProgressiveBatch` 变体 + Pipeline dispatch + Supervisor 创建 channel + Listener2 消费 |
+| **B** | 重试 + Drain 超时 + Partial Stitch | `drain(timeout)`、stitch 不报 missing、`finish()` 允许 partial response |
+| **C** | 持久化 + Continue | progressive_batch_jobs/segments 表 + Drizzle schema + continue_from_file() |
+| **D** | UI 右键菜单 | Re-transcribe 裂为 3 项 + Continue 条件显示 + 部分结果提示 |
+
+设计文档已同步更新：
+- `docs/progressive-batch-data-structures.md` — v2 DB schema、重试协议、Continue 流程、UI 菜单
+- `docs/progressive-batch-hybrid-design.md` — Sprint 2 Phase 分解
+- `docs/progressive-batch-bug-list.md` — Gap A/L/M/N/O/P（Sprint 2）vs ✅ Gaps
 
 ## Misc
 

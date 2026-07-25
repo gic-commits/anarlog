@@ -26,26 +26,34 @@
 ## 2. 数据流
 
 ```
-[Audio Hardware]
-  → Arc<[f32]> PCM frames, ~20ms each, 48kHz
-  → Source Pipeline (pipeline.rs)
-      ├──→ Recorder Actor → audio.wav (full backup)
-      ├──→ Listener Actor (仅 Live 模式)
-      └──→ [NEW] ProgressiveBatchManager (仅 ProgressiveBatch 模式)
-              │  PCM 累积（流式 10s chunks）
-              │  ↓ (30s 边界)
-              │  Segmenter → AudioSegment (samples in memory)
-              │  └──→ Queue.enqueue(index, samples, sample_rate)
-              │           ↓ N=2 并发
-              │  BatchClient → POST audio/pcm (16000 Hz s16le)
-              │           ↓
-              │  response → Stitcher.add_segment(index, response)
-              │           ↓ (所有段完成)
-              │  Stitcher.stitch() → batch::Response
-              │           ↓
-              │  [缓存结果] ← startTranscription 时立即返回
-              │
-              录音结束时: flush() → 等待 InFlight 完成 → stitch → emit BatchResponse
+[Audio File]
+  → rodio 流式解码（10s chunks）
+  → Source.collect() 已废弃（内存 4GB → ~15MB）
+  → on_audio_frame(&mono_pcm)
+      ↓
+  ProgressiveBatchManager
+      │  PCM 累积（流式 10s chunks）
+      │  ↓ (30s 边界)
+      │  Segmenter → AudioSegment (samples in memory)
+      │  └──→ Queue.enqueue(index, samples, sample_rate)
+      │           ↓ N=2 并发
+      │  submit_segment_http → POST audio/pcm (16000 Hz s16le)
+      │           ↓
+      │  response → Stitcher.add_segment(index, response)
+      │           ↓ (poll_completed 循环)
+      │  runtime.emit(BatchSegmentResult { session_id, segment_index, response })
+      │           ↓ (实时发送给前端)
+      │  [前端] handleBatchSegmentResult → batchSegments Map
+      │           ↓ SegmentPreview 展示
+      │
+      │  (所有段完成)
+      │  Stitcher.stitch() → batch::Response + segment_boundaries
+      │           ↓
+      │  runtime.emit(TranscriptionEvent::Completed)
+      │           ↓
+      │  前端渲染完整结果 + 虚线分隔（segment_boundaries 标记）
+      │
+      录音结束时: finish() → drain → stitch → emit
 ```
 
 ---
@@ -63,8 +71,7 @@ UPDATE sessions SET metadata_json = json_set(metadata_json,
   '$.progressive_config', json_object(
     'segment_duration_ms', 30000,
     'overlap_ms', 1000,
-    'max_concurrency', 2,
-    'min_duration_secs', 180
+    'max_concurrency', 2
   )
 ) WHERE id = ?;
 
@@ -72,49 +79,49 @@ UPDATE sessions SET metadata_json = json_set(metadata_json,
 -- 无变化 —— words_json 已包含所有段的全局时间戳词
 ```
 
-### v2: 新增持久化表（下游公平）
+### v2: 新增持久化表
 
 ```sql
--- progressive_batch_jobs: 每个 session 一次
+-- progressive_batch_jobs: 每个 session 一个 job
 CREATE TABLE IF NOT EXISTS progressive_batch_jobs (
-    id                TEXT PRIMARY KEY NOT NULL,
-    session_id        TEXT NOT NULL REFERENCES sessions(id),
-    status            TEXT NOT NULL DEFAULT 'running',       -- 'running' | 'completed' | 'failed'
-    provider          TEXT NOT NULL DEFAULT '',
-    model             TEXT NOT NULL DEFAULT '',
-    base_url          TEXT NOT NULL DEFAULT '',
-    api_key           TEXT NOT NULL DEFAULT '',
-    language          TEXT NOT NULL DEFAULT '',
+    id                  TEXT PRIMARY KEY NOT NULL,
+    session_id          TEXT NOT NULL REFERENCES sessions(id),
+    status              TEXT NOT NULL DEFAULT 'running',
+                        -- 'running' | 'completed' | 'partial' | 'interrupted' | 'failed'
+    provider            TEXT NOT NULL DEFAULT '',
+    model               TEXT NOT NULL DEFAULT '',
+    base_url            TEXT NOT NULL DEFAULT '',
+    language            TEXT NOT NULL DEFAULT '',
     segment_duration_ms INTEGER NOT NULL DEFAULT 30000,
-    overlap_ms        INTEGER NOT NULL DEFAULT 1000,
-    max_concurrency   INTEGER NOT NULL DEFAULT 2,
-    min_duration_secs INTEGER NOT NULL DEFAULT 180,
-    total_segments    INTEGER NOT NULL DEFAULT 0,
-    completed_segments INTEGER NOT NULL DEFAULT 0,
-    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
-    completed_at      TEXT,
-    error             TEXT
+    overlap_ms          INTEGER NOT NULL DEFAULT 1000,
+    max_concurrency     INTEGER NOT NULL DEFAULT 2,
+    total_segments      INTEGER NOT NULL DEFAULT 0,
+    completed_segments  INTEGER NOT NULL DEFAULT 0,
+    failed_segments     INTEGER NOT NULL DEFAULT 0,
+    abandoned_segments  INTEGER NOT NULL DEFAULT 0,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at        TEXT,
+    error               TEXT
 );
 
--- progressive_batch_segments: 每个段一行
+-- progressive_batch_segments: 每个段一行（不存 PCM 样本）
 CREATE TABLE IF NOT EXISTS progressive_batch_segments (
-    id                TEXT PRIMARY KEY NOT NULL,
-    job_id            TEXT NOT NULL REFERENCES progressive_batch_jobs(id),
-    segment_index     INTEGER NOT NULL,
-    global_start_ms   INTEGER NOT NULL,
-    global_end_ms     INTEGER NOT NULL,
-    file_path         TEXT NOT NULL,
-    status            TEXT NOT NULL DEFAULT 'pending',       -- 'pending' | 'uploading' | 'processing' | 'completed' | 'failed'
-    retry_count       INTEGER NOT NULL DEFAULT 0,
-    error             TEXT,
-    response_words_json  TEXT NOT NULL DEFAULT '[]',
-    response_text     TEXT NOT NULL DEFAULT '',
-    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+    id                  TEXT PRIMARY KEY NOT NULL,
+    job_id              TEXT NOT NULL REFERENCES progressive_batch_jobs(id),
+    segment_index       INTEGER NOT NULL,
+    global_start_ms     INTEGER NOT NULL,
+    global_end_ms       INTEGER NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'pending',
+                        -- 'pending' | 'in_flight' | 'completed' | 'failed' | 'abandoned'
+    retry_count         INTEGER NOT NULL DEFAULT 0,
+    max_retries         INTEGER NOT NULL DEFAULT 3,
+    error               TEXT,
+    response_json       TEXT,            -- 完整 batch::Response JSON（成功时填充）
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- 索引
 CREATE INDEX idx_pbj_session ON progressive_batch_jobs(session_id);
 CREATE INDEX idx_pbs_job ON progressive_batch_segments(job_id);
 CREATE INDEX idx_pbs_status ON progressive_batch_segments(status);
@@ -138,9 +145,10 @@ export const progressiveBatchJobs = sqliteTable("progressive_batch_jobs", {
   segmentDurationMs: integer("segment_duration_ms").notNull().default(30000),
   overlapMs: integer("overlap_ms").notNull().default(1000),
   maxConcurrency: integer("max_concurrency").notNull().default(2),
-  minDurationSecs: integer("min_duration_secs").notNull().default(180),
   totalSegments: integer("total_segments").notNull().default(0),
   completedSegments: integer("completed_segments").notNull().default(0),
+  failedSegments: integer("failed_segments").notNull().default(0),
+  abandonedSegments: integer("abandoned_segments").notNull().default(0),
   createdAt: text("created_at").notNull().default(currentTimestamp),
   updatedAt: text("updated_at").notNull().default(currentTimestamp),
   completedAt: text("completed_at"),
@@ -156,17 +164,37 @@ export const progressiveBatchSegments = sqliteTable(
     segmentIndex: integer("segment_index").notNull(),
     globalStartMs: integer("global_start_ms").notNull(),
     globalEndMs: integer("global_end_ms").notNull(),
-    filePath: text("file_path").notNull(),
     status: text("status").notNull().default("pending"),
     retryCount: integer("retry_count").notNull().default(0),
+    maxRetries: integer("max_retries").notNull().default(3),
     error: text("error"),
-    responseWordsJson: text("response_words_json").notNull().default("[]"),
-    responseText: text("response_text").notNull().default(""),
+    responseJson: text("response_json"),
     createdAt: text("created_at").notNull().default(currentTimestamp),
     updatedAt: text("updated_at").notNull().default(currentTimestamp),
   },
 );
 ```
+
+### v2 重试协议
+
+| 阶段 | 行为 | 状态变化 |
+|------|------|----------|
+| 初始提交 | HTTP POST 段音频到 batch 端点 | `pending` → `in_flight` |
+| 成功 | 解析 response，保存 | `in_flight` → `completed` |
+| HTTP 失败 | 1s/2s/4s backoff 重试，最多 3 次 | `in_flight` → `pending`（重试） |
+| 3 次重试耗尽 | 标记为放弃，不影响其他段 | → `abandoned` |
+| 所有段跑完 | 检查是否有 `abandoned` | job → `partial` |
+| 用户点击 Continue | 重新打开音频文件，只提交未完成段 | 新建 job 会话 |
+
+**不 fallback 到标准 batch。** 放弃的段在 response metadata 中记录为 `abandoned_segments`，UI 显示 "部分段转录失败" 提示。
+
+### v2 持久化策略
+
+- **Manager 不直接依赖 DB。** DB 写入由 plugin 层的 `TauriBatchRuntime` 在 emit `BatchSegmentResult` 时同步完成。
+- **PCM 数据不持久化。** 完整音频已由 Recorder 保存到文件。恢复时重新读文件 + 确定性重切段。
+- **段状态持久化。** 每次 `poll_completed` 收到完成结果时，plugin 层写一行 `progressive_batch_segments`。
+- **Job 状态持久化。** Manager 进入 `Completed`/`Failed` 状态时，plugin 层更新 `progressive_batch_jobs`。
+- **中断检测。** 会话异常结束时（crash/退出），job status 标记为 `interrupted`。应用启动时扫描所有 `status=running` 的 job，自动转为 `interrupted`。
 
 ---
 
@@ -323,13 +351,19 @@ impl BatchQueue {
     pub fn poll_completed(&mut self) -> Vec<SegmentResult>;
 
     /// 等待所有 inflight 完成（block until empty）
-    pub async fn drain(&mut self) -> Vec<SegmentResult>;
+    pub async fn drain(&mut self, timeout: Duration) -> Vec<SegmentResult>;
 
     pub fn progress(&self) -> QueueProgress;
 
     /// 取消所有 inflight
     pub fn cancel(&mut self);
 }
+
+**drain 超时行为（v2 新增）：**
+- 超时值 = `segment_duration_ms * 1.5`（从 finish() 传入）
+- 超时后标记所有剩余 inflight/pending 段为 `Failed { error: "timeout" }`
+- 返回所有已完成的 SegmentResult
+- 由 Manager.finish() 调用方决定如何处理（重试 / 标记 abandoned）
 
 /// 准备入队的段
 pub struct QueuedSegment {
@@ -399,7 +433,6 @@ async fn submit_segment_http(
     config: &QueueConfig,
     segment: &QueuedSegment,
 ) -> Result<batch::Response, String> {
-    // 重采样到 16000 Hz s16le（Speaches batch 端点要求）
     let resampled = resample_linear(&segment.samples, segment.sample_rate, TARGET_SAMPLE_RATE);
     let pcm_bytes = convert_to_s16le(&resampled);
 
@@ -407,32 +440,16 @@ async fn submit_segment_http(
         .file_name("audio.raw")
         .mime_str("audio/pcm")?;
 
-    let mut form = reqwest::multipart::Form::new()
-        .part("file", file_part)
-        .text("response_format", "json")
-        .text("timestamp_granularities", "word");
+    let form = build_batch_multipart(
+        file_part,
+        config.model.as_deref(),
+        config.language.as_deref(),
+    );
 
-    if let Some(ref model) = config.model {
-        form = form.text("model", model.clone());
-    }
-    if let Some(ref lang) = config.language {
-        form = form.text("language", lang.clone());
-    }
-
-    // 使用 url::Url 的 path_segments_mut() 避免字符串拼接双 /v1/
-    let mut url: url::Url = config.base_url.parse().map_err(|_| "invalid base_url")?;
-    if !url.path().trim_end_matches('/').ends_with("audio/transcriptions") {
-        url.path_segments_mut()
-            .map_err(|_| "cannot modify base_url path segments")?
-            .pop_if_empty()
-            .push("audio/transcriptions");
-    }
-
-    let client = reqwest::Client::new();
+    let url = transcription_url(&config.base_url)?;
+    let client = create_client()?;
     let mut req = client.post(url).multipart(form);
-    if !config.api_key.is_empty() {
-        req = req.header("Authorization", format!("Bearer {}", config.api_key));
-    }
+    req = req.header("Authorization", format!("Bearer {}", config.api_key));
 
     let resp = req.send().await.map_err(|e| format!("HTTP request failed: {e}"))?;
 
@@ -444,8 +461,6 @@ async fn submit_segment_http(
 
     let body = resp.text().await.map_err(|e| format!("failed to read response body: {e}"))?;
 
-    // OpenAI 兼容服务器（如 Speaches）可能返回 null logprobs，
-    // 使用 OpenAIAdapter::parse_batch_response 而非直接 serde_json
     let response: batch::Response = if config.provider == BatchProvider::OpenAI {
         owhisper_client::OpenAIAdapter::parse_batch_response(&body)
             .map_err(|e| format!("failed to parse response: {e}"))?
@@ -461,6 +476,13 @@ async fn submit_segment_http(
 ### 4.4 Stitcher（`crates/listener2-core/src/batch/progressive-batch/stitcher.rs`）
 
 ```rust
+/// 携带来源分段索引的 word（用于追踪分段边界）
+#[derive(Debug, Clone)]
+pub struct TaggedWord {
+    pub word: batch::Word,
+    pub segment_index: usize,
+}
+
 pub struct StitcherConfig {
     pub overlap_ms: u64,       // 1000
     pub total_segments: usize,  // 预期段数
@@ -479,121 +501,103 @@ pub struct CompletedSegment {
     pub response: batch::Response,
 }
 
+/// Stitcher 输出：拼合的转录 + 分段边界标记
+pub struct StitchOutput {
+    pub response: batch::Response,
+    /// 各段在全局词表中的起始 word 下标
+    /// 例: [0, 15, 31, ...] 表示段 0 从 word[0] 开始，
+    /// 段 1 从 word[15] 开始，段 2 从 word[31] 开始
+    pub segment_boundaries: Vec<usize>,
+    /// 段间间隙警告（padding_ms > GAP_WARNING_THRESHOLD_MS 的间隙）
+    pub gap_warnings: Vec<GapWarning>,
+}
+
+pub struct GapWarning {
+    pub segment_index: usize,
+    pub gap_duration_ms: i64,
+    pub padding_ms: i64,
+}
+
 impl Stitcher {
     pub fn new(config: StitcherConfig) -> Self;
 
     pub fn add_segment(&mut self, segment: CompletedSegment);
 
+    /// 是否所有预期段都已添加
     pub fn is_complete(&self) -> bool;
 
-    /// 合并所有段为单个 batch::Response
+    /// 合并所有段为 stitch::Response（含 segment_boundaries + gap_warnings）
+    /// **v2 变更：不再返回 Err(MissingSegments)。**
+    /// 永远尽量拼合：缺失段在 metadata 中记录 abandoned_segments
     pub fn stitch(&self) -> Result<batch::Response, StitcherError>;
 }
 
 pub enum StitcherError {
-    MissingSegments(Vec<usize>),
+    /// 仅当没有任何段时返回
     EmptyResponse,
 }
+
+**v2 行为变更：** `stitch()` 不再因缺失段而报错。缺失的段在 response.metadata 中记录：
+```json
+{
+  "total_duration": 120.0,
+  "segments_stitched": 12,
+  "segments_total": 15,
+  "abandoned_segments": [3, 7, 11],
+  "gap_warnings": [...],
+  "segment_boundaries": [0, ...]
+}
+```
 ```
 
-**Stitcher 合并规则：**
+**Stitcher 合并规则（TaggedWord + segment_boundaries）：**
 
 ```
 stitch():
-  按 index 遍历所有段（已排序）
-  对每个段:
-    ① 全局偏移:
-       for word in segment.response.results.channels[0].alternatives[0].words:
-         word.start = word.start + segment.global_start_ms / 1000.0
-         word.end   = word.end   + segment.global_start_ms / 1000.0
+  ① 全局偏移:
+     对所有段，将每个 word 的 start/end 加上该段全局起始偏移
+     将 word 包装为 TaggedWord { word, segment_index }
 
-    ② Segment 级去重:
-       if index > 0:
-         prev = segments[index - 1]
-         prev_end = max(prev.response.results.channels[0].alternatives[0].words.last().end)
-         cur_start = min(cur.response.results.channels[0].alternatives[0].words.first().start)
-         if cur_start - prev_end < overlap_ms / 1000.0:
-           # overlap 窗口内，丢弃当前段的重复部分
-           # 策略：保留从 prev_end + epsilon 开始的 word
-           cur.words.retain(|w| w.start > prev_end + 0.05)
+  ② 合并所有 TaggedWord，按 global_start 排序
 
-    ③ 拼接 transcript 字符串:
-       合并所有段保留的 word，按 start 排序，拼接 punctuated_word
+  ③ Word 级去重（overlap 窗口内）:
+     遍历排序后的 TaggedWord:
+       如果当前 word.global_start - 上一个 word.global_end < DEDUP_EPSILON_S (0.05):
+         丢弃当前 word（视为重复）
+       否则保留
 
-    ④ 合并 metadata:
-       total_duration = max(all segments' max(end)) - min(all segments' min(start))
+  ④ 计算 segment_boundaries:
+     遍历去重后的 TaggedWord 列表:
+       每当 segment_index 变化时，记录当前下标到 segment_boundaries
+       首个边界总是 0
 
-  返回新的 batch::Response
+  ⑤ 拼接 transcript:
+     将所有保留的 word 的 punctuated_text 按序拼接
+
+  ⑥ 合并 metadata + gap_warnings:
+     记录间隙 > GAP_WARNING_THRESHOLD_MS 的段间空白
+     total_duration = max_word.end - min_word.start
+
+  返回 StitchOutput { response, segment_boundaries, gap_warnings }
 ```
 
-**去重示例：**
+**关键设计细节：**
 
-```
-Segment 0: words=[{start=0, end=2.5, text="你好"}, {start=2.5, end=3.2, text="世界"}]
-           global offset +0 → [{start=0, end=2.5}, {start=2.5, end=3.2}]
-           保留全部
-
-Segment 1: words=[{start=0, end=2.8, text="你好"}, {start=2.8, end=5.1, text="今天天气"}]
-           global offset +29 → [{start=29, end=31.8}, {start=31.8, end=34.1}]
-           比较: prev_end=30.2 (对齐后 Segment 0 最后的 word 2.5+0?
-
-不对，让我重新算：
-Segment 0: global [0s, 30s)
-  word: start=0.0, end=2.5 → 偏移后 global {0.0, 2.5}
-  word: start=2.5, end=3.2 → 偏移后 global {2.5, 3.2}
-  ↓
-Segment 1: global [29s, 59s)
-  word: start=0.0, end=2.8 → 偏移后 global {29.0, 31.8}
-  word: start=2.8, end=5.1 → 偏移后 global {31.8, 34.1}
-  ↓
-比较: Segment 0 的 max_end = 3.2 (global)
-     Segment 1 的 min_start = 29.0 (global)
-     29.0 - 3.2 = 25.8s > 1s overlap → 无重叠，两段都保留
-
-实际上 1s overlap 在语音连续时，Segment 1 包含了 29s-30s 的重复内容
-Segment 0 到 29s-30s 也有语音
-Segment 0 word: start=29.0, end=29.5 (global offset +0)
-Segment 1 word: start=29.0, end=29.5 (global offset +29)
-这两个是同一个语音片段 → 保留 Segment 0 的，丢弃 Segment 1 的
-
-修正去重规则：
-  for 每对相邻段 (i, i+1):
-    if segment[i+1].first_word.start - segment[i].last_word.end < overlap_s:
-      # 有重叠
-      overlap_start = segment[i+1].first_word.start
-      discard_words_from = segment[i+1].words
-                        .iter()
-                        .position(|w| w.start >= segment[i].last_word.end - 0.05)
-                        .unwrap_or(0)
-      segment[i+1].words = segment[i+1].words[discard_words_from..]
-```
-
-实际上，对于 30s + 1s overlap 的设置，非静音连续语音下重叠的 word 会被服务端转录两次，stitcher 需要去重。但用 segment 级去重（保留先到达段的全部 word），因为重叠区只有 1s，丢弃后段前 1s 的 word 只会丢失极少内容（已被前一段覆盖）。
-
-**简化去重规则（v1）：**
-
-- 如果后段第一条 word 的 start 与前段最后一条 word 的 start 之差 < overlap_s（1s），则整段丢弃后段
-- 否则保留后段全部 word
-
-不对，这样会丢失太多内容。让我重新想。
-
-正确做法：对于 overlaps，丢弃后段中 start 小于前段最后一条 word 的 start + overlap 的所有 word。
-
-```
-保留条件: word.global_start >= prev_last_word.global_end - overlap_ms
-```
-
-这样就不需要 `timestamp_granularities[]=word` 参数，因为 batch 响应天然包含 word 时间戳。
+- `segment_boundaries` 是全局词表（去重后）中各段的起始下标：`[0, 15, 31]` 表示段 0 从 `word[0]` 起、段 1 从 `word[15]` 起、段 2 从 `word[31]` 起
+- 前端 `segment.tsx` 检测 `word.metadata.segment_boundary` 标记，渲染虚线分隔
+- `dedup_epsilon = 0.05s` 容差防止浮点误差导致同一词的 start 略微不同
+- `GAP_WARNING_THRESHOLD_MS = 100` — 超过此值的段间间隙记录为 `GapWarning`（UI 可展示）
+- `propagate_identity` 的 `provider_segment_index` 边界检查确保不在边界处合并不同段的内容
 
 ### 4.5 Manager（`crates/listener2-core/src/batch/progressive-batch/mod.rs`）
 
 ```rust
 pub struct ProgressiveBatchConfig {
+    pub session_id: String,          // ← 新增（用于 Runtime 事件）
     pub sample_rate: u32,
     pub segment_duration_ms: u32,
     pub overlap_ms: u32,
     pub max_concurrency: usize,
-    pub min_duration_secs: u32,
     pub base_url: String,
     pub api_key: String,
     pub model: Option<String>,
@@ -602,30 +606,11 @@ pub struct ProgressiveBatchConfig {
     pub session_dir: PathBuf,
 }
 
-impl Default for ProgressiveBatchConfig {
-    fn default() -> Self {
-        Self {
-            sample_rate: 48000,
-            segment_duration_ms: 30000,
-            overlap_ms: 1000,
-            max_concurrency: 2,
-            min_duration_secs: 180,
-            base_url: String::new(),
-            api_key: String::new(),
-            model: None,
-            language: None,
-            provider: BatchProvider::OpenAI,
-            session_dir: PathBuf::new(),
-        }
-    }
-}
-
 /// Manager 状态机
 pub enum ManagerState {
     /// 录音中，未达到分段阈值
     Accumulating {
         buffer: Vec<f32>,
-        total_samples: u64,
     },
     /// 录音中，正在分段提交
     Active {
@@ -633,14 +618,11 @@ pub enum ManagerState {
         queue: BatchQueue,
         stitcher: Stitcher,
     },
-    /// 录音已结束，等待 InFlight 完成
-    Finalizing {
-        queue: BatchQueue,
-        stitcher: Stitcher,
-    },
     /// 全部完成，结果已就绪
     Completed {
         result: batch::Response,
+        partial: bool,          // true = 部分段被 abandoned
+        abandoned_indices: Vec<usize>,
     },
     /// 失败
     Failed {
@@ -650,82 +632,79 @@ pub enum ManagerState {
 
 /// 顶层管理器
 pub struct ProgressiveBatchManager {
-    session_id: String,
     config: ProgressiveBatchConfig,
-    runtime: Arc<dyn BatchRuntime>,
     state: ManagerState,
-
-    /// 临时段文件目录（{session_dir}/progressive-batch/）
     segments_dir: PathBuf,
-
-    /// 从 Source 管道接收 PCM 帧
-    pcm_rx: tokio::sync::mpsc::Receiver<Arc<[f32]>>,
-    /// 通知任务退出
-    shutdown_tx: Option<oneshot::Sender<()>>,
-    /// PCM 接收任务句柄
-    frame_task: Option<JoinHandle<()>>,
-
-    /// 完成信号：stitch 完成时通知
-    completion_tx: Option<oneshot::Sender<Result<batch::Response>>>,
-    completion_rx: Option<oneshot::Receiver<Result<batch::Response>>>,
+    write_wav_fn: WriteWavFn,
+    submit_fn: SubmitSegmentFn,
+    runtime: Option<Arc<dyn BatchRuntime>>,
 }
 
 impl ProgressiveBatchManager {
-    /// 创建 Manager 并启动 PCM 接收任务
-    pub fn new(
-        session_id: String,
+    /// 创建 Manager（live recording PCM 路径）
+    pub fn new(config: ProgressiveBatchConfig) -> Self;
+
+    /// 从 DB 恢复（Continue 路径）
+    /// completed_segments: 已完成的段列表（从 DB 加载）
+    /// 只重新提交 status≠completed 的段
+    pub fn resume(
         config: ProgressiveBatchConfig,
-        runtime: Arc<dyn BatchRuntime>,
-    ) -> (Self, PcmSender);
+        completed: Vec<PersistedCompletedSegment>,
+    ) -> Self;
 
-    /// 录音中：送入 PCM 帧（由 PCM 接收任务调用）
-    fn on_audio_frame(&mut self, samples: Arc<[f32]>);
+    /// 注入 Runtime（用于 emit BatchSegmentResult 事件）
+    pub fn with_runtime(self, runtime: Arc<dyn BatchRuntime>) -> Self;
 
-    /// 录音结束：冲刷 segmenter，等待队列 drain，stitch
+    /// 录音中：送入 PCM 帧
+    pub fn on_audio_frame(&mut self, samples: &[f32]);
+
+    /// 录音结束：冲刷 segmenter，等待队列 drain（带超时），stitch
+    /// 超时后标记剩余段为 failed，尽可能 stitch
     pub async fn finish(&mut self) -> Result<batch::Response>;
 
-    /// 取结果（若已完成则立即返回）
-    pub async fn result(&mut self) -> Result<batch::Response>;
-
-    /// 取消
-    pub fn cancel(&mut self);
-
-    /// 当前进度
+    pub fn state(&self) -> &ManagerState;
     pub fn progress(&self) -> QueueProgress;
 }
 
-/// PCM 发送端，给 Source 管道用
 pub type PcmSender = tokio::sync::mpsc::Sender<Arc<[f32]>>;
+
+/// 从 DB 恢复时使用的已完成段记录
+pub struct PersistedCompletedSegment {
+    pub index: usize,
+    pub global_start_ms: i64,
+    pub response: batch::Response,
+}
 ```
 
 **Manager 状态机：**
 
 ```
 Accumulating
-  │ on_audio_frame: 累积至 total_samples > min_duration_secs × sample_rate
+  │ on_audio_frame: 首个 frame 到达时立即跃迁
   │                → 将 buffer 转移到 Segmenter → Active
-  │                录音结束: flush()，总时长 < min_duration_secs
-  │                → 整段提交标准 Batch（fallback）
+  │                录音结束（finish 前无 frame）: buffer 为空 → 报错
   │
   ▼
 Active
   │ on_audio_frame: feed → Segmenter → enqueue → try_dispatch
   │ segmenter.ready: 写 temp WAV → Queue.enqueue
   │ queue.poll_completed: Stitcher.add_segment
+  │                      → if runtime.is_some():
+  │                          emit BatchSegmentResult { session_id, segment_index, response }
   │ 录音结束: 调用 finish() → Finalizing
   │
   ▼
 Finalizing
   │ segmenter.flush() → 写最后 temp WAV → enqueue
-  │ queue.drain() → 等待所有完成
-  │ stitcher.stitch() → Completed
-  │
+  │ queue.drain() →  等待所有完成
+  │                  poll_completed 循环 → 同上 emit BatchSegmentResult
+  │ stitcher.stitch() → StitchOutput { response, segment_boundaries, gap_warnings }
+  │                  → emit Completed（前端拼合完整结果 + 虚线分隔）
   ▼
 Completed
   │ result() 立即返回 batch::Response
-  │
 
-Accumulating → Failed (录音时长 < min_duration_secs 时整段提交失败)
+Accumulating → Failed (buffer 为空时 finish 报错)
 Active → Failed (段提交耗尽重试)
 Finalizing → Failed (stitch 失败)
 ```
@@ -904,25 +883,58 @@ Recording ends → CaptureLifecycleEvent::Stopped
   → persist callback writes to transcripts table (same as standard batch)
 ```
 
-### v2: 进度事件（可选）
+### v2: 增量展示事件（已实现 ✅）
 
 新增 `TranscriptionEvent` 变体：
 
 ```ts
-// 前端
+// Rust 端: BatchSegmentResult { session_id, segment_index, response }
+// TS 端映射为:
 type TranscriptionEvent =
   | { type: "started" }
   | { type: "completed"; response: BatchResponse; mode: BatchRunMode }
   | { type: "progress"; event: BatchStreamEvent }
-  | { type: "progressive_progress"; progress: ProgressiveBatchProgress } // ← 新增
+  | { type: "segmentResult"; sessionId: string; segmentIndex: number; response: BatchResponse }
   | { type: "failed"; code: BatchErrorCode; error: string };
-
-interface ProgressiveBatchProgress {
-  totalSegments: number;
-  completedSegments: number;
-  percentage: number;
-}
 ```
+
+**前端处理流程：**
+
+```
+batch.ts:
+  state.batchSegments: Record<string, Record<number, BatchResponse>>
+    ↑ sessionId → segmentIndex → response
+
+  handleBatchSegmentResult(action):
+    batchSegments[sessionId][segmentIndex] = response
+    → 自动触发 SegmentPreview 重新渲染
+    → handleBatchResponse 时自动清理 batchSegments[sessionId]
+
+general-batch.ts:
+  收到 payload.type === "segmentResult" → handleBatchSegmentResult
+
+state.ts (running_batch screen):
+  新增 segmentResponses 字段 → SegmentPreview 从中读取按序展示
+
+index.tsx:
+  SegmentPreview 组件：在进度下方按顺序展示已完成的片段
+  每个片段用 BatchResponse 渲染文字 + 虚线分隔
+
+empty.tsx:
+  显示 "N segments transcribed"
+
+segment.tsx:
+  检测 word.metadata.segment_boundary → 渲染虚线分隔标记
+```
+
+**与进度条方案的区别：**
+
+| 维度     | 进度条（原设计）                          | 增量展示（当前实现）                               |
+| -------- | ----------------------------------------- | -------------------------------------------------- |
+| 用户看到 | 百分比数字                                | 逐段看到完整转录文字                               |
+| 实现位置 | `TranscriptionEvent::progressive_progress` | `BatchSegmentResult` 事件 + 前端 buffer            |
+| 等待时间 | 透明度提示，仍需等全部完成                | 每段完成立即展示，消除等待焦虑                     |
+| 完成后   | 进度条→100%→完整结果                      | 各段文字→自动接合成完整结果 + 虚线分段标记         |
 
 ---
 
@@ -951,9 +963,80 @@ run_progressive_batch_from_file:
 - s16le 编码临时：30s × 48000 × 2B = ~2.9 MB
 - **总峰值：~15 MB**（对比原 `source.collect()` 全文件解码 3h × 48000 × 4B × 2ch ≈ 4 GB）
 
-**异常 fallback：** 录音文件本身由 Recorder 独立维护（`audio.wav` / `audio.mp3`）。若 Progressive Batch 失败，`startTranscription` 可直接从文件跑标准 Batch，无数据丢失。
+**异常处理（v2 改进）：** 
+- 不再 fallback 到标准 batch。重试协议 + 持久化兜底
+- 所有重试放弃后 → job 标记 `partial`，response metadata 记录 `abandoned_segments`
+- UI 显示 "部分段转录失败" 提示
+- 用户可随时 "Continue Progressive Batch" 重试放弃的段
 
 **临时目录仅用于 session_dir：** `std::env::temp_dir().join("progressive-batch-{session_id}")` 由 `run_progressive_batch_from_file` 创建，用于存放可能的 debug 日志，不写音频文件。
+
+---
+
+## 7.5 Continue 流程（v2 新增）
+
+```
+App 启动 / 用户点击 "Continue Progressive Batch"
+  │
+  ├─ 1. 查询 DB: progressive_batch_jobs WHERE session_id = ? AND status IN ('interrupted', 'partial')
+  │
+  ├─ 2. 找到 job → 检查 config 一致性
+  │       如果当前 provider/model/segment_duration_ms 与 job 不一致:
+  │         → 提示 "配置已变化，请使用 Re-transcribe (Progressive)"
+  │       如果一致:
+  │         → 继续
+  │
+  ├─ 3. 从 DB 加载已完成段
+  │        SELECT * FROM progressive_batch_segments
+  │        WHERE job_id = ? AND status = 'completed'
+  │        → 反序列化 response_json → Vec<PersistedCompletedSegment>
+  │
+  ├─ 4. 打开音频文件（从 session_attachments 获取路径）
+  │
+  ├─ 5. 创建 Segmenter + 初始化 Stitcher（预装已完成段）
+  │
+  ├─ 6. 流式读取音频文件 PCM（同 run_progressive_batch_from_file）
+  │      for each segment produced by Segmenter:
+  │        if segment.index in stitcher: skip（已完成）
+  │        else: enqueue for submission
+  │
+  ├─ 7. finish() → drain(timeout) → stitch
+  │
+  └─ 8. 更新 DB：新完成的段写入 progressive_batch_segments
+```
+
+---
+
+## 7.6 UI 增量展示（Sprint 2 核心可视交付）
+
+**已有组件（Sprint 1 实现但未连接 live 路径）：**
+
+| 组件 | 位置 | 功能 |
+|------|------|------|
+| `batchSegments` state | `batch.ts` | `Record<sessionId, Record<segmentIndex, BatchResponse>>` |
+| `handleBatchSegmentResult` | `batch.ts` | 收到每段结果后存入 map |
+| `SegmentPreview` | `index.tsx` | 按序展示已完成片段文字 |
+| `segmentCount` | `empty.tsx` | "N segments transcribed" |
+| `segment_boundary` 标记 | `segment.tsx` | 虚线分隔各段 |
+
+**Sprint 2 激活条件：** PCM 实时流接入 Manager 后，live recording 过程中自动触发 `BatchSegmentResult` 事件 → 前端 buffer 逐段展示。用户不需要额外操作即可看到每段完成后的转写文字。
+
+**右键菜单变更：**
+
+```
+当前:
+  Copy
+  Re-transcribe
+  Delete recording
+
+Sprint 2 改为:
+  Copy
+  Re-transcribe (Total)           ← 全文件 batch（现有行为）
+  Re-transcribe (Progressive)     ← 从头跑 progressive batch
+  Continue Progressive Batch       ← 仅当有未完成 job 时出现
+  ───────────
+  Delete recording
+```
 
 ---
 
@@ -985,7 +1068,7 @@ crates/listener2-core/src/
 | 临时文件            | ✅ 无（PCM 在内存中直接 POST audio/pcm）                    | 可选写恢复文件                          |
 | 持久化              | ❌ 全内存                                                   | ✅ `progressive_batch_jobs/segments` 表 |
 | 断点恢复            | ❌ crash 后 fallback 标准 batch                             | ✅ 查表恢复                             |
-| 进度前端            | ❌ 无（用户只看等待）                                       | ✅ 进度条                               |
+| 进度前端            | ✅ 增量展示（`BatchSegmentResult` + 前端 buffer + SegmentPreview） | ✅ 进度条（可选扩展）                  |
 | PCM 实时流集成      | ❌ 仅从文件读取                                             | ✅ Source pipeline 馈送                 |
 | live recording 模式 | ❌ `effective_transcription_mode()` 忽略 `ProgressiveBatch` | ✅ 正确路由                             |
 | WebSocket 控制面    | ❌ 纯 HTTP                                                  | 🔜 待定                                 |
@@ -997,14 +1080,14 @@ crates/listener2-core/src/
 
 ### 已实现的组件（所有在 `crates/listener2-core/src/batch/progressive_batch/`）
 
-| 模块                      | 文件             | 关键功能                                                                 | 测试数            |
-| ------------------------- | ---------------- | ------------------------------------------------------------------------ | ----------------- |
-| `ProgressiveBatchManager` | `mod.rs`         | 状态机：Accumulating → Active → Completed/Failed，on_audio_frame，finish | 14                |
-| `Segmenter`               | `segmenter.rs`   | 固定时长分段 + 1s overlap，feed/flush                                    | 29                |
-| `BatchQueue`              | `queue.rs`       | N=2 并发，HTTP multipart POST，重试 3 次，drain                          | 17                |
-| `Stitcher`                | `stitcher.rs`    | word 级全局偏移，segment 级去重，gap 检测                                | 15                |
-| Integration               | `integration.rs` | `run_progressive_batch_from_file` — 公共入口                             | 嵌入 Manager 测试 |
-| **合计**                  | **5 文件**       | **~113 K 代码**                                                          | **75+**           |
+| 模块                      | 文件             | 关键功能                                                                                   | 测试数            |
+| ------------------------- | ---------------- | ------------------------------------------------------------------------------------------ | ----------------- |
+| `ProgressiveBatchManager` | `mod.rs`         | 状态机 + `runtime: Option` + `with_runtime()` + `poll_completed` emit `BatchSegmentResult` | 14                |
+| `Segmenter`               | `segmenter.rs`   | 固定时长分段 + 1s overlap，feed/flush                                                      | 29                |
+| `BatchQueue`              | `queue.rs`       | N=2 并发，复用 `transcription_url()` + `build_batch_multipart()` + `create_client()`      | 17                |
+| `Stitcher`                | `stitcher.rs`    | `TaggedWord` 追踪词源 + `segment_boundaries` + `gap_warnings` + word 级去重                | 15                |
+| Integration               | `integration.rs` | `run_progressive_batch_from_file` — 公共入口，透传 `runtime` 参数                          | 嵌入 Manager 测试 |
+| **合计**                  | **5 文件**       | **~113 K 代码**                                                                            | **109+**          |
 
 ### 未实现的部分（设计文档有但代码尚无）
 
@@ -1012,8 +1095,8 @@ crates/listener2-core/src/
 | --- | ----------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------- |
 | 1   | live recording Source pipeline 集成                   | §5.2-5.4     | `SourceArgs.pcm_tx`、Pipeline dispatch、Session Supervisor 均未改动                                  |
 | 2   | `effective_transcription_mode()` 修复                 | §5.1         | `ProgressiveBatch` 当前回退为 `Live`，应触发 batch 路径                                              |
-| 3   | 前端 progress 事件                                    | §6 v2        | `TranscriptionEvent.progressive_progress` 未定义                                                     |
+| 3   | 前端进度条（已通过增量展示替代）                    | §6 v2        | `BatchSegmentResult` 事件 + 前端 buffer + `SegmentPreview` 已实现，替代了原进度条设计                  |
 | 4   | v2 持久化表                                           | §3 v2        | `progressive_batch_jobs` / `progressive_batch_segments` 表未创建                                     |
 | 5   | 用户可配置 segment_overlap_ms / max_retries           | §9 v2        | 当前硬编码 1000ms / 3                                                                                |
 | 6   | 实时录音时 ProgressiveBatch 模式走通                  | §5.1-5.4     | §5.1 修复 + §5.2-5.4 实现 + 前端 `stt_mode=progressive` → `TranscriptionMode::ProgressiveBatch` 贯通 |
-| 7   | `min_duration_secs` 与 `segment_duration_ms` 逻辑重叠 | §4.0         | 当前实现阈值恒等于段长，`min_duration_secs` 字段存在但实际由段长决定                                 |
+

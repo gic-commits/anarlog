@@ -18,6 +18,8 @@ pub use stitcher::{CompletedSegment, Stitcher, StitcherConfig};
 
 use owhisper_interface::batch;
 
+use crate::{BatchEvent, BatchRuntime};
+
 use crate::batch::BatchProvider;
 
 pub type PcmSender = tokio::sync::mpsc::Sender<Arc<[f32]>>;
@@ -46,11 +48,11 @@ fn default_write_wav() -> WriteWavFn {
 
 #[derive(Debug, Clone)]
 pub struct ProgressiveBatchConfig {
+    pub session_id: String,
     pub sample_rate: u32,
     pub segment_duration_ms: u32,
     pub overlap_ms: u32,
     pub max_concurrency: usize,
-    pub min_duration_secs: u32,
     pub base_url: String,
     pub api_key: String,
     pub model: Option<String>,
@@ -62,11 +64,11 @@ pub struct ProgressiveBatchConfig {
 impl Default for ProgressiveBatchConfig {
     fn default() -> Self {
         Self {
+            session_id: String::new(),
             sample_rate: 48000,
             segment_duration_ms: 30000,
             overlap_ms: 1000,
             max_concurrency: 2,
-            min_duration_secs: 180,
             base_url: String::new(),
             api_key: String::new(),
             model: None,
@@ -80,7 +82,6 @@ impl Default for ProgressiveBatchConfig {
 pub enum ManagerState {
     Accumulating {
         buffer: Vec<f32>,
-        total_samples: u64,
     },
     Active {
         segmenter: Segmenter,
@@ -105,6 +106,7 @@ pub struct ProgressiveBatchManager {
     segments_dir: PathBuf,
     write_wav_fn: WriteWavFn,
     submit_fn: SubmitSegmentFn,
+    runtime: Option<Arc<dyn BatchRuntime>>,
 }
 
 impl ProgressiveBatchManager {
@@ -116,13 +118,18 @@ impl ProgressiveBatchManager {
         Self {
             state: ManagerState::Accumulating {
                 buffer: Vec::new(),
-                total_samples: 0,
             },
             segments_dir,
             write_wav_fn: default_write_wav(),
             submit_fn: default_submit_fn(),
+            runtime: None,
             config,
         }
+    }
+
+    pub fn with_runtime(mut self, runtime: Arc<dyn BatchRuntime>) -> Self {
+        self.runtime = Some(runtime);
+        self
     }
 
     #[cfg(test)]
@@ -136,11 +143,11 @@ impl ProgressiveBatchManager {
         Self {
             state: ManagerState::Accumulating {
                 buffer: Vec::new(),
-                total_samples: 0,
             },
             segments_dir,
             write_wav_fn: write_wav,
             submit_fn: submit,
+            runtime: None,
             config,
         }
     }
@@ -166,22 +173,14 @@ impl ProgressiveBatchManager {
         let segments_dir = self.segments_dir.clone();
         let write_wav = self.write_wav_fn.clone();
         let sample_rate = self.config.sample_rate;
+        let runtime = self.runtime.clone();
 
         let mut write_queue: Vec<(PathBuf, AudioSegment)> = Vec::new();
         let transition = match &mut self.state {
-            ManagerState::Accumulating {
-                buffer,
-                total_samples,
-            } => {
+            ManagerState::Accumulating { buffer } => {
                 buffer.extend_from_slice(samples);
-                *total_samples += samples.len() as u64;
-                let min = self.config.min_duration_secs as u64 * self.config.sample_rate as u64;
-                if *total_samples >= min {
-                    let buf = std::mem::take(buffer);
-                    Some(buf)
-                } else {
-                    None
-                }
+                let buf = std::mem::take(buffer);
+                Some(buf)
             }
             ManagerState::Active {
                 segmenter,
@@ -190,10 +189,7 @@ impl ProgressiveBatchManager {
             } => {
                 let segments = segmenter.feed(samples);
                 if !segments.is_empty() {
-                    tracing::debug!(
-                        "[progressive] active: produced {} segments",
-                        segments.len(),
-                    );
+                    tracing::debug!("[progressive] active: produced {} segments", segments.len(),);
                 }
                 for seg in segments {
                     let path = segments_dir.join(format!("seg_{}.wav", seg.index));
@@ -213,6 +209,13 @@ impl ProgressiveBatchManager {
                         response,
                     } = result
                     {
+                        if let Some(ref rt) = runtime {
+                            rt.emit(BatchEvent::BatchSegmentResult {
+                                session_id: self.config.session_id.clone(),
+                                segment_index: index,
+                                response: response.clone(),
+                            });
+                        }
                         stitcher.add_segment(CompletedSegment {
                             index,
                             global_start_ms,
@@ -395,6 +398,13 @@ impl ProgressiveBatchManager {
                 response,
             } = result
             {
+                if let Some(ref rt) = self.runtime {
+                    rt.emit(BatchEvent::BatchSegmentResult {
+                        session_id: self.config.session_id.clone(),
+                        segment_index: index,
+                        response: response.clone(),
+                    });
+                }
                 stitcher.add_segment(CompletedSegment {
                     index,
                     global_start_ms,
@@ -499,7 +509,6 @@ mod tests {
             segment_duration_ms: 100,
             overlap_ms: 10,
             max_concurrency: 2,
-            min_duration_secs: 1,
             base_url: "http://localhost:8080/v1".to_string(),
             api_key: "test-key".to_string(),
             model: None,
@@ -519,24 +528,10 @@ mod tests {
         assert!(matches!(manager.state(), ManagerState::Accumulating { .. }));
     }
 
-    #[test]
-    fn test_accumulating_below_threshold_stays() {
-        let cfg = ProgressiveBatchConfig {
-            sample_rate: 1000,
-            min_duration_secs: 10,
-            ..test_config()
-        };
-        let mut manager =
-            ProgressiveBatchManager::with_fns(cfg, mock_write_wav(), mock_submit_success());
-        manager.on_audio_frame(&[0.0; 100]);
-        assert!(matches!(manager.state(), ManagerState::Accumulating { .. }));
-    }
-
     #[tokio::test]
-    async fn test_accumulating_above_threshold_transitions_to_active() {
+    async fn test_accumulating_transitions_to_active_on_first_frame() {
         let cfg = ProgressiveBatchConfig {
             sample_rate: 1000,
-            min_duration_secs: 1,
             segment_duration_ms: 100,
             overlap_ms: 10,
             max_concurrency: 2,
@@ -544,7 +539,7 @@ mod tests {
         };
         let mut manager =
             ProgressiveBatchManager::with_fns(cfg, mock_write_wav(), mock_submit_success());
-        manager.on_audio_frame(&[0.0; 1000]);
+        manager.on_audio_frame(&[0.0; 100]);
         assert!(matches!(manager.state(), ManagerState::Active { .. }));
     }
 
@@ -570,7 +565,6 @@ mod tests {
 
         let cfg = ProgressiveBatchConfig {
             sample_rate: 1000,
-            min_duration_secs: 1,
             segment_duration_ms: 100,
             overlap_ms: 10,
             max_concurrency: 2,
@@ -619,13 +613,13 @@ mod tests {
     async fn test_double_finish_returns_same_result() {
         let cfg = ProgressiveBatchConfig {
             sample_rate: 1000,
-            min_duration_secs: 1,
             segment_duration_ms: 100,
             overlap_ms: 10,
             max_concurrency: 2,
             session_dir: tempfile::tempdir().unwrap().path().to_path_buf(),
             ..test_config()
         };
+
         let mut manager =
             ProgressiveBatchManager::with_fns(cfg, mock_write_wav(), mock_submit_success());
         manager.on_audio_frame(&[0.0; 1000]);
@@ -636,22 +630,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_on_audio_frame_cumulative_before_active() {
+    async fn test_on_audio_frame_transitions_to_active_immediately() {
         let cfg = ProgressiveBatchConfig {
             sample_rate: 1000,
-            min_duration_secs: 3,
             segment_duration_ms: 100,
             overlap_ms: 10,
             ..test_config()
         };
         let mut manager =
             ProgressiveBatchManager::with_fns(cfg, mock_write_wav(), mock_submit_success());
-        for _ in 0..2 {
-            manager.on_audio_frame(&[0.0; 1000]);
-            assert!(matches!(manager.state(), ManagerState::Accumulating { .. }));
-        }
-        manager.on_audio_frame(&[0.0; 1000]);
+        manager.on_audio_frame(&[0.0; 100]);
         assert!(matches!(manager.state(), ManagerState::Active { .. }));
+        assert!(manager.progress().total > 0);
     }
 
     #[tokio::test]
@@ -832,7 +822,6 @@ mod tests {
             segment_duration_ms: SEG_MS,
             overlap_ms: OVL_MS,
             max_concurrency: 2,
-            min_duration_secs: 1,
             session_dir: session_dir.path().to_path_buf(),
             ..Default::default()
         };
@@ -949,17 +938,14 @@ mod tests {
             segment_duration_ms: 100,
             overlap_ms: 10,
             max_concurrency: 10,
-            min_duration_secs: 10,
             session_dir: tempfile::tempdir().unwrap().path().to_path_buf(),
             ..test_config()
         };
 
         let mut manager = ProgressiveBatchManager::with_fns(cfg, write_fn, mock_submit_success());
-        // 500 samples at 1000Hz = 0.5s — below min_duration_secs (10s), stays Accumulating
         manager.on_audio_frame(&[0.0; 500]);
-        assert!(matches!(manager.state(), ManagerState::Accumulating { .. }));
+        assert!(matches!(manager.state(), ManagerState::Active { .. }));
 
-        // finish() should create a segmenter, feed the 500 samples, flush, and submit
         let result = manager.finish().await;
         assert!(
             result.is_ok(),
@@ -979,17 +965,16 @@ mod tests {
             sample_rate: 1000,
             segment_duration_ms: 100,
             overlap_ms: 10,
-            max_concurrency: 10,
-            min_duration_secs: 1,
+            max_concurrency: 2,
             session_dir: tempfile::tempdir().unwrap().path().to_path_buf(),
             ..test_config()
         };
 
         let mut manager =
             ProgressiveBatchManager::with_fns(cfg, mock_write_wav(), mock_submit_success());
-        // Feed enough to trigger Active (1000 samples at 1000Hz = 1s)
-        manager.on_audio_frame(&[0.0; 1000]);
+        manager.on_audio_frame(&[0.0; 100]);
         assert!(matches!(manager.state(), ManagerState::Active { .. }));
+        assert!(manager.progress().total > 0);
 
         let progress_before = manager.progress();
         assert!(progress_before.total > 0, "should have segments enqueued");
@@ -1067,7 +1052,6 @@ mod tests {
             segment_duration_ms: 100,
             overlap_ms: 10,
             max_concurrency: 2,
-            min_duration_secs: 1,
             session_dir: tempfile::tempdir().unwrap().path().to_path_buf(),
             ..test_config()
         };
@@ -1140,7 +1124,6 @@ mod tests {
             segment_duration_ms: 500,
             overlap_ms: 0,
             max_concurrency: 2,
-            min_duration_secs: 1,
             session_dir: tempfile::tempdir().unwrap().path().to_path_buf(),
             ..test_config()
         };
@@ -1171,7 +1154,6 @@ mod tests {
             segment_duration_ms: 100,
             overlap_ms: 0,
             max_concurrency: 2,
-            min_duration_secs: 1,
             session_dir: tempfile::tempdir().unwrap().path().to_path_buf(),
             ..test_config()
         };

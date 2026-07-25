@@ -385,28 +385,28 @@ async fn submit_segment_http(
         .mime_str("audio/pcm")
         .map_err(|e| format!("failed to create multipart: {e}"))?;
 
-    let mut form = reqwest::multipart::Form::new()
-        .part("file", file_part)
-        .text("response_format", "verbose_json");
+    let listen_params = owhisper_interface::ListenParams {
+        model: config.model.clone(),
+        languages: config
+            .language
+            .as_ref()
+            .map(|l| l.parse::<hypr_language::Language>().ok())
+            .into_iter()
+            .flatten()
+            .collect(),
+        ..Default::default()
+    };
 
-    if let Some(ref model) = config.model {
-        form = form.text("model", model.clone());
-    }
-    if let Some(ref lang) = config.language {
-        form = form.text("language", lang.clone());
-    }
+    let url = owhisper_client::OpenAIAdapter::transcription_url(&config.base_url)
+        .map_err(|e| format!("failed to build transcription URL: {e}"))?;
 
-    let mut url: url::Url = config
-        .base_url
-        .parse()
-        .map_err(|e: url::ParseError| format!("invalid base_url: {e}"))?;
-    let path = url.path().trim_end_matches('/');
-    if !path.ends_with("audio/transcriptions") {
-        url.path_segments_mut()
-            .map_err(|_| "cannot modify base_url path segments".to_string())?
-            .pop_if_empty()
-            .push("audio/transcriptions");
-    }
+    let form = owhisper_client::OpenAIAdapter::build_batch_multipart(
+        file_part,
+        &listen_params,
+        true,
+        false,
+    )
+    .map_err(|e| format!("failed to build request: {e}"))?;
 
     tracing::debug!(
         "[progressive] submit_segment_http idx={} url={} model={:?} lang={:?}",
@@ -416,13 +416,11 @@ async fn submit_segment_http(
         config.language,
     );
 
-    let client = reqwest::Client::new();
-    let mut req = client.post(url).multipart(form);
-    if !config.api_key.is_empty() {
-        req = req.header("Authorization", format!("Bearer {}", config.api_key));
-    }
-
-    let resp = req
+    let client = owhisper_client::create_client();
+    let resp = client
+        .post(url)
+        .multipart(form)
+        .header("Authorization", format!("Bearer {}", config.api_key))
         .send()
         .await
         .map_err(|e| format!("HTTP request failed: {e}"))?;

@@ -253,6 +253,12 @@ pub enum TranscriptionEvent {
         response: owhisper_interface::batch::Response,
         mode: TranscriptionRunMode,
     },
+    #[serde(rename = "segmentResult")]
+    SegmentResult {
+        session_id: String,
+        segment_index: usize,
+        response: owhisper_interface::batch::Response,
+    },
     #[serde(rename = "stopped")]
     Stopped { session_id: String },
     #[serde(rename = "failed")]
@@ -646,6 +652,15 @@ impl From<listener2::BatchEvent> for TranscriptionEvent {
             listener2::BatchEvent::BatchResponseStreamed { session_id, event } => {
                 Self::Progress { session_id, event }
             }
+            listener2::BatchEvent::BatchSegmentResult {
+                session_id,
+                segment_index,
+                response,
+            } => Self::SegmentResult {
+                session_id,
+                segment_index,
+                response,
+            },
             listener2::BatchEvent::BatchFailed {
                 session_id,
                 code,

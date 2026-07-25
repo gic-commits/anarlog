@@ -45,6 +45,12 @@ pub enum BatchEvent {
         session_id: String,
         event: BatchStreamEvent,
     },
+    #[serde(rename = "batchSegmentResult")]
+    BatchSegmentResult {
+        session_id: String,
+        segment_index: usize,
+        response: BatchResponse,
+    },
     #[serde(rename = "batchFailed")]
     BatchFailed {
         session_id: String,

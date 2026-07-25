@@ -13,7 +13,16 @@ use progressive::run_progressive_batch_session;
 use progressive_batch::run_progressive_batch_from_file;
 use simple::{run_direct_batch_for_adapter_kind, run_soniqo_batch};
 
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumString)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::Display,
+    strum::EnumString,
+)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
@@ -207,6 +216,7 @@ async fn run_batch_inner(
 
     if params.progressive_batch {
         return run_progressive_batch_from_file(
+            runtime.clone(),
             params,
             metadata.sample_rate,
             metadata.channels,

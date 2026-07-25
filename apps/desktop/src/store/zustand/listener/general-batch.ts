@@ -222,6 +222,16 @@ export const runBatchSession = async <T extends BatchStore>(
           return;
         }
 
+        if (payload.type === "segmentResult") {
+          stopSyntheticProgress();
+          get().handleBatchSegmentResult(
+            sessionId,
+            payload.segment_index,
+            payload.response,
+          );
+          return;
+        }
+
         if (payload.type === "completed") {
           resolveSuccess(
             {
@@ -254,9 +264,7 @@ export const runBatchSession = async <T extends BatchStore>(
       .then((fn) => {
         unlisten = fn;
 
-        console.log(
-          "[DEBUG] runBatchSession calling startTranscription cmd",
-        );
+        console.log("[DEBUG] runBatchSession calling startTranscription cmd");
 
         transcriptionCommands
           .startTranscription(params)
@@ -277,7 +285,10 @@ export const runBatchSession = async <T extends BatchStore>(
             }
           })
           .catch((error) => {
-            console.error("[DEBUG] runBatchSession startTranscription exception", error);
+            console.error(
+              "[DEBUG] runBatchSession startTranscription exception",
+              error,
+            );
             rejectFailure(error, reject);
           });
       })

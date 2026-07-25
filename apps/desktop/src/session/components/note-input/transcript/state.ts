@@ -1,4 +1,4 @@
-import type { DegradedError } from "@hypr/plugin-transcription";
+import type { BatchResponse, DegradedError } from "@hypr/plugin-transcription";
 
 import { useAudioPlayer } from "~/audio-player";
 import { getLiveCaptureUiMode } from "~/store/zustand/listener/general-shared";
@@ -15,6 +15,7 @@ export type TranscriptScreen =
       kind: "running_batch";
       percentage?: number;
       phase?: BatchPhase;
+      segmentResponses: Record<number, BatchResponse>;
     }
   | {
       kind: "batch_fallback";
@@ -48,6 +49,9 @@ export function useTranscriptScreen({
     (state) => state.batch[sessionId]?.error ?? null,
   );
   const batchProgress = useListener((state) => state.batch[sessionId] ?? null);
+  const batchSegmentResponses = useListener(
+    (state) => state.batchSegments[sessionId] ?? {},
+  );
   const live = useListener((state) => state.live);
   const { audioExists } = useAudioPlayer();
 
@@ -66,6 +70,7 @@ export function useTranscriptScreen({
       kind: "running_batch",
       percentage: batchProgress?.percentage,
       phase: batchProgress?.phase,
+      segmentResponses: batchSegmentResponses,
     };
   }
 

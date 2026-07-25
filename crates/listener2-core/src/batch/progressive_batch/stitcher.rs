@@ -72,7 +72,12 @@ impl Stitcher {
             return Err(StitcherError::MissingSegments(missing));
         }
 
-        let mut all_words = Vec::new();
+        struct TaggedWord {
+            word: batch::Word,
+            seg_index: usize,
+        }
+
+        let mut tagged: Vec<TaggedWord> = Vec::new();
         let mut gaps: Vec<(usize, i64)> = Vec::new();
         let mut prev_expected_end_ms: Option<i64> = None;
 
@@ -104,9 +109,9 @@ impl Stitcher {
 
             let offset_secs = segment.global_start_ms as f64 / 1000.0;
 
-            let prev_max_end = all_words
+            let prev_max_end = tagged
                 .last()
-                .map(|w: &batch::Word| w.end)
+                .map(|w: &TaggedWord| w.word.end)
                 .unwrap_or(f64::NEG_INFINITY);
 
             let overlap_secs = self.config.overlap_ms as f64 / 1000.0;
@@ -124,15 +129,29 @@ impl Stitcher {
                     continue;
                 }
 
-                all_words.push(w);
+                tagged.push(TaggedWord {
+                    word: w,
+                    seg_index: *index,
+                });
             }
         }
 
-        if all_words.is_empty() {
+        if tagged.is_empty() {
             return Err(StitcherError::EmptyResponse);
         }
 
-        all_words.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+        tagged.sort_by(|a, b| a.word.start.partial_cmp(&b.word.start).unwrap());
+
+        // Record word indices where a new segment contributes its first word.
+        let mut boundaries: Vec<usize> = Vec::new();
+        boundaries.push(0);
+        for i in 1..tagged.len() {
+            if tagged[i].seg_index != tagged[i - 1].seg_index {
+                boundaries.push(i);
+            }
+        }
+
+        let all_words: Vec<batch::Word> = tagged.into_iter().map(|t| t.word).collect();
 
         let transcript = all_words
             .iter()
@@ -145,6 +164,7 @@ impl Stitcher {
         let mut metadata = serde_json::json!({
             "total_duration": total_duration,
             "segments_stitched": self.segments.len(),
+            "segment_boundaries": boundaries,
         });
 
         if !gaps.is_empty() {

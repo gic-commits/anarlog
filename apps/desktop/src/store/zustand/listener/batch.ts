@@ -38,6 +38,7 @@ export type BatchState = {
       hintsByChannel: Record<number, RuntimeSpeakerHint[]>;
     }
   >;
+  batchSegments: Record<string, Record<number, BatchResponse>>;
   batchPersist: Record<string, BatchPersistCallback>;
 };
 
@@ -48,6 +49,11 @@ export type BatchActions = {
   handleBatchResponseStreamed: (
     sessionId: string,
     event: BatchStreamEvent,
+  ) => void;
+  handleBatchSegmentResult: (
+    sessionId: string,
+    segmentIndex: number,
+    response: BatchResponse,
   ) => void;
   handleBatchFailed: (
     sessionId: string,
@@ -73,6 +79,7 @@ export const createBatchSlice = <T extends BatchState>(
 ): BatchState & BatchActions => ({
   batch: {},
   batchPreview: {},
+  batchSegments: {},
   batchPersist: {},
 
   handleBatchStarted: (sessionId, phase) => {
@@ -96,7 +103,24 @@ export const createBatchSlice = <T extends BatchState>(
           hintsByChannel: {},
         },
       },
+      batchSegments: {
+        ...state.batchSegments,
+        [sessionId]: {},
+      },
     }));
+  },
+
+  handleBatchSegmentResult: (sessionId, segmentIndex, response) => {
+    set((state) => {
+      const segments = state.batchSegments[sessionId] ?? {};
+      return {
+        ...state,
+        batchSegments: {
+          ...state.batchSegments,
+          [sessionId]: { ...segments, [segmentIndex]: response },
+        },
+      };
+    });
   },
 
   handleBatchCompleted: (sessionId) => {
@@ -134,10 +158,12 @@ export const createBatchSlice = <T extends BatchState>(
 
       const { [sessionId]: _, ...rest } = state.batch;
       const { [sessionId]: __, ...restPreview } = state.batchPreview;
+      const { [sessionId]: ___, ...restSegments } = state.batchSegments;
       return {
         ...state,
         batch: rest,
         batchPreview: restPreview,
+        batchSegments: restSegments,
       };
     });
 
@@ -254,10 +280,12 @@ export const createBatchSlice = <T extends BatchState>(
 
       const { [sessionId]: _, ...rest } = state.batch;
       const { [sessionId]: __, ...restPreview } = state.batchPreview;
+      const { [sessionId]: ___, ...restSegments } = state.batchSegments;
       return {
         ...state,
         batch: rest,
         batchPreview: restPreview,
+        batchSegments: restSegments,
       };
     });
   },
@@ -351,7 +379,9 @@ function transformBatch(
       },
     );
 
-    const segmentIndices = (response.metadata as Record<string, unknown> | undefined)?.["segment_indices"] as (number | null | undefined)[] | undefined;
+    const segmentIndices = (
+      response.metadata as Record<string, unknown> | undefined
+    )?.["segment_indices"] as (number | null | undefined)[] | undefined;
 
     if (import.meta.env.DEV) {
       console.log("[batch] metadata:", response.metadata);
@@ -365,9 +395,26 @@ function transformBatch(
       { timingSource, segmentIndices },
     );
 
+    // Mark words at segment boundaries for the final stitched display.
+    const boundaries = (
+      response.metadata as Record<string, unknown> | undefined
+    )?.["segment_boundaries"] as number[] | undefined;
+    if (boundaries) {
+      for (const wordIdx of boundaries) {
+        const w = words[wordIdx];
+        if (w) {
+          w.metadata ??= {};
+          w.metadata.segment_boundary = true;
+        }
+      }
+    }
+
     if (import.meta.env.DEV && words.length > 0) {
       console.log("[batch] first word metadata:", words[0].metadata);
-      console.log("[batch] last word metadata:", words[words.length - 1].metadata);
+      console.log(
+        "[batch] last word metadata:",
+        words[words.length - 1].metadata,
+      );
     }
 
     hints.forEach((hint) => {

@@ -121,6 +121,11 @@ export const SegmentRenderer = memo(
                 {line.words.map((word, idx) => (
                   <Fragment key={word.id ?? `${word.start_ms}-${idx}`}>
                     {idx > 0 ? " " : null}
+                    {word.metadata?.segment_boundary ? (
+                      <>
+                        <span className="border-t-border mx-1 inline-block w-4 border-t border-dashed opacity-50" />{" "}
+                      </>
+                    ) : null}
                     <WordSpan
                       word={word}
                       displayText={getWordDisplayText(word)}

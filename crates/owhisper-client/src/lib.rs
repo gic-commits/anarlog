@@ -13,6 +13,7 @@ mod providers;
 pub(crate) mod test_utils;
 
 pub use error_detection::ProviderError;
+pub use http_client::create_client;
 use owhisper_interface::ListenParams;
 pub use providers::{Auth, Provider, is_meta_model};
 

@@ -13,6 +13,7 @@ export function TranscriptEmptyState({
   hasAudio,
   percentage,
   phase,
+  segmentCount,
   error,
   onRetranscribe,
   onUploadAudio,
@@ -23,6 +24,7 @@ export function TranscriptEmptyState({
   hasAudio?: boolean;
   percentage?: number;
   phase?: "importing" | "transcribing";
+  segmentCount?: number;
   error?: string | null;
   onRetranscribe?: () => void;
   onUploadAudio?: () => void;
@@ -75,6 +77,11 @@ export function TranscriptEmptyState({
           {hasProgress && (
             <p className="text-muted-foreground mt-2 text-sm leading-relaxed tabular-nums">
               {Math.round((percentage ?? 0) * 100)}% complete
+            </p>
+          )}
+          {typeof segmentCount === "number" && segmentCount > 0 && (
+            <p className="text-muted-foreground mt-1 text-xs">
+              {segmentCount} segment{segmentCount > 1 ? "s" : ""} transcribed
             </p>
           )}
         </div>

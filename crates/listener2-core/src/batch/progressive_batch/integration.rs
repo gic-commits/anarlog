@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use hypr_audio_utils::Source;
 
-use crate::batch::{BatchParams, BatchRunOutput, BatchRunMode};
+use crate::batch::{BatchParams, BatchRunMode, BatchRunOutput};
+use crate::{BatchEvent, BatchRuntime};
 
 use super::*;
 
@@ -18,6 +21,7 @@ fn mime_type_for_extension(path: &std::path::Path) -> &'static str {
 }
 
 pub async fn run_progressive_batch_from_file(
+    runtime: Arc<dyn BatchRuntime>,
     params: BatchParams,
     _sample_rate: u32,
     _channels: u8,
@@ -25,10 +29,11 @@ pub async fn run_progressive_batch_from_file(
     let session_id = params.session_id.clone();
     let file_path = params.file_path.clone();
 
-    let source = hypr_audio_utils::source_from_path(&file_path)
-        .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+    let source = hypr_audio_utils::source_from_path(&file_path).map_err(|e| {
+        crate::BatchFailure::ProgressiveBatchFailed {
             message: format!("failed to open audio file: {e}"),
-        })?;
+        }
+    })?;
 
     let file_sample_rate: u32 = source.sample_rate().into();
     let file_channels: usize = source.channels().get().into();
@@ -42,7 +47,13 @@ pub async fn run_progressive_batch_from_file(
 
     // Audio shorter than one segment → POST original file directly.
     if duration_secs < segment_duration_ms as f64 / 1000.0 {
-        return submit_file_direct(std::path::Path::new(&file_path), &params, &session_id).await;
+        return submit_file_direct(
+            runtime,
+            std::path::Path::new(&file_path),
+            &params,
+            &session_id,
+        )
+        .await;
     }
 
     let session_dir = std::env::temp_dir().join(format!("progressive-batch-{session_id}"));
@@ -51,11 +62,11 @@ pub async fn run_progressive_batch_from_file(
     let language = params.languages.first().map(|l| l.to_string());
 
     let config = ProgressiveBatchConfig {
+        session_id: session_id.clone(),
         sample_rate: file_sample_rate,
         segment_duration_ms,
         overlap_ms: 1000,
         max_concurrency: 2,
-        min_duration_secs: 0,
         base_url: params.base_url,
         api_key: params.api_key,
         model: params.model,
@@ -64,7 +75,7 @@ pub async fn run_progressive_batch_from_file(
         session_dir,
     };
 
-    let mut manager = ProgressiveBatchManager::new(config);
+    let mut manager = ProgressiveBatchManager::new(config).with_runtime(runtime);
 
     // Stream PCM in chunks to avoid loading entire file into memory.
     const CHUNK_FRAMES: usize = 48000 * 10;
@@ -109,15 +120,16 @@ pub async fn run_progressive_batch_from_file(
 }
 
 async fn submit_file_direct(
+    runtime: Arc<dyn BatchRuntime>,
     file_path: &std::path::Path,
     params: &BatchParams,
     session_id: &str,
 ) -> crate::Result<BatchRunOutput> {
-    let file_bytes = tokio::fs::read(file_path)
-        .await
-        .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+    let file_bytes = tokio::fs::read(file_path).await.map_err(|e| {
+        crate::BatchFailure::ProgressiveBatchFailed {
             message: format!("failed to read audio file: {e}"),
-        })?;
+        }
+    })?;
 
     let extension = file_path
         .extension()
@@ -126,21 +138,6 @@ async fn submit_file_direct(
     let mime_type = mime_type_for_extension(file_path);
     let file_name = format!("audio.{extension}");
 
-    let client = reqwest::Client::new();
-    let mut url: url::Url = params
-        .base_url
-        .parse()
-        .map_err(|e: url::ParseError| crate::BatchFailure::ProgressiveBatchFailed {
-            message: format!("invalid base_url: {e}"),
-        })?;
-    let path = url.path().trim_end_matches('/');
-    if !path.ends_with("audio/transcriptions") {
-        url.path_segments_mut()
-            .expect("base_url is a valid URL with segments")
-            .pop_if_empty()
-            .push("audio/transcriptions");
-    }
-
     let part = reqwest::multipart::Part::bytes(file_bytes)
         .file_name(file_name)
         .mime_str(mime_type)
@@ -148,15 +145,30 @@ async fn submit_file_direct(
             message: format!("failed to create multipart: {e}"),
         })?;
 
-    let form = reqwest::multipart::Form::new()
-        .part("file", part)
-        .text("model", params.model.clone().unwrap_or_default())
-        .text("response_format", "json");
+    let listen_params = owhisper_interface::ListenParams {
+        model: params.model.clone(),
+        languages: params.languages.clone(),
+        keywords: params.keywords.clone(),
+        ..Default::default()
+    };
 
+    let url = owhisper_client::OpenAIAdapter::transcription_url(&params.base_url).map_err(|e| {
+        crate::BatchFailure::ProgressiveBatchFailed {
+            message: format!("failed to build transcription URL: {e}"),
+        }
+    })?;
+
+    let form =
+        owhisper_client::OpenAIAdapter::build_batch_multipart(part, &listen_params, true, false)
+            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+                message: format!("failed to build request: {e}"),
+            })?;
+
+    let client = owhisper_client::create_client();
     let resp = client
         .post(url)
-        .header("Authorization", format!("Bearer {}", params.api_key))
         .multipart(form)
+        .header("Authorization", format!("Bearer {}", params.api_key))
         .send()
         .await
         .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
@@ -179,20 +191,26 @@ async fn submit_file_direct(
             message: format!("failed to read response body: {e}"),
         })?;
 
-    let response: owhisper_interface::batch::Response = if matches!(
-        params.provider,
-        crate::batch::BatchProvider::OpenAI
-    ) {
-        owhisper_client::OpenAIAdapter::parse_batch_response(&body)
-            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-                message: format!("failed to parse response: {e}"),
+    let response: owhisper_interface::batch::Response =
+        if matches!(params.provider, crate::batch::BatchProvider::OpenAI) {
+            owhisper_client::OpenAIAdapter::parse_batch_response(&body).map_err(|e| {
+                crate::BatchFailure::ProgressiveBatchFailed {
+                    message: format!("failed to parse response: {e}"),
+                }
             })?
-    } else {
-        serde_json::from_str(&body)
-            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-                message: format!("failed to parse response: {e}"),
+        } else {
+            serde_json::from_str(&body).map_err(|e| {
+                crate::BatchFailure::ProgressiveBatchFailed {
+                    message: format!("failed to parse response: {e}"),
+                }
             })?
-    };
+        };
+
+    runtime.emit(BatchEvent::BatchSegmentResult {
+        session_id: session_id.to_string(),
+        segment_index: 0,
+        response: response.clone(),
+    });
 
     Ok(BatchRunOutput {
         session_id: session_id.to_string(),

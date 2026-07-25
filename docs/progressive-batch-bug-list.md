@@ -44,107 +44,103 @@
 
 ## 设计-实现差异（Gaps）
 
-### Gap A: PCM 实时流未集成 Source pipeline
+### Gap A: PCM 实时流未集成 Source pipeline — Sprint 2 Phase A 🎯
 
 | 字段         | 值                                                                                                  |
 | ------------ | --------------------------------------------------------------------------------------------------- |
 | **设计参考** | `progressive-batch-data-structures.md §5.2-5.4`                                                     |
 | **现象**     | `ProgressiveBatchManager.on_audio_frame` 已实现，但未连接到 live recording 的 Source actor pipeline |
 | **当前行为** | Progressive Batch 仅通过 `run_progressive_batch_from_file` 从已有音频文件跑，不用于实时录音         |
-| **影响**     | 新录音 + Progressive Batch 模式 → 实际走了 Live 模式（见 Gap B）                                    |
-| **修复方向** | SourceArgs 新增 `pcm_tx` 字段，Pipeline dispatch 发送 PCM，Session Supervisor 创建 Manager          |
-| **优先级**   | 🟡 中（Gap B 修复后成为必要条件）                                                                   |
+| **影响**     | 前端增量展示组件已就绪但无数据源 — 无法演示                                                        |
+| **修复方向** | SourceArgs 新增 `pcm_tx` 字段，`ListenerRouting` 新变体，Pipeline dispatch，Supervisor 创建 channel |
+| **Sprint 2** | Phase A — 必要前提                                                                                  |
 
-### Gap B: `effective_transcription_mode()` 不识别 `ProgressiveBatch` ✅ 已修复
+### Gap L: Stitcher 不支持 partial stitch — Sprint 2 Phase B 🎯
 
-| 字段         | 值                                                                                                                                      |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| **模块**     | `crates/listener-core/src/actors/session/types.rs`                                                                                      |
-| **现象**     | `stt_mode=progressive` → Rust 端 `TranscriptionMode::ProgressiveBatch` → live session 的 `effective_transcription_mode()` 回退为 `Live` |
-| **根因**     | `effective_transcription_mode()` 仅判断 `== Batch` 和 `!= Batch`，`ProgressiveBatch` 落入 `else` → `Live`                               |
-| **影响**     | 新录音即使设了 Progressive Batch，仍启动 WebSocket listener                                                                             |
-| **修复**     | ✅ **已修复** — Jul 24                                                                                                                  |
-| **修复内容** | `effective_transcription_mode()` 增加 `ProgressiveBatch` 分支，返回自身，不落入 `Live`                                                  |
-| **优先级**   | 🔴 高 → ✅                                                                                                                              |
+| 字段         | 值                                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------------------- |
+| **现象**     | `stitch()` 返回 `Err(MissingSegments)`，`finish()` 遇到 any missing 立即失败                                  |
+| **影响**     | 无法支持"部分段放弃后仍返回可用结果"                                                                          |
+| **修复方向** | `stitch()` 改为永远返回 `Response`，missing 段在 metadata 中记录 `abandoned_segments` + `gap_warnings`        |
+| **Sprint 2** | Phase B — 重试协议的基础                                                                                      |
 
-### Gap F: ProgressiveBatch 短音频未使用 Direct Batch 编码方式 ✅ 已修复
-
-| 字段         | 值                                                                                                                                                                                                           |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **模块**     | `crates/listener2-core/src/batch/progressive_batch/integration.rs`                                                                                                                                           |
-| **现象**     | Re-transcript 短音频（< 3min）时：① `hound::WavReader` 无法读 MP3 文件 → `"Ill-formed WAVE file: no RIFF tag found"`；② PCM f32 → s16le 重编码后 POST `audio/pcm`，与 Direct Batch 的"原文件字节 POST"不一致 |
-| **根因**     | ProgressiveBatch 路径未复用 Direct Batch 的 `streaming_file_part` 方式                                                                                                                                       |
-| **影响**     | MP3 文件无法转录；多了一道无意义的编码/解码 roundtrip                                                                                                                                                        |
-| **修复**     | ✅ **已修复** — Jul 24                                                                                                                                                                                       |
-| **修复内容** | `run_progressive_batch_from_file`：短音频直接 `tokio::fs::read` 原文件字节 + `mime_type_for_extension` 判 MIME → POST。长音频保留 PCM 解码（分段需要）。见 `docs/progressive-batch-hybrid-design.md` 附录 B  |
-| **优先级**   | 🔴 高 → ✅                                                                                                                                                                                                   |
-
-### Gap G: ProgressiveBatch 长音频分段 WAV 编码未对齐 ✅ 已修复
-
-| 字段       | 值                                                                                                                                                    |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **模块**   | `crates/listener2-core/src/batch/progressive_batch/queue.rs`                                                                                          |
-| **现象**   | `submit_segment_http` 之前用 `audio/wav` POST（写临时 WAV 文件再读取），与短音频的原始文件字节 POST 不一致                                            |
-| **修复**   | **Jul 25 — PCM direct POST**：PCM f32 样本在内存中重采样至 16000 Hz + 编码为 s16le，以 `audio/pcm` Content-Type 直接 POST。不写临时文件，不封装 WAV。 |
-| **收益**   | 消除磁盘 I/O（大音频时明显）；POST 格式对齐 Speaches batch 端点原生 PCM 输入能力；内存峰值 ~15MB（原 ~4GB）                                           |
-| **优先级** | 🔴 高 → ✅                                                                                                                                            |
-
-### Potential Concern: `min_duration_secs` 与 `segment_duration_ms` 逻辑重叠
-
-| 字段       | 值                                                                                                                                                                                            |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **模块**   | `crates/listener2-core/src/batch/progressive_batch/mod.rs` + `integration.rs`                                                                                                                 |
-| **现象**   | `ProgressiveBatchConfig` 保留了 `min_duration_secs` 字段（默认 180），但 `integration.rs:44` 实际判断硬编码为 `duration_secs < segment_duration_ms as f64 / 1000.0`，忽略 `min_duration_secs` |
-| **根因**   | 两个独立概念被合并：阈值恒等于一段音频的时长（≥1 段才需要分段）                                                                                                                               |
-| **影响**   | ① `min_duration_secs` 字段是死代码（当前由段长决定）；② 用户无法独立控制阈值（例如设 60s 段长 + 180s 阈值）                                                                                   |
-| **方向**   | 后续可删除 `min_duration_secs` 字段，或恢复独立的阈值语义（需讨论）：分段起始阈值应否独立于段长？                                                                                             |
-| **优先级** | 🟡 中（待讨论）                                                                                                                                                                               |
-
-### Gap C: 前端 progress 事件未实现
-
-| 字段         | 值                                                                                   |
-| ------------ | ------------------------------------------------------------------------------------ |
-| **设计参考** | `progressive-batch-data-structures.md §6 v2`                                         |
-| **当前状态** | `QueueProgress` 数据结构就绪，Manager.progress() 可调用，但前端无对应事件和进度条 UI |
-| **优先级**   | 🟢 低                                                                                |
-
-### Gap D: segment_overlap_ms / max_retries 未配置化
-
-| 字段         | 值                                                                                                        |
-| ------------ | --------------------------------------------------------------------------------------------------------- |
-| **设计参考** | `progressive-batch-hybrid-design.md §7`                                                                   |
-| **当前状态** | `segment_overlap_ms = 1000`、`max_retries = 3` 硬编码在 `ProgressiveBatchConfig::default()` 中，前端无 UI |
-| **优先级**   | 🟢 低                                                                                                     |
-
-### Gap E: v2 持久化表未创建
+### Gap M: `drain()` 无超时 — Sprint 2 Phase B 🎯
 
 | 字段         | 值                                                                            |
 | ------------ | ----------------------------------------------------------------------------- |
-| **设计参考** | `progressive-batch-data-structures.md §3 v2`                                  |
-| **当前状态** | 无 `progressive_batch_jobs` / `progressive_batch_segments` 表，段状态全在内存 |
-| **优先级**   | 🟢 低                                                                         |
+| **现象**     | `drain()` 无限等待，无 timeout                                                |
+| **影响**     | Session 结束时 hang 住                                                        |
+| **修复方向** | 加 `drain(timeout)`，超时 = `segment_duration_ms * 1.5`                       |
+| **Sprint 2** | Phase B                                                                       |
+
+### Gap N: `finish()` 对 partial 结果太苛刻 — Sprint 2 Phase B 🎯
+
+| 字段         | 值                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------- |
+| **现象**     | `finish()` line 382-391：drain 后有 failed 段立即返回 Err，不给 partial 结果                |
+| **影响**     | 即使只有一个段失败，整个 session 的转写结果全部丢弃                                          |
+| **修复方向** | 允许 partial：只有完全无结果时才 Err，否则返回带 `abandoned_segments` 标记的 Response        |
+| **Sprint 2** | Phase B                                                                                     |
+
+### Gap O: v2 持久化表未创建 + Manager 不恢复 — Sprint 2 Phase C 🎯
+
+| 字段         | 值                                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------------- |
+| **设计参考** | `progressive-batch-data-structures.md §3 v2` + §7.5                                               |
+| **当前状态** | 无 `progressive_batch_jobs` / `progressive_batch_segments` 表，Manager 全内存，重启即失           |
+| **修复方向** | DB 表 + Drizzle schema + `TauriBatchRuntime` 写 DB + `Manager::resume()` + `continue_from_file()` |
+| **Sprint 2** | Phase C                                                                                           |
+
+### Gap P: UI 右键菜单未区分转写模式 — Sprint 2 Phase D 🎯
+
+| 字段         | 值                                                                                     |
+| ------------ | -------------------------------------------------------------------------------------- |
+| **现象**     | 右键只有 "Re-transcribe"，不区分 Total / Progressive / Continue                        |
+| **影响**     | 用户无法触发 partial job 的 Continue                                                   |
+| **修复方向** | 菜单裂为三项 + Continue 条件显示                                                       |
+| **Sprint 2** | Phase D                                                                                |
+
+### ✅ 已修复 Gaps
+
+| Gap | 内容 | 修复时间 |
+|-----|------|----------|
+| B | `effective_transcription_mode()` 不识别 `ProgressiveBatch` | Jul 24 |
+| F | 短音频未使用 Direct Batch 编码方式 | Jul 24 |
+| G | 长音频分段 WAV 编码未对齐 | Jul 25 |
+| H | `submit_segment_http` 未复用 shared methods | Jul 25 |
+| I | `ProgressiveBatchManager` Runtime 事件贯通 | Jul 26 |
+| J | Stitcher `segment_boundaries` 元数据 | Jul 26 |
+| K | 前端增量展示 + 分段分隔 UI | Jul 26 |
+
+### 长期 Gaps（Sprint 3+）
+
+| Gap | 内容 | 优先级 |
+|-----|------|--------|
+| D | segment_overlap_ms / max_retries 配置化 | 🟢 低 |
+| C | 前端 progress 事件（已由增量展示替代） | 🟢 已关闭 |
 
 ---
 
 ## 验证计划
 
-### 短期（当前 sprint）✅ 已完成
+### Sprint 1（Jul 24-26）✅ 已完成
 
-1. ✅ 编译并测试新录音 + 三种模式（Live / Batch / Progressive Batch）
-2. ✅ 检查 Console `[DEBUG]` 日志确认路由
-3. ✅ 检查 Rust `[DEBUG]` 日志确认 batch 执行
-4. ✅ 验证 Bug 3 根因
-5. ✅ 修复 Gap B：`effective_transcription_mode()` 识别 `ProgressiveBatch`
-6. ✅ 修复 Gap F：短音频 POST 原文件字节（对齐 Direct Batch）
-7. ✅ Speaches 编码附录 + Direct Batch 对比表
+- ✅ 编译 + 三种模式路由
+- ✅ Bug 1/2/3 修复验证
+- ✅ Gap B/F/G/H/I/J/K 全部修复
+- ✅ `cargo test -p listener2-core` 109/109 ✅
+- ✅ `cargo test -p openai-transcription` 17/17 ✅
+- ✅ `cargo check` + `dprint fmt`
+- ✅ `pnpm -F @hypr/desktop typecheck`
 
-### 中期
+### Sprint 2（本轮）
 
-1. 🔄 修复 Gap A：PCM 流集成（Source pipeline → ProgressiveBatchManager）
-2. ⏳ 端到端测试实时录音走 Progressive Batch（依赖 Gap A）
-
-### 长期
-
-1. Gap C：前端 progress 事件
-2. Gap D：用户可配置参数
-3. Gap E：v2 持久化表
+| Phase | 验证标准 |
+|-------|----------|
+| A | live 录音 + Progressive Batch 模式 → 前端逐段看到转写文字（`SegmentPreview`）|
+| A | `cargo check` + `cargo test -p listener2-core` + `pnpm typecheck` 全部通过 |
+| B | 段超时后仍产出结果 + `abandoned_segments` 元数据 |
+| B | `cargo test` 新增 timeout/partial stitch 测试 |
+| C | 重启后 Continue → 只提未完成段 |
+| C | `cargo test` DB roundtrip |
+| D | 右键菜单正确显示三个选项 + Continue 条件激活 |

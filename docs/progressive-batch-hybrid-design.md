@@ -70,9 +70,9 @@ Progressive Batch 仅在录音时长远超 batch 推理时间时才有收益。�
 
 | 参数                | 默认值                       | 说明                                                                     |
 | ------------------- | ---------------------------- | ------------------------------------------------------------------------ |
-| `min_duration_secs` | `segment_duration_ms / 1000` | 录音未达到此值时直接走单次 batch 提交（当前实现：等于段长，≥1 段才启用） |
+| `min_duration_secs` | 已删除（由 `segment_duration_ms` 替代） | `run_progressive_batch_from_file` 直接判断 `duration_secs < segment_duration_ms / 1000.0`，≥1 段才启用 |
 
-**判断时机（当前实现）：** 通过 `ProgressiveBatchManager` 的 `Accumulating` → `Active` 状态迁移实现。Manager 从 `total_duration()` 获知音频总长，若小于 `segment_duration_ms` 则直接走单次 `submit_file_direct`（原文件字节 POST）。若 ≥ 段长则流式解码 PCM（逐块 10s），`on_audio_frame` 馈送给 `Segmenter`。录音结束后 `finish()` 等待队列 drain 并 stitch。
+**判断时机（当前实现）：** `run_progressive_batch_from_file` 从 `total_duration()` 获知音频总长，若小于 `segment_duration_ms` 则直接走单次 `submit_file_direct`（原文件字节 POST）。若 ≥ 段长则流式解码 PCM（逐块 10s），`on_audio_frame` 馈送给 `Segmenter`，`Accumulating` 状态在首个 frame 到达时立即跃迁为 `Active`。录音结束后 `finish()` 等待队列 drain 并 stitch。
 
 **⚠️ 当前局限：** 仅用于 `run_progressive_batch_from_file`（从已有音频文件跑），未与实时录音 Source pipeline 集成。实时录音场景下，PCM 流尚未通过 Source actor 管道发送到 `ProgressiveBatchManager`。
 
@@ -181,14 +181,17 @@ word 级时间戳需要 `timestamp_granularities[]=word`，实测增加约 20% �
 
 > **服务端反馈建议：** 初始用 30s + 1s overlap，segment 级去重即可。不需要额外服务端改动。
 
+**实际实现（Jul 26）：** 使用 `TaggedWord` 结构体追踪每个词的来源分段索引。拼合后输出 `segment_boundaries: Vec<usize>` 元数据（各段在全局词表中的起始下标），前端据此渲染虚线分隔标记。
+
 **边界情况处理：**
 
 | 情况                                             | 处理方式                                                              |
 | ------------------------------------------------ | --------------------------------------------------------------------- |
-| 段间重叠（语音被重复转录）                       | **segment 级去重**：按 segment.start 对齐，overlap 窗口内的重复段丢弃 |
-| 段间有间隙（静音被截断）                         | 保留间隙，时间戳连续                                                  |
+| 段间重叠（语音被重复转录）                       | **word 级去重**：偏移后按 start 排序，overlap 窗口内 start 重复的 word 丢弃 |
+| 段间有间隙（静音被截断）                         | 保留间隙，时间戳连续，`gap_warnings` 元数据记录                       |
 | 段提交乱序到达（网络延迟）                       | 按 start 时间排序后再拼接                                             |
-| 服务端 VAD 返回的 segment 与客户端分段边界不对齐 | stitcher 以 segment.start 为准，不依赖客户端分段边界                  |
+| 服务端 VAD 返回的 segment 与客户端分段边界不对齐 | stitcher 以 segment.start 为准，时间戳已全局对齐                      |
+| 不可知词汇次序（同一时间两侧转录结果不一致）     | `DEDUP_EPSILON_S = 0.05` 容差窗口                                     |
 
 ---
 
@@ -278,7 +281,6 @@ OpenAI (Speaches)
 | 参数                  | 默认值                       | 说明                                                        |
 | --------------------- | ---------------------------- | ----------------------------------------------------------- |
 | `mode`                | `"live"`                     | `"live"` \| `"batch"` \| `"progressive"`                    |
-| `min_duration_secs`   | `segment_duration_ms / 1000` | 录音时长阈值（秒），当前实现恒等于段长；≥1 段才启用分段提交 |
 | `max_concurrency`     | `2`                          | 最大并行分段数（硬上限 2）                                  |
 | `segment_duration_ms` | `30000`                      | 分段时长（ms，建议可选 30000/60000）                        |
 | `segment_overlap_ms`  | `1000`                       | 段间重叠时长（ms）                                          |
@@ -303,25 +305,29 @@ OpenAI (Speaches)
 
 ## 9. 实施计划
 
-### Sprint 1：基础框架
+### Sprint 1：基础框架 ✅（已关闭）
 
-- [x] 创建 `listener2-core/src/batch/progressive_batch/` 模块（Rust 实际使用下划线，设计文档的 `progressive-batch/` 为路径表示）
-- [x] 实现激活条件判断：`ProgressiveBatchManager` 的 `Accumulating` → `Active` 状态迁移（Manager.finish() 在阈值前降级为单次 batch）
-- [x] 实现固定时长分段器（默认 30s + 1s overlap，Segmenter 支持配置 `segment_duration_ms`）
-- [x] PCM raw → WAV header 转换（`write_wav` 函数在 mod.rs，使用 hound crate 写 i16 WAV）
-- [x] 实现提交队列（`BatchQueue`，N=2 硬上限，重试 3 次，`SubmitSegmentFn` 可配置 HTTP 客户端）
-- [x] 实现基础拼接器（`Stitcher`，segment 级去重 + word 级全局时间戳偏移）
-- [x] Provider 配置：新增 mode 选择（Live / Batch / Progressive）— `stt_mode` 配置项，前端 `select.tsx` UI
+- [x] 创建 `listener2-core/src/batch/progressive_batch/` 模块
+- [x] 实现激活条件判断 + Manager 状态机
+- [x] 实现固定时长分段器（Segmenter）
+- [x] 实现提交队列（BatchQueue，N=2 并发，重试 3 次）
+- [x] 实现基础拼接器（Stitcher，word 级全局时间戳 + overlap 去重）
+- [x] Provider 配置 stt_mode（Live / Batch / Progressive）
+- [x] `BatchSegmentResult` 事件通路 + Runtime 贯通
+- [x] Stitcher `segment_boundaries` 元数据
+- [x] 前端增量展示组件（batchSegments buffer, SegmentPreview, segment boundaries）
+- [x] Bug fixes + 内存优化 + 短音频 Direct Batch 对齐
 
-### Sprint 2：稳定性
+### Sprint 2：PCM 实时流 + 重试 + 持久化 + UI（本轮）
 
-- [x] 1s overlap 去重逻辑单元测试（`stitcher.rs` 含 15 个测试，覆盖重叠、间隙、乱序、边界）
-- [x] 服务端双 VAD 场景的时间轴校准测试（Manager 集成测试含中英文字和时间轴验证）
-- [x] 边界情况测试（间隙、乱序、失败恢复、重试耗尽 — `queue.rs` 17 个测试含 retry exhaustion）
-- [ ] 进度事件 → UI 进度条（数据模型就绪 `QueueProgress`，前端未接入）
-- [ ] live session PCM 流集成（`ProgressiveBatchManager.on_audio_frame` 未连接到 Source pipeline）
+| Phase | 内容 | 关键改动 | 验证 |
+|-------|------|----------|------|
+| **A** | Source pipeline PCM 集成 | `ListenerRouting::ProgressiveBatch` 变体 + Pipeline dispatch + Supervisor 创建 channel + Listener2 消费 | live 录音时前端逐段看到转写文字 |
+| **B** | 重试 + Drain 超时 + Partial Stitch | `drain(timeout)`、stitch 不报 missing、`finish()` 允许 partial response | 部分段超时/失败后仍产出结果 + gap_warnings |
+| **C** | 持久化 + Continue | progressive_batch_jobs/segments 表 + Drizzle schema + TauriBatchRuntime 写 DB + continue_from_file() | 重启后 Continue 只重跑未完成段 |
+| **D** | UI 右键菜单 | Re-transcribe 裂为 3 项 + Continue 条件显示 + 部分结果提示 | 端到端交互可用 |
 
-### Sprint 3：优化（可选）
+### Sprint 3：优化（待定）
 
 - [ ] VAD 分段策略
 - [ ] 动态 segment_duration_ms 自适应
@@ -339,15 +345,21 @@ OpenAI (Speaches)
 | `SessionArgs.pcm_tx`             | 新增 `progressive_batch_pcm_tx` 字段                | 不存在                                                              | ❌ 未实现                      |
 | listener2 集成                   | `Listener2` 持有 `ProgressiveBatchManager` map      | 直接通过 `run_batch_inner` 路由                                     | ✅ 简化方案                    |
 | startTranscription 快捷返回      | 检查已缓存结果即时返回                              | 去重路径调用 `run_progressive_batch_from_file`                      | ✅ 兼容现有流程                |
-| 前端 progress 事件               | v2 可选，`TranscriptionEvent::progressive_progress` | 未实现                                                              | ❌ 未实现                      |
+| 前端 progress 事件               | v2 可选，`TranscriptionEvent::progressive_progress` | `BatchSegmentResult` 事件 + 前端 `batchSegments` buffer + `SegmentPreview` 组件 | ✅ 增量式展示而非进度条        |
 | segment_overlap_ms 可见配置      | 用户可配置                                          | 硬编码 1000ms                                                       | ❌ 未配置化                    |
 | max_retries 可见配置             | 用户可配置                                          | 硬编码 3                                                            | ❌ 未配置化                    |
 | v2 持久化（DB 表）               | `progressive_batch_jobs/segments`                   | 未实现                                                              | ❌ 未实现                      |
 | PCM POST 格式（长音频）          | WAV header + audio/wav                              | audio/pcm raw in-memory                                             | ✅ 节约磁盘 I/O                |
 | 内存峰值（3h 音频）              | 无所谓（设计时未评估）                              | ~15MB（流式 10s chunks）                                            | ✅ 显著降低                    |
-| `min_duration_secs` 取值         | 硬编码 180                                          | = `segment_duration_ms / 1000`                                      | ✅ 更灵活                      |
 | URL 构造                         | 字符串拼接                                          | `url::Url::path_segments_mut()`                                     | ✅ 避免双 `/v1/`               |
 | response 解析                    | `serde_json::from_str`                              | OpenAI → `OpenAIAdapter::parse_batch_response`，其余 → `serde_json` | ✅ 兼容 Speaches null logprobs |
+| `submit_segment_http` 实现       | 独立实现 `multipart` + `reqwest::Client::new()`     | 复用 `OpenAIAdapter::transcription_url()` + `build_batch_multipart()` + `create_client()` | ✅ 消除代码重复                |
+| Authorization 头                 | 仅 `!api_key.is_empty()` 时添加                    | 无条件添加，空 key 也发 `Bearer `                                | ✅ Speaches 要求无条件 Bearer   |
+| `ProgressiveBatchConfig.session_id` | 无                                                | 新增 `session_id: String` 字段                                      | ✅ 贯通 Runtime 事件           |
+| `ProgressiveBatchManager.runtime` | 无                                                | 新增 `runtime: Option<Arc<dyn BatchRuntime>>`，`poll_completed` emit `BatchSegmentResult` | ✅ 增量展示基础                |
+| Stitcher `segment_boundaries`    | 无（stitcher 只输出 `batch::Response`）            | `TaggedWord` 追踪词源分段，`stitch()` 返回 `segment_boundaries: Vec<usize>` | ✅ 前端虚线分隔                |
+| 前端增量展示                     | 无                                                  | `batchSegments` Map + `handleBatchSegmentResult` + `SegmentPreview` + `empty.tsx segmentCount` | ✅ 片段级先到先展示            |
+| 分段虚线分隔                     | 无                                                  | `segment.tsx` 检测 `word.metadata.segment_boundary` 渲染虚线        | ✅ 段落间视觉分隔              |
 
 ---
 

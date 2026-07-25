@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import { Spinner } from "@hypr/ui/components/ui/spinner";
 
@@ -31,14 +31,18 @@ export function Transcript({
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
       {screen.kind === "running_batch" && (
-        <TranscriptEmptyState
-          isBatching
-          percentage={screen.percentage}
-          phase={screen.phase}
-          onStopTranscription={
-            screen.phase === "importing" ? undefined : handleStopTranscription
-          }
-        />
+        <>
+          <TranscriptEmptyState
+            isBatching
+            percentage={screen.percentage}
+            phase={screen.phase}
+            segmentCount={Object.keys(screen.segmentResponses).length}
+            onStopTranscription={
+              screen.phase === "importing" ? undefined : handleStopTranscription
+            }
+          />
+          <SegmentPreview segmentResponses={screen.segmentResponses} />
+        </>
       )}
       {screen.kind === "batch_fallback" && (
         <BatchState
@@ -70,6 +74,51 @@ export function Transcript({
           />
         </>
       )}
+    </div>
+  );
+}
+
+function SegmentPreview({
+  segmentResponses,
+}: {
+  segmentResponses: Record<
+    number,
+    import("@hypr/plugin-transcription").BatchResponse
+  >;
+}) {
+  const entries = useMemo(
+    () =>
+      Object.entries(segmentResponses)
+        .map(([index, response]) => ({
+          index: Number(index),
+          transcript:
+            response.results.channels[0]?.alternatives[0]?.transcript ?? "",
+        }))
+        .sort((a, b) => a.index - b.index),
+    [segmentResponses],
+  );
+
+  if (entries.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="scrollbar-thin flex-1 space-y-3 overflow-y-auto px-4 pb-4">
+      {entries.map(({ index, transcript }, i) => (
+        <div key={index}>
+          {i > 0 && (
+            <div className="border-t-border mx-2 my-3 border-t border-dashed" />
+          )}
+          <div className="group relative">
+            <div className="text-muted-foreground mb-1 text-xs font-medium">
+              Segment {index + 1}
+            </div>
+            <p className="text-foreground text-sm leading-relaxed whitespace-pre-wrap">
+              {transcript || "(no speech detected)"}
+            </p>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

@@ -42,7 +42,10 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Listener2<'a, R, M> {
                 let state = match lock_terminal_state(&control) {
                     Ok(state) => *state,
                     Err(error) => {
-                        tracing::warn!("[DEBUG] lock_terminal_state failed, removing entry: {}", error);
+                        tracing::warn!(
+                            "[DEBUG] lock_terminal_state failed, removing entry: {}",
+                            error
+                        );
                         let entry = sessions.remove(&session_id);
                         drop(sessions);
 
@@ -99,9 +102,16 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Listener2<'a, R, M> {
             let control = control.clone();
             let session_id = session_id.clone();
             async move {
-                tracing::info!("[DEBUG] core::run_batch starting for session {}", session_id);
+                tracing::info!(
+                    "[DEBUG] core::run_batch starting for session {}",
+                    session_id
+                );
                 let result = core::run_batch(runtime, params.into()).await;
-                tracing::info!("[DEBUG] core::run_batch finished for session {}: {:?}", session_id, result.as_ref().err());
+                tracing::info!(
+                    "[DEBUG] core::run_batch finished for session {}: {:?}",
+                    session_id,
+                    result.as_ref().err()
+                );
                 finish_batch_session(&registry, &session_id, &control);
             }
         });
@@ -243,7 +253,9 @@ impl core::BatchRuntime for TauriBatchRuntime {
 
         if matches!(
             event,
-            core::BatchEvent::BatchResponseStreamed { .. } | core::BatchEvent::BatchResponse { .. }
+            core::BatchEvent::BatchResponseStreamed { .. }
+                | core::BatchEvent::BatchResponse { .. }
+                | core::BatchEvent::BatchSegmentResult { .. }
         ) {
             let _ = self.control.last_activity_tx.send(Instant::now());
         }
