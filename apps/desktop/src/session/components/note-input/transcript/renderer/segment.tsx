@@ -118,28 +118,29 @@ export const SegmentRenderer = memo(
                 ])}
               >
                 {lineIdx > 0 ? " " : null}
-                {line.words.map((word, idx) => (
-                  <Fragment key={word.id ?? `${word.start_ms}-${idx}`}>
-                    {idx > 0 ? " " : null}
-                    {word.metadata?.segment_boundary ? (
-                      <>
-                        <span className="border-t-border mx-1 inline-block w-4 border-t border-dashed opacity-50" />{" "}
-                      </>
-                    ) : null}
-                    <WordSpan
-                      word={word}
-                      displayText={getWordDisplayText(word)}
-                      audioExists={audioExists}
-                      onClickWord={seekAndPlay}
-                      highlightSegments={
-                        highlightSegmentsByWord?.get(word) ?? undefined
-                      }
-                      isActiveMatch={
-                        Boolean(word.id) && word.id === search.activeMatchId
-                      }
-                    />
-                  </Fragment>
-                ))}
+                {line.words.map((word, idx) => {
+                  return (
+                    <Fragment key={word.id ?? `${word.start_ms}-${idx}`}>
+                      {idx > 0 ? " " : null}
+                      {word.metadata?.segment_boundary &&
+                      word !== segment.words[0] ? (
+                        <span className="border-primary/40 mx-1 inline-block w-10 border-t-2 border-dashed" />
+                      ) : null}
+                      <WordSpan
+                        word={word}
+                        displayText={getWordDisplayText(word)}
+                        audioExists={audioExists}
+                        onClickWord={seekAndPlay}
+                        highlightSegments={
+                          highlightSegmentsByWord?.get(word) ?? undefined
+                        }
+                        isActiveMatch={
+                          Boolean(word.id) && word.id === search.activeMatchId
+                        }
+                      />
+                    </Fragment>
+                  );
+                })}
               </span>
             );
           })}

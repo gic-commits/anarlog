@@ -89,6 +89,19 @@ pub struct SessionContext {
     pub started_at_system: SystemTime,
 }
 
+impl SessionContext {
+    pub fn progressive_batch_params(&self) -> crate::ProgressiveBatchParams {
+        crate::ProgressiveBatchParams {
+            session_id: self.params.session_id.clone(),
+            base_url: self.params.base_url.clone(),
+            api_key: self.params.api_key.clone(),
+            model: self.params.model.clone(),
+            language: self.params.languages.first().map(|l| l.to_string()),
+            sample_rate: crate::actors::SAMPLE_RATE,
+        }
+    }
+}
+
 pub fn session_supervisor_name(session_id: &str) -> String {
     format!("{}{}", SESSION_SUPERVISOR_PREFIX, session_id)
 }

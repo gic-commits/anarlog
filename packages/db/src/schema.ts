@@ -463,3 +463,50 @@ export const storageMigrationState = sqliteTable("storage_migration_state", {
   lastError: text("last_error").notNull().default(""),
   updatedAt: text("updated_at").notNull().default(currentTimestamp),
 });
+
+export const progressiveBatchJobs = sqliteTable(
+  "progressive_batch_jobs",
+  {
+    id: text("id").primaryKey().notNull(),
+    sessionId: text("session_id").notNull().default(""),
+    status: text("status").notNull().default("running"),
+    provider: text("provider").notNull().default(""),
+    model: text("model").notNull().default(""),
+    baseUrl: text("base_url").notNull().default(""),
+    language: text("language").notNull().default(""),
+    segmentDurationMs: integer("segment_duration_ms").notNull().default(30000),
+    overlapMs: integer("overlap_ms").notNull().default(1000),
+    maxConcurrency: integer("max_concurrency").notNull().default(2),
+    totalSegments: integer("total_segments").notNull().default(0),
+    completedSegments: integer("completed_segments").notNull().default(0),
+    failedSegments: integer("failed_segments").notNull().default(0),
+    abandonedSegments: integer("abandoned_segments").notNull().default(0),
+    createdAt: text("created_at").notNull().default(currentTimestamp),
+    updatedAt: text("updated_at").notNull().default(currentTimestamp),
+    completedAt: text("completed_at"),
+    error: text("error"),
+  },
+  (table) => [index("idx_pbj_session").on(table.sessionId)],
+);
+
+export const progressiveBatchSegments = sqliteTable(
+  "progressive_batch_segments",
+  {
+    id: text("id").primaryKey().notNull(),
+    jobId: text("job_id").notNull().default(""),
+    segmentIndex: integer("segment_index").notNull().default(0),
+    globalStartMs: integer("global_start_ms").notNull().default(0),
+    globalEndMs: integer("global_end_ms").notNull().default(0),
+    status: text("status").notNull().default("pending"),
+    retryCount: integer("retry_count").notNull().default(0),
+    maxRetries: integer("max_retries").notNull().default(3),
+    error: text("error"),
+    responseJson: text("response_json"),
+    createdAt: text("created_at").notNull().default(currentTimestamp),
+    updatedAt: text("updated_at").notNull().default(currentTimestamp),
+  },
+  (table) => [
+    index("idx_pbs_job").on(table.jobId),
+    index("idx_pbs_status").on(table.status),
+  ],
+);

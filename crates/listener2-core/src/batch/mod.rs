@@ -1,4 +1,6 @@
 mod accumulator;
+#[cfg(feature = "cjk")]
+mod cjk;
 mod progressive;
 mod progressive_batch;
 mod simple;
@@ -9,8 +11,33 @@ use owhisper_client::{AdapterKind, OpenAIAdapter};
 
 use crate::{BatchEvent, BatchRuntime};
 
+/// Per-layer feature flags for CJK post-processing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct CjkLayerFlags {
+    #[serde(default = "default_true")]
+    pub punctuation: bool,
+    #[serde(default = "default_true")]
+    pub jieba: bool,
+    #[serde(default = "default_true")]
+    pub acoustic_merge: bool,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+impl Default for CjkLayerFlags {
+    fn default() -> Self {
+        Self { punctuation: true, jieba: true, acoustic_merge: true }
+    }
+}
+
 use progressive::run_progressive_batch_session;
 use progressive_batch::run_progressive_batch_from_file;
+pub use progressive_batch::{
+    PersistedCompletedSegment, ProgressiveBatchConfig, ProgressiveBatchManager, continue_from_file,
+};
 use simple::{run_direct_batch_for_adapter_kind, run_soniqo_batch};
 
 #[derive(
@@ -93,6 +120,20 @@ pub struct BatchParams {
     pub progressive_batch: bool,
     #[serde(default)]
     pub segment_duration_ms: Option<u32>,
+    #[serde(default)]
+    pub overlap_ms: Option<u32>,
+    #[serde(default)]
+    pub max_concurrency: Option<u32>,
+    #[serde(default = "default_cjk_enabled")]
+    pub cjk_enabled: bool,
+    #[serde(default)]
+    pub cjk_features: Option<CjkLayerFlags>,
+    #[serde(default)]
+    pub cjk_server_side: bool,
+}
+
+fn default_cjk_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -128,6 +169,17 @@ pub async fn run_batch(
     });
 
     let session_id = params.session_id.clone();
+
+    #[cfg(feature = "cjk")]
+    let (language, cjk_enabled, cjk_features) = {
+        let lang = params
+            .languages
+            .first()
+            .map(|l| l.to_string())
+            .unwrap_or_default();
+        (lang, params.cjk_enabled, params.cjk_features)
+    };
+
     let result = run_batch_inner(runtime.clone(), params).await;
 
     if let Err(error) = &result {
@@ -143,10 +195,20 @@ pub async fn run_batch(
         });
     } else {
         let output = result.as_ref().unwrap();
+        #[cfg(feature = "cjk")]
+        let response = if cjk_enabled {
+            cjk::process_response(&output.response, &language, cjk_features)
+                .unwrap_or_else(|| output.response.clone())
+        } else {
+            output.response.clone()
+        };
+
+        #[cfg(not(feature = "cjk"))]
+        let response = output.response.clone();
 
         runtime.emit(BatchEvent::BatchResponse {
             session_id: output.session_id.clone(),
-            response: output.response.clone(),
+            response,
             mode: output.mode,
         });
         runtime.emit(BatchEvent::BatchCompleted {
@@ -292,6 +354,7 @@ fn build_listen_params(
         min_speakers: params.min_speakers,
         max_speakers: params.max_speakers,
         custom_query: None,
+        cjk_server_side: params.cjk_server_side,
     }
 }
 
@@ -366,6 +429,11 @@ mod tests {
             max_speakers: None,
             progressive_batch: false,
             segment_duration_ms: None,
+            overlap_ms: None,
+            max_concurrency: None,
+            cjk_enabled: true,
+            cjk_features: None,
+            cjk_server_side: false,
         }
     }
 

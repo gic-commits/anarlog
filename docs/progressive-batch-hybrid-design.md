@@ -318,14 +318,14 @@ OpenAI (Speaches)
 - [x] 前端增量展示组件（batchSegments buffer, SegmentPreview, segment boundaries）
 - [x] Bug fixes + 内存优化 + 短音频 Direct Batch 对齐
 
-### Sprint 2：PCM 实时流 + 重试 + 持久化 + UI（本轮）
+### Sprint 2（Phase A/B/C ✅ 已完成，Phase D 待推进）
 
-| Phase | 内容 | 关键改动 | 验证 |
-|-------|------|----------|------|
-| **A** | Source pipeline PCM 集成 | `ListenerRouting::ProgressiveBatch` 变体 + Pipeline dispatch + Supervisor 创建 channel + Listener2 消费 | live 录音时前端逐段看到转写文字 |
-| **B** | 重试 + Drain 超时 + Partial Stitch | `drain(timeout)`、stitch 不报 missing、`finish()` 允许 partial response | 部分段超时/失败后仍产出结果 + gap_warnings |
-| **C** | 持久化 + Continue | progressive_batch_jobs/segments 表 + Drizzle schema + TauriBatchRuntime 写 DB + continue_from_file() | 重启后 Continue 只重跑未完成段 |
-| **D** | UI 右键菜单 | Re-transcribe 裂为 3 项 + Continue 条件显示 + 部分结果提示 | 端到端交互可用 |
+| Phase | 内容 | 关键改动 | 验证 | 状态 |
+|-------|------|----------|------|------|
+| **A** | Source pipeline PCM 集成 | `ListenerRouting::ProgressiveBatch` 变体 + Pipeline dispatch + Supervisor 创建 channel + `runtime.start_progressive_batch_stream()` | live 录音时前端逐段看到转写文字 | ✅ |
+| **B** | 重试 + Drain 超时 + Partial Stitch | `drain(timeout)`、stitch 不报 missing、`finish()` 允许 partial response | 部分段超时/失败后仍产出结果 + gap_warnings | ✅ |
+| **C** | 持久化 + Continue | progressive_batch_jobs/segments 表 + Drizzle schema + TauriBatchRuntime 写 DB + continue_from_file() + resume() | 重启后 Continue 只重跑未完成段 | ✅ |
+| **D** | UI 右键菜单 | Re-transcribe 裂为 3 项 + Continue 条件显示 + 部分结果提示 | 端到端交互可用 | ✅ |
 
 ### Sprint 3：优化（待定）
 
@@ -340,15 +340,15 @@ OpenAI (Speaches)
 | 领域                             | 设计文档                                            | 实际实现                                                            | 状态                           |
 | -------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------ |
 | 模块命名                         | `progressive-batch/`                                | `progressive_batch/`（Rust 模块名规则）                             | ⚠️ 无实质影响                  |
-| PCM 流集成                       | 通过 Source pipeline 实时馈送                       | 仅从文件读取（`run_progressive_batch_from_file`）                   | ❌ 未实现                      |
-| `effective_transcription_mode()` | 应处理 `ProgressiveBatch`                           | 只识别 `Batch`，`ProgressiveBatch` → 回退 `Live`                    | ❌ 未处理                      |
-| `SessionArgs.pcm_tx`             | 新增 `progressive_batch_pcm_tx` 字段                | 不存在                                                              | ❌ 未实现                      |
-| listener2 集成                   | `Listener2` 持有 `ProgressiveBatchManager` map      | 直接通过 `run_batch_inner` 路由                                     | ✅ 简化方案                    |
+| PCM 流集成                       | 通过 Source pipeline 实时馈送                       | `ListenerRouting::ProgressiveBatch(tx)` 枚举变体 → pipeline dispatch → `runtime.start_progressive_batch_stream()` | ✅ 已实现（`runtime.rs:137-189`）                   |
+| `effective_transcription_mode()` | 应处理 `ProgressiveBatch`                           | `types.rs:52-54` 优先返回 `ProgressiveBatch`                        | ✅ 已处理                      |
+| `SourceArgs` PCM 通道            | 新增 `progressive_batch_pcm_tx` 独立字段           | 通过 `ListenerRouting::ProgressiveBatch(PcmSender)` 枚举变体传递    | ✅ 简化方案（`source/mod.rs:54`）                    |
+| Listener2 集成                   | `Listener2` 持有 `ProgressiveBatchManager` map      | live PCM → `start_progressive_batch_stream()`，file → `run_progressive_batch_from_file` / `continue_from_file` | ✅ 两路分离设计                |
 | startTranscription 快捷返回      | 检查已缓存结果即时返回                              | 去重路径调用 `run_progressive_batch_from_file`                      | ✅ 兼容现有流程                |
 | 前端 progress 事件               | v2 可选，`TranscriptionEvent::progressive_progress` | `BatchSegmentResult` 事件 + 前端 `batchSegments` buffer + `SegmentPreview` 组件 | ✅ 增量式展示而非进度条        |
-| segment_overlap_ms 可见配置      | 用户可配置                                          | 硬编码 1000ms                                                       | ❌ 未配置化                    |
-| max_retries 可见配置             | 用户可配置                                          | 硬编码 3                                                            | ❌ 未配置化                    |
-| v2 持久化（DB 表）               | `progressive_batch_jobs/segments`                   | 未实现                                                              | ❌ 未实现                      |
+| segment_overlap_ms 可见配置      | 用户可配置                                          | `ProgressiveBatchConfig` 支持该字段，`BatchParams` 已贯通，但 UI 尚无控制项 | ⚠️ 可编程配置，UI 待加        |
+| max_retries / max_concurrency    | 用户可配置                                          | `BatchParams` 已贯通，Continue 从 DB job 记录恢复，但 UI 无控制项   | ⚠️ 可编程配置，UI 待加        |
+| v2 持久化（DB 表）               | `progressive_batch_jobs/segments`                   | 表已创建 + Drizzle schema + `persist_batch_event` + `resume()` + `continue_from_file()` | ✅ 已实现                      |
 | PCM POST 格式（长音频）          | WAV header + audio/wav                              | audio/pcm raw in-memory                                             | ✅ 节约磁盘 I/O                |
 | 内存峰值（3h 音频）              | 无所谓（设计时未评估）                              | ~15MB（流式 10s chunks）                                            | ✅ 显著降低                    |
 | URL 构造                         | 字符串拼接                                          | `url::Url::path_segments_mut()`                                     | ✅ 避免双 `/v1/`               |
@@ -360,6 +360,7 @@ OpenAI (Speaches)
 | Stitcher `segment_boundaries`    | 无（stitcher 只输出 `batch::Response`）            | `TaggedWord` 追踪词源分段，`stitch()` 返回 `segment_boundaries: Vec<usize>` | ✅ 前端虚线分隔                |
 | 前端增量展示                     | 无                                                  | `batchSegments` Map + `handleBatchSegmentResult` + `SegmentPreview` + `empty.tsx segmentCount` | ✅ 片段级先到先展示            |
 | 分段虚线分隔                     | 无                                                  | `segment.tsx` 检测 `word.metadata.segment_boundary` 渲染虚线        | ✅ 段落间视觉分隔              |
+| Server-side CJK (Speaches)       | 无                                                  | `cjk_server_side` boolean 贯通：UI→`TranscriptionParams`→`BatchParams`→`ListenParams`→`CreateCustomTranscriptionOptions.cjk_post_process`→multipart form field `cjk_post_process=true` | ✅ 默认关闭，开启后所有 batch 模式（Direct / Progressive）的 HTTP 请求均带该参数 |
 
 ---
 

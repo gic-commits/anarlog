@@ -28,7 +28,11 @@ import { useAITaskTask } from "~/ai/hooks";
 import * as AudioPlayer from "~/audio-player";
 import { getEnhancerService } from "~/services/enhancer";
 import { useEnhancedNoteActions } from "~/session/components/note-input/enhanced-actions";
-import { useRegenerateTranscript } from "~/session/components/note-input/transcript/actions";
+import {
+  useContinuableBatchJob,
+  useContinueTranscript,
+  useRegenerateTranscript,
+} from "~/session/components/note-input/transcript/actions";
 import {
   buildTranscriptExportSegments,
   formatTranscriptExportSegments,
@@ -42,6 +46,7 @@ import {
   useEnhancedNoteRecords,
   useSession,
 } from "~/session/queries";
+import { useConfigValue } from "~/shared/config";
 import {
   type MenuItemDef,
   useNativeContextMenu,
@@ -745,7 +750,15 @@ function HeaderViewTranscriptActive({
     muted: boolean;
   };
 }) {
-  const regenerate = useRegenerateTranscript(sessionId);
+  const regenerateTotal = useRegenerateTranscript(sessionId, "total");
+  const regenerateProgressive = useRegenerateTranscript(
+    sessionId,
+    "progressive",
+  );
+  const continueTranscript = useContinueTranscript(sessionId);
+  const { data: hasContinuableJob } = useContinuableBatchJob(sessionId);
+  const sttMode = useConfigValue("stt_mode");
+  const isProgressiveMode = sttMode === "progressive";
   const { request: transcriptExportRequest } =
     useSessionTranscriptRenderData(sessionId);
   const { audioExists, deleteRecording, isDeletingRecording } =
@@ -790,13 +803,40 @@ function HeaderViewTranscriptActive({
     ];
 
     if (audioExists) {
-      items.push({
-        id: `regenerate-transcript-${sessionId}`,
-        text: "Re-transcribe",
-        action: () => {
-          void regenerate();
-        },
-      });
+      if (isProgressiveMode) {
+        items.push({
+          id: `regenerate-total-${sessionId}`,
+          text: "Re-trans(Total)",
+          action: () => {
+            void regenerateTotal();
+          },
+        });
+        items.push({
+          id: `regenerate-progressive-${sessionId}`,
+          text: "Re-trans(Progressive)",
+          action: () => {
+            void regenerateProgressive();
+          },
+        });
+        if (hasContinuableJob) {
+          items.push({
+            id: `continue-progressive-${sessionId}`,
+            text: "Continue(Progressive)",
+            action: () => {
+              void continueTranscript();
+            },
+          });
+        }
+      } else {
+        items.push({
+          id: `regenerate-transcript-${sessionId}`,
+          text: "Re-transcribe",
+          action: () => {
+            void regenerateTotal();
+          },
+        });
+      }
+
       items.push({
         id: `delete-recording-${sessionId}`,
         text: "Delete recording",
@@ -811,8 +851,12 @@ function HeaderViewTranscriptActive({
     canCopyTranscript,
     handleCopyTranscript,
     handleDeleteRecording,
+    hasContinuableJob,
     isDeletingRecording,
-    regenerate,
+    isProgressiveMode,
+    continueTranscript,
+    regenerateTotal,
+    regenerateProgressive,
     sessionId,
   ]);
   const showContextMenu = useNativeContextMenu(contextMenu);

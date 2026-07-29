@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures_util::FutureExt;
 use owhisper_interface::batch;
@@ -49,6 +49,7 @@ pub struct SegmentEntry {
     pub status: SegmentStatus,
     pub samples: Vec<f32>,
     pub sample_rate: u32,
+    pub retry_count: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -122,18 +123,35 @@ fn resample_linear(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
 pub(crate) fn default_submit_fn() -> SubmitSegmentFn {
     Arc::new(|segment, config| {
         async move {
-            let result = submit_segment_http(&config, &segment).await;
-            match result {
-                Ok(response) => SegmentResult::Completed {
-                    index: segment.index,
-                    global_start_ms: 0,
-                    response,
-                },
-                Err(error) => SegmentResult::Failed {
-                    index: segment.index,
-                    error,
-                    exhausted: true,
-                },
+            let mut last_error = String::new();
+            for attempt in 0..MAX_RETRIES {
+                let result = submit_segment_http(&config, &segment).await;
+                match result {
+                    Ok(response) => {
+                        return SegmentResult::Completed {
+                            index: segment.index,
+                            global_start_ms: segment.global_start_ms,
+                            response,
+                        };
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            "[progressive] submit retry idx={} attempt={}/{MAX_RETRIES} error={error}",
+                            segment.index,
+                            attempt + 1,
+                        );
+                        last_error = error;
+                        if attempt + 1 < MAX_RETRIES {
+                            let delay = Duration::from_secs(1 << attempt);
+                            tokio::time::sleep(delay).await;
+                        }
+                    }
+                }
+            }
+            SegmentResult::Failed {
+                index: segment.index,
+                error: last_error,
+                exhausted: true,
             }
         }
         .boxed()
@@ -192,6 +210,7 @@ impl BatchQueue {
             status: SegmentStatus::Pending,
             samples: segment.samples,
             sample_rate: segment.sample_rate,
+            retry_count: 0,
         });
         self.try_dispatch_from_pending();
     }
@@ -217,16 +236,13 @@ impl BatchQueue {
                 exhausted,
             } => {
                 if let Some(entry) = self.segments.iter_mut().find(|s| s.index == *index) {
-                    let retries = match &entry.status {
-                        SegmentStatus::Failed { retry_count, .. } => *retry_count,
-                        _ => 0,
-                    };
-                    if !*exhausted && retries < MAX_RETRIES {
+                    if !*exhausted && entry.retry_count < MAX_RETRIES {
+                        entry.retry_count += 1;
                         entry.status = SegmentStatus::Pending;
                     } else {
                         entry.status = SegmentStatus::Failed {
                             error: error.clone(),
-                            retry_count: if *exhausted { retries } else { retries + 1 },
+                            retry_count: entry.retry_count,
                         };
                     }
                 }
@@ -250,10 +266,33 @@ impl BatchQueue {
         results
     }
 
-    pub async fn drain(&mut self) -> Vec<SegmentResult> {
+    pub async fn drain(&mut self, timeout: Duration) -> Vec<SegmentResult> {
         let mut results = Vec::new();
+        let deadline = std::time::Instant::now() + timeout;
         loop {
             let polled = self.poll_completed();
+
+            if std::time::Instant::now() >= deadline {
+                for entry in &mut self.segments {
+                    if matches!(
+                        entry.status,
+                        SegmentStatus::Pending | SegmentStatus::InFlight { .. }
+                    ) {
+                        entry.status = SegmentStatus::Failed {
+                            error: "timeout".to_string(),
+                            retry_count: entry.retry_count,
+                        };
+                        results.push(SegmentResult::Failed {
+                            index: entry.index,
+                            error: "timeout".to_string(),
+                            exhausted: true,
+                        });
+                    }
+                }
+                results.extend(polled);
+                break;
+            }
+
             let has_inflight = self
                 .segments
                 .iter()
@@ -264,23 +303,18 @@ impl BatchQueue {
                 .any(|s| matches!(s.status, SegmentStatus::Pending));
             if !has_inflight && !has_pending {
                 results.extend(polled);
-                tracing::debug!(
-                    "[progressive] drain complete: {} results",
-                    results.len(),
-                );
                 break;
             }
             results.extend(polled);
-            tracing::debug!(
-                "[progressive] drain waiting... inflight={} pending={} results={}",
-                if has_inflight { 1 } else { 0 },
-                if has_pending { 1 } else { 0 },
-                results.len(),
-            );
-            if let Some(mut result) = self.result_rx.recv().await {
-                self.apply_result(&mut result);
-                results.push(result);
-                self.try_dispatch_from_pending();
+
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match tokio::time::timeout(remaining, self.result_rx.recv()).await {
+                Ok(Some(mut result)) => {
+                    self.apply_result(&mut result);
+                    results.push(result);
+                    self.try_dispatch_from_pending();
+                }
+                _ => {}
             }
         }
         results
@@ -446,8 +480,7 @@ async fn submit_segment_http(
         owhisper_client::OpenAIAdapter::parse_batch_response(&body)
             .map_err(|e| format!("failed to parse response: {e}"))?
     } else {
-        serde_json::from_str(&body)
-            .map_err(|e| format!("failed to parse response: {e}"))?
+        serde_json::from_str(&body).map_err(|e| format!("failed to parse response: {e}"))?
     };
 
     Ok(response)
@@ -539,7 +572,7 @@ mod tests {
         queue.enqueue(make_segment(1));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let results = queue.drain().await;
+        let results = queue.drain(Duration::from_secs(5)).await;
         assert_eq!(results.len(), 2);
         assert_eq!(call_count.load(Ordering::SeqCst), 2);
         assert_eq!(queue.progress().completed, 2);
@@ -565,7 +598,7 @@ mod tests {
             queue.enqueue(make_segment(i));
         }
 
-        let results = queue.drain().await;
+        let results = queue.drain(Duration::from_secs(5)).await;
         assert_eq!(results.len(), 5);
         assert_eq!(queue.progress().completed, 5);
     }
@@ -607,7 +640,7 @@ mod tests {
             max_seen.load(Ordering::SeqCst)
         );
 
-        queue.drain().await;
+        queue.drain(Duration::from_secs(5)).await;
         assert_eq!(queue.progress().completed, 4);
     }
 
@@ -657,7 +690,7 @@ mod tests {
         for i in 0..4 {
             queue.enqueue(make_segment(i));
         }
-        queue.drain().await;
+        queue.drain(Duration::from_secs(5)).await;
 
         let p = queue.progress();
         assert_eq!(p.total, 4);
@@ -680,7 +713,7 @@ mod tests {
         queue.enqueue(make_segment(3));
         queue.enqueue(make_segment(7));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        queue.drain().await;
+        queue.drain(Duration::from_secs(5)).await;
 
         let submitted = submitted.lock().unwrap();
         assert!(submitted.contains(&3));
@@ -690,7 +723,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_queue_drain_returns_immediately() {
         let mut queue = BatchQueue::new(QueueConfig::default());
-        let results = queue.drain().await;
+        let results = queue.drain(Duration::from_secs(5)).await;
         assert!(results.is_empty());
     }
 
@@ -737,5 +770,80 @@ mod tests {
         assert_eq!(entry.index, 42);
         assert_eq!(entry.global_start_ms, 123456);
         assert_eq!(entry.file_path, PathBuf::from("/tmp/test.wav"));
+    }
+
+    #[tokio::test]
+    async fn test_drain_timeout_emits_failed_for_pending() {
+        // submit_fn that never completes → drain timeout fires
+        let mut queue = BatchQueue::with_submit_fn(
+            QueueConfig::default(),
+            Arc::new(|_, _| async { futures_util::future::pending().await }.boxed()),
+        );
+        queue.enqueue(make_segment(0));
+        let results = queue.drain(Duration::from_millis(10)).await;
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], SegmentResult::Failed { index: 0, .. }));
+        let p = queue.progress();
+        assert_eq!(p.failed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_count_increments_on_not_exhausted() {
+        let mut queue = BatchQueue::with_submit_fn(
+            QueueConfig::default(),
+            Arc::new(|seg, _| {
+                async move {
+                    SegmentResult::Failed {
+                        index: seg.index,
+                        error: "transient".to_string(),
+                        exhausted: false,
+                    }
+                }
+                .boxed()
+            }),
+        );
+        queue.enqueue(make_segment(0));
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        // First poll picks up Failed, apply_result increments retry_count to 1
+        queue.poll_completed();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(queue.segments[0].retry_count, 1);
+
+        // Second consumption: dispatch again → Failed again → retry_count → 2
+        queue.poll_completed();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(queue.segments[0].retry_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_not_exhausted_capped_at_max_retries() {
+        // After MAX_RETRIES retries, the segment should be permanently Failed
+        let mut queue = BatchQueue::with_submit_fn(
+            QueueConfig::default(),
+            Arc::new(|seg, _| {
+                async move {
+                    SegmentResult::Failed {
+                        index: seg.index,
+                        error: "transient".to_string(),
+                        exhausted: false,
+                    }
+                }
+                .boxed()
+            }),
+        );
+        queue.enqueue(make_segment(0));
+
+        // Poll enough times to exceed MAX_RETRIES
+        for _ in 0..=MAX_RETRIES + 1 {
+            queue.poll_completed();
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(queue.segments[0].retry_count, MAX_RETRIES);
+        assert!(matches!(
+            queue.segments[0].status,
+            SegmentStatus::Failed { .. }
+        ));
     }
 }

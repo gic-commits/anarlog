@@ -214,6 +214,12 @@ fn build_transcription_options(
         }
     }
 
+    if params.cjk_server_side {
+        if let CreateTranscriptionOptions::Custom(opts) = &mut options {
+            opts.cjk_post_process = true;
+        }
+    }
+
     options
 }
 

@@ -24,6 +24,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@hypr/ui/components/ui/select";
+import { Checkbox } from "@hypr/ui/components/ui/checkbox";
+import { Switch } from "@hypr/ui/components/ui/switch";
 import { sonnerToast } from "@hypr/ui/components/ui/toast";
 import {
   Tooltip,
@@ -361,12 +363,9 @@ export function SelectProviderAndModel() {
         )}
       </div>
 
-      {visibleProvider === "openai" && isConfigured && (
-        <SttModeSection
-          providerId={visibleProvider}
-          model={effectiveSelection.model}
-        />
-      )}
+      {visibleProvider === "openai" && isConfigured && <SttModeSection />}
+
+      {isConfigured && <CjkToggleSection />}
     </div>
   );
 }
@@ -637,7 +636,9 @@ function useConfiguredMapping(): {
 
   const localModels = supportedModels.data ?? [];
   const soniqoModels = localModels.filter((m) => m.model_type === "soniqo");
-  const whisperModels = localModels.filter((m) => m.model_type === "whispercpp");
+  const whisperModels = localModels.filter(
+    (m) => m.model_type === "whispercpp",
+  );
 
   const soniqoDownloaded = useQueries({
     queries: [...soniqoModels.map((m) => sttModelQueries.isDownloaded(m.key))],
@@ -894,78 +895,153 @@ function ModelSelectedValue({ model }: { model: ModelEntry }) {
   );
 }
 
-function SttModeSection({
-  providerId,
-  model,
-}: {
-  providerId: string;
-  model: string;
-}) {
-  const { stt_mode, stt_segment_duration } = useConfigValues([
+function SttModeSection() {
+  const { stt_mode, stt_segment_duration, cjk_server_side } = useConfigValues([
     "stt_mode",
     "stt_segment_duration",
+    "cjk_server_side",
   ] as const) as {
     stt_mode: string | undefined;
     stt_segment_duration: number | undefined;
+    cjk_server_side: boolean | undefined;
   };
   const setSettings = useSetSettingValues();
 
-  const modeActions = {
-    setMode: (mode: string) => setSettings({ stt_mode: mode }),
-    setSegmentDuration: (ms: number) =>
-      setSettings({ stt_segment_duration: ms }),
-  };
-
   const mode = stt_mode ?? "batch";
   const segmentDuration = stt_segment_duration ?? 30000;
+  const serverSide = cjk_server_side ?? false;
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <span className="text-muted-foreground text-xs">
+        <Trans>Mode</Trans>
+      </span>
+      <Select
+        value={mode}
+        onValueChange={(v) => setSettings({ stt_mode: v })}
+      >
+        <SelectTrigger className="bg-card h-7 text-xs shadow-none w-28">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="live">
+            <Trans>Live</Trans>
+          </SelectItem>
+          <SelectItem value="batch">
+            <Trans>Batch</Trans>
+          </SelectItem>
+          <SelectItem value="progressive">
+            <Trans>Progressive</Trans>
+          </SelectItem>
+        </SelectContent>
+      </Select>
+
+      <span className="text-muted-foreground text-xs">
+        <Trans>Segment</Trans>
+      </span>
+      <Select
+        value={String(segmentDuration)}
+        onValueChange={(v) => setSettings({ stt_segment_duration: Number(v) })}
+      >
+        <SelectTrigger className="bg-card h-7 text-xs shadow-none w-20">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="30000">30s</SelectItem>
+          <SelectItem value="60000">60s</SelectItem>
+          <SelectItem value="180000">3m</SelectItem>
+          <SelectItem value="300000">5m</SelectItem>
+          <SelectItem value="600000">10m</SelectItem>
+        </SelectContent>
+      </Select>
+
+      <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+        <Switch
+          checked={serverSide}
+          onCheckedChange={(v) => setSettings({ cjk_server_side: v })}
+          className="scale-75"
+        />
+        <Trans>CJK (Server)</Trans>
+      </label>
+    </div>
+  );
+}
+
+const CJK_LAYER_LABELS: {
+  key: "punctuation" | "jieba" | "acoustic_merge";
+  label: string;
+}[] = [
+  { key: "punctuation", label: "Gap punctuation" },
+  { key: "jieba", label: "Jieba word segmentation" },
+  { key: "acoustic_merge", label: "Acoustic merge" },
+];
+
+function parseCjkFeatures(
+  raw: string | undefined,
+): Record<string, boolean> {
+  if (!raw) {
+    return {};
+  }
+  try {
+    return JSON.parse(raw) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+function CjkToggleSection() {
+  const { cjk_post_process, cjk_features } = useConfigValues([
+    "cjk_post_process",
+    "cjk_features",
+  ]) as {
+    cjk_post_process: boolean | undefined;
+    cjk_features: string | undefined;
+  };
+  const setSettings = useSetSettingValues();
+
+  const enabled = cjk_post_process ?? true;
+  const features = parseCjkFeatures(cjk_features);
+
+  const setFeature = (key: string, value: boolean) => {
+    const updated = { ...features, [key]: value };
+    setSettings({ cjk_features: JSON.stringify(updated) });
+  };
 
   return (
     <div className="flex flex-col gap-2">
-      <h4 className="text-sm font-medium">
-        <Trans>Transcription mode</Trans>
-      </h4>
-      <div className="flex items-center gap-2">
-        <Select
-          value={mode}
-          onValueChange={modeActions.setMode}
-        >
-          <SelectTrigger className="bg-card h-8 text-xs shadow-none">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="live">
-              <Trans>Live</Trans>
-            </SelectItem>
-            <SelectItem value="batch">
-              <Trans>Batch</Trans>
-            </SelectItem>
-            <SelectItem value="progressive">
-              <Trans>Progressive Batch</Trans>
-            </SelectItem>
-          </SelectContent>
-        </Select>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h4 className="text-sm font-medium">
+            <Trans>CJK post-processing (Local)</Trans>
+          </h4>
+          <p className="text-muted-foreground text-xs">
+            <Trans>
+              Apply jieba segmentation and acoustic word grouping to Chinese
+              transcription results
+            </Trans>
+          </p>
+        </div>
+        <Switch
+          checked={enabled}
+          onCheckedChange={(v) => setSettings({ cjk_post_process: v })}
+        />
       </div>
 
-      {mode === "progressive" && (
-        <div className="mt-1 flex items-center gap-2">
-          <span className="text-muted-foreground text-xs">
-            <Trans>Segment duration</Trans>
-          </span>
-          <Select
-            value={String(segmentDuration)}
-            onValueChange={(v) => modeActions.setSegmentDuration(Number(v))}
-          >
-            <SelectTrigger className="bg-card h-7 text-xs shadow-none">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="30000">30s</SelectItem>
-              <SelectItem value="60000">60s</SelectItem>
-              <SelectItem value="180000">3m</SelectItem>
-              <SelectItem value="300000">5m</SelectItem>
-              <SelectItem value="600000">10m</SelectItem>
-            </SelectContent>
-          </Select>
+      {enabled && (
+        <div className="ml-1 flex flex-col gap-1.5 pt-1">
+          {CJK_LAYER_LABELS.map(({ key, label }) => (
+            <label
+              key={key}
+              className="flex cursor-pointer items-center gap-2 text-xs"
+            >
+              <Checkbox
+                checked={features[key] ?? true}
+                onCheckedChange={(v) =>
+                  setFeature(key, v === "indeterminate" ? true : !!v)}
+              />
+              <span className="text-muted-foreground">{label}</span>
+            </label>
+          ))}
         </div>
       )}
     </div>

@@ -209,11 +209,97 @@ async fn submit_file_direct(
     runtime.emit(BatchEvent::BatchSegmentResult {
         session_id: session_id.to_string(),
         segment_index: 0,
+        global_start_ms: 0,
         response: response.clone(),
     });
 
     Ok(BatchRunOutput {
         session_id: session_id.to_string(),
+        mode: BatchRunMode::Direct,
+        response,
+    })
+}
+
+/// Continue a previously interrupted/partial progressive batch.
+/// Pre-loads completed segments from DB, streams audio, and only
+/// submits segments whose indices are not already completed.
+pub async fn continue_from_file(
+    runtime: Arc<dyn BatchRuntime>,
+    params: BatchParams,
+    completed_segments: Vec<PersistedCompletedSegment>,
+) -> crate::Result<BatchRunOutput> {
+    let session_id = params.session_id.clone();
+    let file_path = params.file_path.clone();
+
+    let source = hypr_audio_utils::source_from_path(&file_path).map_err(|e| {
+        crate::BatchFailure::ProgressiveBatchFailed {
+            message: format!("failed to open audio file: {e}"),
+        }
+    })?;
+
+    let sample_rate: u32 = source.sample_rate().into();
+    let channels: usize = source.channels().get().into();
+    let segment_duration_ms = params.segment_duration_ms.unwrap_or(30000);
+    let session_dir = std::env::temp_dir().join(format!("progressive-batch-{session_id}"));
+    let _ = std::fs::create_dir_all(&session_dir);
+
+    let language = params.languages.first().map(|l| l.to_string());
+
+    let config = ProgressiveBatchConfig {
+        session_id: session_id.clone(),
+        sample_rate,
+        segment_duration_ms,
+        overlap_ms: params.overlap_ms.unwrap_or(1000),
+        max_concurrency: params.max_concurrency.unwrap_or(2) as usize,
+        base_url: params.base_url,
+        api_key: params.api_key,
+        model: params.model,
+        language,
+        provider: params.provider,
+        session_dir,
+    };
+
+    // Manager starts in Active state with pre-loaded completed segments.
+    // on_audio_frame will skip segments already in the stitcher.
+    let mut manager =
+        ProgressiveBatchManager::resume(config, completed_segments).with_runtime(runtime);
+
+    const CHUNK_FRAMES: usize = 48000 * 10;
+    let mut buf: Vec<f32> = Vec::with_capacity(CHUNK_FRAMES * channels);
+
+    for sample in source {
+        buf.push(sample);
+        if buf.len() >= CHUNK_FRAMES * channels {
+            let mono: Vec<f32> = if channels > 1 {
+                buf.chunks_exact(channels)
+                    .map(|c| c.iter().sum::<f32>() / channels as f32)
+                    .collect()
+            } else {
+                std::mem::take(&mut buf)
+            };
+            manager.on_audio_frame(&mono);
+            buf.clear();
+        }
+    }
+
+    if !buf.is_empty() {
+        let mono: Vec<f32> = if channels > 1 {
+            buf.chunks_exact(channels)
+                .map(|c| c.iter().sum::<f32>() / channels as f32)
+                .collect()
+        } else {
+            buf
+        };
+        manager.on_audio_frame(&mono);
+    }
+
+    let response = manager
+        .finish()
+        .await
+        .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed { message: e })?;
+
+    Ok(BatchRunOutput {
+        session_id,
         mode: BatchRunMode::Direct,
         response,
     })

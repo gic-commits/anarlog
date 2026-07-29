@@ -5,12 +5,14 @@ edition = "2024"
 
 [features]
 default = []
+cjk = ["hypr-cjk-processor"]
 specta = ["dep:specta"]
 tauri-event = ["specta", "dep:tauri-specta"]
 
 [dependencies]
 hypr-audio-chunking = { workspace = true }
 hypr-audio-utils = { workspace = true }
+hypr-cjk-processor = { workspace = true, optional = true }
 hypr-denoise = { workspace = true, features = ["onnx"] }
 hypr-host = { workspace = true }
 hypr-language = { workspace = true }

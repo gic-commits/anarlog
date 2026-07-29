@@ -9,6 +9,7 @@ const GAP_WARNING_THRESHOLD_MS: i64 = 2000;
 pub struct StitcherConfig {
     pub overlap_ms: u64,
     pub segment_duration_ms: u64,
+    pub total_segments: usize,
 }
 
 impl Default for StitcherConfig {
@@ -16,6 +17,7 @@ impl Default for StitcherConfig {
         Self {
             overlap_ms: 1000,
             segment_duration_ms: 30000,
+            total_segments: 0,
         }
     }
 }
@@ -29,7 +31,6 @@ pub struct CompletedSegment {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StitcherError {
-    MissingSegments(Vec<usize>),
     EmptyResponse,
 }
 
@@ -37,6 +38,7 @@ pub enum StitcherError {
 pub struct Stitcher {
     config: StitcherConfig,
     segments: BTreeMap<usize, CompletedSegment>,
+    abandoned: Vec<usize>,
 }
 
 impl Stitcher {
@@ -44,6 +46,7 @@ impl Stitcher {
         Self {
             config,
             segments: BTreeMap::new(),
+            abandoned: Vec::new(),
         }
     }
 
@@ -51,12 +54,37 @@ impl Stitcher {
         self.segments.insert(segment.index, segment);
     }
 
+    pub fn add_abandoned(&mut self, index: usize) {
+        if self.segments.contains_key(&index) {
+            return;
+        }
+        if !self.abandoned.contains(&index) {
+            self.abandoned.push(index);
+        }
+    }
+
+    pub fn contains(&self, index: usize) -> bool {
+        self.segments.contains_key(&index)
+    }
+
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    pub fn abandoned_indices(&self) -> &[usize] {
+        &self.abandoned
+    }
+
     pub fn is_complete(&self) -> bool {
         if self.segments.is_empty() {
             return false;
         }
-        let max_index = self.segments.keys().max().copied().unwrap_or(0);
-        self.segments.len() == max_index + 1
+        if self.config.total_segments > 0 {
+            self.segments.len() == self.config.total_segments
+        } else {
+            let max_index = self.segments.keys().max().copied().unwrap_or(0);
+            self.segments.len() == max_index + 1
+        }
     }
 
     pub fn stitch(&self) -> Result<Response, StitcherError> {
@@ -65,12 +93,22 @@ impl Stitcher {
         }
 
         let max_index = self.segments.keys().max().copied().unwrap_or(0);
-        let missing: Vec<usize> = (0..=max_index)
-            .filter(|i| !self.segments.contains_key(i))
-            .collect();
-        if !missing.is_empty() {
-            return Err(StitcherError::MissingSegments(missing));
-        }
+        let segments_total = if self.config.total_segments > 0 {
+            self.config.total_segments
+        } else {
+            max_index + 1
+        };
+        let missing: Vec<usize> = if self.abandoned.is_empty() {
+            (0..segments_total)
+                .filter(|i| !self.segments.contains_key(i))
+                .collect()
+        } else {
+            self.abandoned
+                .iter()
+                .filter(|i| !self.segments.contains_key(i))
+                .copied()
+                .collect()
+        };
 
         struct TaggedWord {
             word: batch::Word,
@@ -164,8 +202,13 @@ impl Stitcher {
         let mut metadata = serde_json::json!({
             "total_duration": total_duration,
             "segments_stitched": self.segments.len(),
+            "segments_total": segments_total,
             "segment_boundaries": boundaries,
         });
+
+        if !missing.is_empty() {
+            metadata["abandoned_segments"] = serde_json::json!(missing);
+        }
 
         if !gaps.is_empty() {
             let gap_warnings: Vec<serde_json::Value> = gaps
@@ -204,6 +247,7 @@ mod tests {
         StitcherConfig {
             overlap_ms,
             segment_duration_ms: 30000,
+            total_segments: 0,
         }
     }
 
@@ -258,10 +302,9 @@ mod tests {
         stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "hello")]));
         stitcher.add_segment(seg(2, 58000, vec![make_word(0.0, 1.0, "world")]));
         assert!(!stitcher.is_complete());
-        assert_eq!(
-            stitcher.stitch(),
-            Err(StitcherError::MissingSegments(vec![1]))
-        );
+        let result = stitcher.stitch().unwrap();
+        let abandoned = result.metadata["abandoned_segments"].as_array().unwrap();
+        assert!(abandoned.contains(&serde_json::json!(1)));
     }
 
     #[test]
@@ -408,6 +451,7 @@ mod tests {
         let stitcher = Stitcher::new(StitcherConfig {
             overlap_ms: 1000,
             segment_duration_ms: 30000,
+            total_segments: 0,
         });
         assert!(!stitcher.is_complete());
     }
@@ -417,6 +461,7 @@ mod tests {
         let mut stitcher = Stitcher::new(StitcherConfig {
             overlap_ms: 1000,
             segment_duration_ms: 30000,
+            total_segments: 0,
         });
         stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "hi")]));
         stitcher.add_segment(seg(2, 58000, vec![make_word(0.0, 1.0, "later")]));
@@ -468,5 +513,74 @@ mod tests {
         stitcher.add_segment(seg(2, 58000, vec![make_word(0.0, 1.0, "c")]));
         let result = stitcher.stitch().unwrap();
         assert_eq!(result.metadata["segments_stitched"].as_u64(), Some(3));
+    }
+
+    #[test]
+    fn test_add_abandoned_does_not_override_completed() {
+        let mut stitcher = Stitcher::new(config(1000));
+        stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "a")]));
+        // Try to abandon segment 0 after it was already completed
+        stitcher.add_abandoned(0);
+        let result = stitcher.stitch().unwrap();
+        let words = &result.results.channels[0].alternatives[0].words;
+        assert_eq!(words.len(), 1, "word should still be present");
+        assert!(
+            result.metadata.get("abandoned_segments").is_none(),
+            "abandoned_segments should be empty"
+        );
+        assert!(stitcher.is_complete());
+    }
+
+    #[test]
+    fn test_is_complete_with_total_segments() {
+        let mut stitcher = Stitcher::new(StitcherConfig {
+            overlap_ms: 1000,
+            segment_duration_ms: 30000,
+            total_segments: 5,
+        });
+        stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "a")]));
+        stitcher.add_segment(seg(1, 29000, vec![make_word(0.0, 1.0, "b")]));
+        assert!(!stitcher.is_complete(), "2/5 should not be complete");
+        stitcher.add_segment(seg(2, 58000, vec![make_word(0.0, 1.0, "c")]));
+        stitcher.add_segment(seg(3, 87000, vec![make_word(0.0, 1.0, "d")]));
+        stitcher.add_segment(seg(4, 116000, vec![make_word(0.0, 1.0, "e")]));
+        assert!(stitcher.is_complete(), "5/5 should be complete");
+    }
+
+    #[test]
+    fn test_total_segments_in_metadata() {
+        let mut stitcher = Stitcher::new(StitcherConfig {
+            overlap_ms: 1000,
+            segment_duration_ms: 30000,
+            total_segments: 2,
+        });
+        stitcher.add_segment(seg(1, 29000, vec![make_word(0.0, 1.0, "b")]));
+        // With total_segments=2, stitch should know segments 0 and 1
+        // Segment 0 is missing → should be in abandoned_segments
+        let result = stitcher.stitch().unwrap();
+        assert_eq!(result.metadata["segments_total"].as_u64(), Some(2));
+        let abandoned = result.metadata["abandoned_segments"].as_array().unwrap();
+        assert!(
+            abandoned.contains(&serde_json::json!(0)),
+            "segment 0 should be abandoned"
+        );
+    }
+
+    #[test]
+    fn test_not_complete_with_gap_and_total_segments() {
+        let mut stitcher = Stitcher::new(StitcherConfig {
+            overlap_ms: 1000,
+            segment_duration_ms: 30000,
+            total_segments: 5,
+        });
+        stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "hi")]));
+        stitcher.add_segment(seg(2, 58000, vec![make_word(0.0, 1.0, "later")]));
+        assert!(!stitcher.is_complete(), "2/5 should not be complete");
+        let result = stitcher.stitch().unwrap();
+        let abandoned = result.metadata["abandoned_segments"].as_array().unwrap();
+        // With total_segments=5, max_index=2 → missing = [1, 3, 4]
+        assert!(abandoned.contains(&serde_json::json!(1)));
+        assert!(abandoned.contains(&serde_json::json!(3)));
+        assert!(abandoned.contains(&serde_json::json!(4)));
     }
 }

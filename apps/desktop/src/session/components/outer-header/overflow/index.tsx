@@ -27,7 +27,11 @@ import { ShowInFinder } from "./misc";
 
 import { useAudioPlayer } from "~/audio-player";
 import { openFloatingMeetingPanel } from "~/meeting-float/host";
-import { useRegenerateTranscript } from "~/session/components/note-input/transcript/actions";
+import {
+  useContinuableBatchJob,
+  useContinueTranscript,
+  useRegenerateTranscript,
+} from "~/session/components/note-input/transcript/actions";
 import {
   useCurrentNoteHasContent,
   useHasTranscript,
@@ -59,7 +63,15 @@ export function OverflowButton({
   );
   const { audioExists } = useAudioPlayer();
   const { uploadAudio, uploadTranscript } = useUploadFile(sessionId);
-  const regenerateTranscript = useRegenerateTranscript(sessionId);
+  const regenerateTotal = useRegenerateTranscript(sessionId, "total");
+  const regenerateProgressive = useRegenerateTranscript(
+    sessionId,
+    "progressive",
+  );
+  const continueTranscript = useContinueTranscript(sessionId);
+  const { data: hasContinuableJob } = useContinuableBatchJob(sessionId);
+  const sttMode = useConfigValue("stt_mode");
+  const isProgressiveMode = sttMode === "progressive";
   const sessionMode = useListener((state) => state.getSessionMode(sessionId));
   const floatingBarEnabled = useConfigValue("floating_bar_enabled");
   const isMeetingInProgress =
@@ -92,9 +104,17 @@ export function OverflowButton({
     setOpen(false);
     uploadTranscript();
   };
-  const handleRetranscribe = () => {
+  const handleRetranscribeTotal = () => {
     setOpen(false);
-    void regenerateTranscript();
+    void regenerateTotal();
+  };
+  const handleRetranscribeProgressive = () => {
+    setOpen(false);
+    void regenerateProgressive();
+  };
+  const handleContinue = () => {
+    setOpen(false);
+    void continueTranscript();
   };
   const handleOpenFloatingPanel = () => {
     setOpen(false);
@@ -139,9 +159,39 @@ export function OverflowButton({
                 resume={audioExists || hasTranscript}
               />
             )}
-            {showRetranscribeAction && (
+            {showRetranscribeAction && isProgressiveMode && (
+              <>
+                <DropdownMenuItem
+                  onClick={handleRetranscribeTotal}
+                  disabled={isRetranscribing}
+                  className="cursor-pointer"
+                >
+                  <RefreshCwIcon />
+                  <span>Re-trans(Total)</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={handleRetranscribeProgressive}
+                  disabled={isRetranscribing}
+                  className="cursor-pointer"
+                >
+                  <RefreshCwIcon />
+                  <span>Re-trans(Progressive)</span>
+                </DropdownMenuItem>
+                {hasContinuableJob && (
+                  <DropdownMenuItem
+                    onClick={handleContinue}
+                    disabled={isRetranscribing}
+                    className="cursor-pointer"
+                  >
+                    <RefreshCwIcon />
+                    <span>Continue(Progressive)</span>
+                  </DropdownMenuItem>
+                )}
+              </>
+            )}
+            {showRetranscribeAction && !isProgressiveMode && (
               <DropdownMenuItem
-                onClick={handleRetranscribe}
+                onClick={handleRetranscribeTotal}
                 disabled={isRetranscribing}
                 className="cursor-pointer"
               >

@@ -110,6 +110,11 @@ pub const APP_MIGRATION_STEPS: &[hypr_db_migrate::MigrationStep] = &[
         },
         sql: include_str!("../migrations/20260714120500_search_index_organizations_triggers.sql"),
     },
+    hypr_db_migrate::MigrationStep {
+        id: "20260726000000_progressive_batch_jobs",
+        scope: hypr_db_migrate::MigrationScope::Plain,
+        sql: include_str!("../migrations/20260726000000_progressive_batch_jobs.sql"),
+    },
 ];
 
 pub fn schema() -> hypr_db_migrate::DbSchema {
@@ -329,6 +334,8 @@ mod tests {
                 "migration_import_runs",
                 "migration_import_targets",
                 "organizations",
+                "progressive_batch_jobs",
+                "progressive_batch_segments",
                 "search_index_dirty",
                 "search_index_state",
                 "session_attachments",

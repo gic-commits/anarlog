@@ -36,6 +36,7 @@ type RunOptions = {
   numSpeakers?: number;
   minSpeakers?: number;
   maxSpeakers?: number;
+  forceProgressive?: boolean;
 };
 
 type BatchTarget = {
@@ -179,6 +180,9 @@ export const useRunBatch = (sessionId: string) => {
   const dictionaryTerms = useConfigValue("personalization_dictionary_terms");
   const sttMode = useConfigValue("stt_mode");
   const sttSegmentDuration = useConfigValue("stt_segment_duration");
+  const cjkPostProcess = useConfigValue("cjk_post_process");
+  const cjkFeaturesRaw = useConfigValue("cjk_features");
+  const cjkServerSide = useConfigValue("cjk_server_side");
   const audioRetention = normalizeAudioRetention(
     useConfigValue("audio_retention"),
   );
@@ -362,7 +366,8 @@ export const useRunBatch = (sessionId: string) => {
         });
 
       const progressiveBatch =
-        sttMode === "progressive"
+        options?.forceProgressive ??
+        (sttMode === "progressive"
           ? true
           : sttMode === "batch"
             ? false
@@ -370,12 +375,13 @@ export const useRunBatch = (sessionId: string) => {
                 provider: target.provider,
                 baseUrl: target.baseUrl,
                 model: target.model,
-              });
+              }));
 
       console.log(
-        "[DEBUG] useRunBatch params: sttMode=%s progressiveBatch=%s provider=%s model=%s",
+        "[DEBUG] useRunBatch params: sttMode=%s progressiveBatch=%s forceProgressive=%s provider=%s model=%s",
         sttMode,
         progressiveBatch,
+        options?.forceProgressive,
         target.provider,
         target.model,
       );
@@ -396,6 +402,20 @@ export const useRunBatch = (sessionId: string) => {
         segment_duration_ms: progressiveBatch
           ? (sttSegmentDuration ?? undefined)
           : undefined,
+        cjk_enabled: cjkPostProcess ?? true,
+        cjk_features: (() => {
+          if (!cjkFeaturesRaw) {
+            return undefined;
+          }
+          try {
+            return JSON.parse(cjkFeaturesRaw) as NonNullable<
+              TranscriptionParams["cjk_features"]
+            >;
+          } catch {
+            return undefined;
+          }
+        })(),
+        cjk_server_side: cjkServerSide ?? false,
       };
 
       try {

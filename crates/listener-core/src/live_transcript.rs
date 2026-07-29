@@ -1309,6 +1309,7 @@ mod tests {
                 channel: 0,
                 state: hypr_transcript::WordState::Final,
                 speaker_index: Some(1),
+                provider_segment_index: None,
             }],
             replaced_ids: vec!["replaced".to_string()],
             partials: vec![PartialWord {

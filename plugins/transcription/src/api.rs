@@ -228,6 +228,20 @@ pub struct TranscriptionParams {
     pub progressive_batch: bool,
     #[serde(default)]
     pub segment_duration_ms: Option<u32>,
+    #[serde(default)]
+    pub overlap_ms: Option<u32>,
+    #[serde(default)]
+    pub max_concurrency: Option<u32>,
+    #[serde(default = "default_cjk_enabled")]
+    pub cjk_enabled: bool,
+    #[serde(default)]
+    pub cjk_features: Option<listener2::CjkLayerFlags>,
+    #[serde(default)]
+    pub cjk_server_side: bool,
+}
+
+fn default_cjk_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -407,6 +421,11 @@ impl From<TranscriptionParams> for listener2::BatchParams {
             max_speakers: value.max_speakers,
             progressive_batch: value.progressive_batch,
             segment_duration_ms: value.segment_duration_ms,
+            overlap_ms: value.overlap_ms,
+            max_concurrency: value.max_concurrency,
+            cjk_enabled: value.cjk_enabled,
+            cjk_features: value.cjk_features,
+            cjk_server_side: value.cjk_server_side,
         }
     }
 }
@@ -656,6 +675,7 @@ impl From<listener2::BatchEvent> for TranscriptionEvent {
                 session_id,
                 segment_index,
                 response,
+                ..
             } => Self::SegmentResult {
                 session_id,
                 segment_index,

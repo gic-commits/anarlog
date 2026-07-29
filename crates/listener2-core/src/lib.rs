@@ -6,7 +6,9 @@ mod runtime;
 mod subtitle;
 
 pub use batch::{
-    BatchParams, BatchProvider, BatchRunMode, BatchRunOutput, expects_progressive_batch, run_batch,
+    BatchParams, BatchProvider, BatchRunMode, BatchRunOutput, CjkLayerFlags,
+    PersistedCompletedSegment, ProgressiveBatchConfig, ProgressiveBatchManager, continue_from_file,
+    expects_progressive_batch, run_batch,
 };
 pub use denoise::{DenoiseParams, run_denoise};
 pub use error::*;

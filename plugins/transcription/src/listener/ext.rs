@@ -116,7 +116,10 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Listener<'a, R, M> {
             params.transcription_mode,
         );
         let params: SessionParams = params.into();
-        tracing::info!("[DEBUG] start_capture: after into() transcription_mode={:?}", params.transcription_mode);
+        tracing::info!(
+            "[DEBUG] start_capture: after into() transcription_mode={:?}",
+            params.transcription_mode
+        );
         if let Some(cell) = registry::where_is(RootActor::name()) {
             let actor: ActorRef<RootMsg> = cell.into();
             match ractor::call!(actor, RootMsg::StartSession, params) {

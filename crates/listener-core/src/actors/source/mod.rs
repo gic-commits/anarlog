@@ -44,11 +44,14 @@ pub struct ListenerRefreshReplay {
     pub duration_secs: f64,
 }
 
+pub type PcmSender = tokio::sync::mpsc::Sender<Arc<[f32]>>;
+
 #[derive(Clone)]
 pub enum ListenerRouting {
     Buffering,
     Attached(ActorRef<ListenerMsg>),
     Dropped,
+    ProgressiveBatch(PcmSender),
 }
 
 pub struct SourceArgs {

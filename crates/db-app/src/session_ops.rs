@@ -1,8 +1,8 @@
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::{
-    ListSessions, SessionActionItemRow, SessionDocumentRow, SessionListItem, SessionParticipantRow,
-    SessionRow, SessionTranscriptRow,
+    ListSessions, ProgressiveBatchJobRow, ProgressiveBatchSegmentRow, SessionActionItemRow,
+    SessionDocumentRow, SessionListItem, SessionParticipantRow, SessionRow, SessionTranscriptRow,
 };
 
 pub const MAX_SESSION_LIST_LIMIT: u32 = 500;
@@ -519,4 +519,197 @@ mod tests {
         assert!(standalone.is_empty());
         assert!(missing.is_empty());
     }
+}
+
+// ── Progressive Batch ──────────────────────────────────────────────
+
+pub async fn create_progressive_batch_job(
+    pool: &SqlitePool,
+    job: &ProgressiveBatchJobRow,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO progressive_batch_jobs
+         (id, session_id, status, provider, model, base_url, language,
+          segment_duration_ms, overlap_ms, max_concurrency,
+          total_segments, completed_segments, failed_segments, abandoned_segments,
+          created_at, updated_at, completed_at, error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&job.id)
+    .bind(&job.session_id)
+    .bind(&job.status)
+    .bind(&job.provider)
+    .bind(&job.model)
+    .bind(&job.base_url)
+    .bind(&job.language)
+    .bind(job.segment_duration_ms)
+    .bind(job.overlap_ms)
+    .bind(job.max_concurrency)
+    .bind(job.total_segments)
+    .bind(job.completed_segments)
+    .bind(job.failed_segments)
+    .bind(job.abandoned_segments)
+    .bind(&job.created_at)
+    .bind(&job.updated_at)
+    .bind(&job.completed_at)
+    .bind(&job.error)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_progressive_batch_job_status(
+    pool: &SqlitePool,
+    id: &str,
+    status: &str,
+    completed_at: Option<&str>,
+    error: Option<&str>,
+    total_segments: i64,
+    completed_segments: i64,
+    failed_segments: i64,
+    abandoned_segments: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE progressive_batch_jobs
+         SET status = ?, completed_at = ?, error = ?,
+             total_segments = ?, completed_segments = ?,
+             failed_segments = ?, abandoned_segments = ?,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ?",
+    )
+    .bind(status)
+    .bind(completed_at)
+    .bind(error)
+    .bind(total_segments)
+    .bind(completed_segments)
+    .bind(failed_segments)
+    .bind(abandoned_segments)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_progressive_batch_job(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<ProgressiveBatchJobRow>, sqlx::Error> {
+    sqlx::query_as::<_, ProgressiveBatchJobRow>("SELECT * FROM progressive_batch_jobs WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn list_progressive_batch_jobs_by_session(
+    pool: &SqlitePool,
+    session_id: &str,
+    status_filter: Option<&[&str]>,
+) -> Result<Vec<ProgressiveBatchJobRow>, sqlx::Error> {
+    let mut query =
+        QueryBuilder::<Sqlite>::new("SELECT * FROM progressive_batch_jobs WHERE session_id = ");
+    query.push_bind(session_id);
+    if let Some(statuses) = status_filter {
+        query.push(" AND status IN (");
+        for (i, s) in statuses.iter().enumerate() {
+            if i > 0 {
+                query.push(", ");
+            }
+            query.push_bind(s);
+        }
+        query.push(")");
+    }
+    query.push(" ORDER BY created_at DESC");
+    query
+        .build_query_as::<ProgressiveBatchJobRow>()
+        .fetch_all(pool)
+        .await
+}
+
+pub async fn insert_progressive_batch_segment(
+    pool: &SqlitePool,
+    seg: &ProgressiveBatchSegmentRow,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO progressive_batch_segments
+         (id, job_id, segment_index, global_start_ms, global_end_ms,
+          status, retry_count, max_retries, error, response_json,
+          created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&seg.id)
+    .bind(&seg.job_id)
+    .bind(seg.segment_index)
+    .bind(seg.global_start_ms)
+    .bind(seg.global_end_ms)
+    .bind(&seg.status)
+    .bind(seg.retry_count)
+    .bind(seg.max_retries)
+    .bind(&seg.error)
+    .bind(&seg.response_json)
+    .bind(&seg.created_at)
+    .bind(&seg.updated_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_progressive_batch_segment_status(
+    pool: &SqlitePool,
+    id: &str,
+    status: &str,
+    error: Option<&str>,
+    response_json: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE progressive_batch_segments
+         SET status = ?, error = ?, response_json = ?,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ?",
+    )
+    .bind(status)
+    .bind(error)
+    .bind(response_json)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_completed_progressive_batch_segments(
+    pool: &SqlitePool,
+    job_id: &str,
+) -> Result<Vec<ProgressiveBatchSegmentRow>, sqlx::Error> {
+    sqlx::query_as::<_, ProgressiveBatchSegmentRow>(
+        "SELECT * FROM progressive_batch_segments
+         WHERE job_id = ? AND status = 'completed'
+         ORDER BY segment_index ASC",
+    )
+    .bind(job_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn mark_interrupted_progressive_batch_jobs(
+    pool: &SqlitePool,
+) -> Result<Vec<ProgressiveBatchJobRow>, sqlx::Error> {
+    // Find all running jobs and mark them interrupted
+    let running = sqlx::query_as::<_, ProgressiveBatchJobRow>(
+        "SELECT * FROM progressive_batch_jobs WHERE status = 'running'",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for job in &running {
+        sqlx::query(
+            "UPDATE progressive_batch_jobs
+             SET status = 'interrupted',
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?",
+        )
+        .bind(&job.id)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(running)
 }

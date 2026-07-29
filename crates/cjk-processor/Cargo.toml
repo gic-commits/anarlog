@@ -1,0 +1,18 @@
+[package]
+name = "cjk-processor"
+version = "0.1.0"
+edition = "2024"
+description = "CJK transcription post-processor: jieba segmentation + acoustic word grouping"
+
+[features]
+default = ["jieba"]
+jieba = ["dep:jieba-rs"]
+
+[dependencies]
+jieba-rs = { version = "0.7", optional = true, features = ["default-dict"] }
+serde = { workspace = true, optional = true, features = ["derive"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

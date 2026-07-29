@@ -89,6 +89,10 @@ impl Pipeline {
                 self.audio_buffer.clear();
                 self.backlog_quota = 0.0;
             }
+            ListenerRouting::ProgressiveBatch(_) => {
+                self.audio_buffer.clear();
+                self.backlog_quota = 0.0;
+            }
         }
     }
 
@@ -149,6 +153,9 @@ impl Pipeline {
                 self.send_to_listener(actor, &item.mic, &item.spk, item.mode);
             }
             ListenerRouting::Dropped => {}
+            ListenerRouting::ProgressiveBatch(tx) => {
+                let _ = tx.try_send(Arc::clone(&item.mic));
+            }
         }
     }
 
@@ -660,6 +667,42 @@ mod tests {
         assert!(matches!(event, ProbeEvent::RecorderDual));
 
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn progressive_batch_dispatches_mic_audio() {
+        let mut pipeline = test_pipeline();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+        pipeline.dispatch_frame(
+            source_frame(false),
+            ChannelMode::MicAndSpeaker,
+            &ListenerRouting::ProgressiveBatch(tx),
+            None,
+        );
+
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&*frame, &[0.1_f32, -0.1, 0.2, -0.2]);
+    }
+
+    #[tokio::test]
+    async fn progressive_batch_clears_buffer_on_routing_change() {
+        let mut pipeline = test_pipeline();
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+
+        pipeline.dispatch_frame(
+            source_frame(false),
+            ChannelMode::MicAndSpeaker,
+            &ListenerRouting::Buffering,
+            None,
+        );
+        assert_eq!(pipeline.audio_buffer.len(), 1);
+
+        pipeline.on_listener_routing_changed(&ListenerRouting::ProgressiveBatch(tx));
+        assert!(pipeline.audio_buffer.is_empty());
     }
 
     #[test]

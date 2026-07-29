@@ -6,6 +6,7 @@ description = ""
 
 [features]
 default = []
+cjk = ["hypr-listener2-core/cjk"]
 specta = [
   "hypr-listener-core/specta",
   "hypr-listener2-core/specta",

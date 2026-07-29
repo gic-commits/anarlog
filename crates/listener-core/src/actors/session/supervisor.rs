@@ -2,6 +2,7 @@ mod children;
 mod mode;
 
 use ractor::{Actor, ActorCell, ActorProcessingErr, ActorRef, SupervisionEvent};
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
 
@@ -28,6 +29,7 @@ pub struct SessionState {
     shutting_down: bool,
     reconnect_attempts: u32,
     reconnect_task: Option<tokio::task::JoinHandle<()>>,
+    progressive_batch_pcm_rx: Option<tokio::sync::mpsc::Receiver<Arc<[f32]>>>,
 }
 
 pub struct SessionActor;
@@ -58,6 +60,22 @@ impl Actor for SessionActor {
                 ctx.requested_transcription_mode,
                 ctx.params.transcription_mode,
             );
+
+            let is_progressive =
+                ctx.params.transcription_mode == crate::TranscriptionMode::ProgressiveBatch;
+
+            let (progressive_batch_pcm_tx, progressive_batch_pcm_rx) = if is_progressive {
+                let (tx, rx) = tokio::sync::mpsc::channel(256);
+                (Some(tx), Some(rx))
+            } else {
+                (None, None)
+            };
+
+            let listener_routing = match progressive_batch_pcm_tx {
+                Some(tx) => crate::actors::source::ListenerRouting::ProgressiveBatch(tx),
+                None => mode.listener_routing(None),
+            };
+
             let recorder_cell = Some(
                 children::spawn_recorder(myself.get_cell(), &ctx)
                     .await
@@ -67,7 +85,7 @@ impl Actor for SessionActor {
                 myself.get_cell(),
                 &ctx,
                 recorder_cell.as_ref().cloned(),
-                mode.listener_routing(None),
+                listener_routing,
             )
             .await
             .map_err(|e| -> ActorProcessingErr { Box::new(e) })?;
@@ -84,6 +102,7 @@ impl Actor for SessionActor {
                 shutting_down: false,
                 reconnect_attempts: 0,
                 reconnect_task: None,
+                progressive_batch_pcm_rx,
             })
         }
         .instrument(span)
@@ -100,6 +119,14 @@ impl Actor for SessionActor {
         let span = session_span(&state.ctx.params.session_id);
 
         async {
+            if let Some(rx) = state.progressive_batch_pcm_rx.take() {
+                state
+                    .ctx
+                    .runtime
+                    .start_progressive_batch_stream(state.ctx.progressive_batch_params(), rx);
+                return Ok(());
+            }
+
             if !state.mode.should_spawn_listener() {
                 return Ok(());
             }
@@ -695,6 +722,7 @@ mod tests {
             shutting_down: false,
             reconnect_attempts: 0,
             reconnect_task: None,
+            progressive_batch_pcm_rx: None,
         }
     }
 
@@ -876,6 +904,7 @@ mod tests {
             shutting_down: false,
             reconnect_attempts: 0,
             reconnect_task: None,
+            progressive_batch_pcm_rx: None,
         };
 
         children::shutdown_children(&mut state, "test_shutdown").await;

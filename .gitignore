@@ -29,3 +29,12 @@ internal
 # Agent scratch / reference material (not for commit)
 .tmp/
 
+# Large ONNX models for speaker diarization tests (download via scripts)
+crates/pyannote-local/tests/models/*.onnx
+
+# Build artifacts
+*.rlib
+
+# Test logs
+progressive_batch-test.log
+

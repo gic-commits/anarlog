@@ -91,9 +91,12 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Listener2<'a, R, M> {
             );
         }
 
+        let batch_params: core::BatchParams = params.clone().into();
+
         let runtime = Arc::new(TauriBatchRuntime {
             app: app.clone(),
             control: control.clone(),
+            params: batch_params,
         });
 
         let task = tokio::spawn({
@@ -182,6 +185,33 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Listener2<'a, R, M> {
         stop_batch_session(&app, &registry, &session_id);
     }
 
+    pub async fn continue_transcription(
+        &self,
+        params: TranscriptionParams,
+        completed: Vec<core::PersistedCompletedSegment>,
+    ) -> Result<core::BatchRunOutput, core::Error> {
+        let state = self.manager.state::<crate::SharedState>();
+        let guard = state.lock().await;
+        let app = guard.app.clone();
+        drop(guard);
+
+        let (last_activity_tx, _) = tokio::sync::watch::channel(std::time::Instant::now());
+        let control = Arc::new(BatchSessionControl {
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
+            last_activity_tx,
+            terminal_state: std::sync::Mutex::new(BatchTerminalState::Running),
+        });
+
+        let batch_params: core::BatchParams = params.into();
+        let runtime = Arc::new(TauriBatchRuntime {
+            app: app.clone(),
+            control,
+            params: batch_params.clone(),
+        });
+
+        core::continue_from_file(runtime, batch_params, completed).await
+    }
+
     pub async fn run_denoise(&self, params: core::DenoiseParams) -> Result<(), core::Error> {
         let state = self.manager.state::<crate::SharedState>();
         let guard = state.lock().await;
@@ -237,12 +267,22 @@ impl<R: tauri::Runtime, T: tauri::Manager<R>> Listener2PluginExt<R> for T {
     }
 }
 
-struct TauriBatchRuntime {
+pub(crate) struct TauriBatchRuntime {
     app: tauri::AppHandle,
     control: Arc<BatchSessionControl>,
+    params: core::BatchParams,
 }
 
 impl core::BatchRuntime for TauriBatchRuntime {
+    // AppHandle's inner runtime is irrelevant for event emission
+    // since it just serializes to JSON and sends via IPC.
+    // The emit already works with any runtime. The app handle
+    // is used only for event emission and state access, which
+    // work through trait methods on AppHandle.
+    //
+    // Note: we store tauri::AppHandle (which is Wry-specific)
+    // because the commands in this plugin are all registered
+    // with tauri::Wry via the explicit turbofish in lib.rs.
     fn emit(&self, event: core::BatchEvent) {
         if !should_emit_event(&self.control, &event) {
             tracing::info!("[DEBUG] TauriBatchRuntime emit: skipped (terminal state)");
@@ -263,7 +303,175 @@ impl core::BatchRuntime for TauriBatchRuntime {
         if let core::BatchEvent::BatchCompleted { .. } = event {
             return;
         }
+
+        let app = self.app.clone();
+        let persist_event = event.clone();
+        let params = self.params.clone();
+        tokio::spawn(async move {
+            persist_batch_event(app, persist_event, params).await;
+        });
+
         let _ = TranscriptionEvent::from(event).emit(&self.app);
+    }
+}
+
+async fn persist_batch_event(
+    app: tauri::AppHandle,
+    event: core::BatchEvent,
+    params: core::BatchParams,
+) {
+    use tauri::Manager;
+
+    let state = match app.try_state::<tauri_plugin_db::ManagedState>() {
+        Some(state) => state,
+        None => {
+            tracing::warn!("[batch_persist] db plugin not available");
+            return;
+        }
+    };
+    let pool = state.pool();
+
+    match &event {
+        core::BatchEvent::BatchStarted { session_id } => {
+            let provider = params.provider.to_string();
+            let model = params.model.clone().unwrap_or_default();
+            let language = params
+                .languages
+                .first()
+                .map(|l| l.to_string())
+                .unwrap_or_default();
+
+            if let Err(e) = sqlx::query(
+                "INSERT OR IGNORE INTO progressive_batch_jobs
+                 (id, session_id, status, provider, model, base_url, language,
+                  segment_duration_ms, overlap_ms, max_concurrency)
+                 VALUES (?1, ?2, 'running', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )
+            .bind(session_id)
+            .bind(session_id)
+            .bind(&provider)
+            .bind(&model)
+            .bind(&params.base_url)
+            .bind(&language)
+            .bind(params.segment_duration_ms.map(|v| v as i64))
+            .bind(params.overlap_ms.map(|v| v as i64))
+            .bind(params.max_concurrency.map(|v| v as i64))
+            .execute(pool)
+            .await
+            {
+                tracing::warn!("[batch_persist] create job failed: {e}");
+            }
+        }
+
+        core::BatchEvent::BatchSegmentResult {
+            session_id,
+            segment_index,
+            global_start_ms,
+            response,
+        } => {
+            let segment_id = format!("{session_id}_{segment_index}");
+            let response_json = match serde_json::to_string(response) {
+                Ok(j) => j,
+                Err(e) => {
+                    tracing::warn!("[batch_persist] serialize response failed: {e}");
+                    return;
+                }
+            };
+
+            if let Err(e) = sqlx::query(
+                "INSERT OR REPLACE INTO progressive_batch_segments
+                 (id, job_id, segment_index, global_start_ms, status, response_json, updated_at)
+                 VALUES (
+                   ?1, ?2, ?3, ?4, 'completed', ?5,
+                   strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 )",
+            )
+            .bind(&segment_id)
+            .bind(session_id)
+            .bind(*segment_index as i64)
+            .bind(*global_start_ms)
+            .bind(&response_json)
+            .execute(pool)
+            .await
+            {
+                tracing::warn!("[batch_persist] upsert segment failed: {e}");
+            }
+
+            if let Err(e) = sqlx::query(
+                "UPDATE progressive_batch_jobs
+                 SET completed_segments = (
+                   SELECT COUNT(*) FROM progressive_batch_segments
+                   WHERE job_id = ?2 AND status = 'completed'
+                 ),
+                     total_segments = MAX(total_segments, ?3),
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = ?1",
+            )
+            .bind(session_id)
+            .bind(session_id)
+            .bind(*segment_index as i64 + 1)
+            .execute(pool)
+            .await
+            {
+                tracing::warn!("[batch_persist] update job count failed: {e}");
+            }
+        }
+
+        core::BatchEvent::BatchResponse {
+            session_id,
+            response,
+            ..
+        } => {
+            let has_abandoned = response
+                .metadata
+                .get("abandoned_segments")
+                .and_then(|v| v.as_array())
+                .is_some_and(|arr| !arr.is_empty());
+
+            let status = if has_abandoned {
+                "partial"
+            } else {
+                "completed"
+            };
+
+            if let Err(e) = sqlx::query(
+                "UPDATE progressive_batch_jobs
+                 SET status = ?2,
+                     completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = ?1 AND status = 'running'",
+            )
+            .bind(session_id)
+            .bind(status)
+            .execute(pool)
+            .await
+            {
+                tracing::warn!("[batch_persist] mark complete failed: {e}");
+            }
+        }
+
+        core::BatchEvent::BatchFailed {
+            session_id,
+            code,
+            error,
+        } => {
+            if let Err(e) = sqlx::query(
+                "UPDATE progressive_batch_jobs
+                 SET status = 'failed',
+                     error = ?2,
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = ?1",
+            )
+            .bind(session_id)
+            .bind(format!("{code:?}: {error}"))
+            .execute(pool)
+            .await
+            {
+                tracing::warn!("[batch_persist] mark failed failed: {e}");
+            }
+        }
+
+        _ => {}
     }
 }
 
@@ -514,6 +722,11 @@ mod tests {
             max_speakers: None,
             progressive_batch: false,
             segment_duration_ms: None,
+            overlap_ms: None,
+            max_concurrency: None,
+            cjk_enabled: true,
+            cjk_features: None,
+            cjk_server_side: false,
         }
     }
 

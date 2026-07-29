@@ -155,6 +155,8 @@ common_derives! {
         #[serde(default)]
         #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
         pub custom_query: Option<std::collections::HashMap<String, String>>,
+        #[serde(default)]
+        pub cjk_server_side: bool,
     }
 }
 
@@ -170,6 +172,7 @@ impl Default for ListenParams {
             min_speakers: None,
             max_speakers: None,
             custom_query: None,
+            cjk_server_side: false,
         }
     }
 }

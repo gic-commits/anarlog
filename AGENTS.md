@@ -123,21 +123,29 @@ Phase 1 — 实时转录通路打通（已结案 ✅）
 Phase 2 — 功能完善（已收敛 ⏸️）
   [-] 推理速度优化 — 由 Phase 4 Progressive Batch 方案解决（batch 分段并行抵消推理延迟）
   [-] 多语言实时转录支持 — batch 模式天然支持，不阻塞
-  [ ] Speaker diarization（说话人分离）
   [ ] 自定义 prompt/关键词实时生效
+
+Sprint 3 — 本地说话人分离（待启动 ⏸️）
+  [ ] Speaker segmentation（pyannote ONNX 5.7MB）— ✅ 裸测通过
+  [ ] Speaker embedding（hypr-embedding ONNX 25MB 256-dim）— ✅ 裸测通过，选定 hypr-embedding
+  [ ] 聚类算法实现（替换 `cluster()` stub）
+  [ ] 预处理染色：给音频帧打说话人标签
+  [ ] Batch 前按说话人区分段落
+  [ ] UI toggle / 数据流
 
 Phase 3 — UI 增强（待定）
   [ ] 如果 OpenAI provider + 自建服务器与原生 OpenAI 行为差异过大，加 toggle 开关
   [ ] 实时转录延迟/状态指示器
 
-Phase 4 — Progressive Batch 混合模式（下一阶段目标 🎯）
-  [ ] 设计文档定稿（见 `docs/progressive-batch-hybrid-design.md`）
-  [ ] 固定时长分段（30s + 1s overlap，支持 60s）
-  [ ] PCM raw → WAV header 转换
-  [ ] 提交队列（N=2 并发硬上限）
-  [ ] 客户端结果拼接与时间轴去重对齐
-  [ ] Provider 选项：Live / Batch / Progressive Batch 三种模式可选
-  [ ] 服务端改动：无（batch 端点无信号量限制）
+Phase 4 — Progressive Batch 混合模式（Sprint 2 Phase A/B/C ✅ 已实现）
+  [x] 设计文档定稿（见 `docs/progressive-batch-hybrid-design.md`）
+  [x] 固定时长分段（30s + 1s overlap，支持 60s）
+  [x] PCM raw → WAV header 转换（已改用 memory PCM direct POST）
+  [x] 提交队列 + 重试 + Partial Stitch（N=2 并发硬上限，retry 3 次，drain timeout）
+  [x] 客户端结果拼接与时间轴去重对齐（stitcher segment_boundaries + abandoned_segments）
+  [x] Provider 选项：Live / Batch / Progressive Batch 三种模式可选
+  [x] 持久化 + Continue（重启后从 DB 恢复）
+  [x] UI 右键菜单分裂（Phase D）
 
 ### Jul 22 — 状态总结
 
@@ -306,6 +314,190 @@ Sprint 2 分四个 Phase：
 - `docs/progressive-batch-data-structures.md` — v2 DB schema、重试协议、Continue 流程、UI 菜单
 - `docs/progressive-batch-hybrid-design.md` — Sprint 2 Phase 分解
 - `docs/progressive-batch-bug-list.md` — Gap A/L/M/N/O/P（Sprint 2）vs ✅ Gaps
+
+## Jul 27 — Sprint 2 Phase A/B/C 全部完成 🔥
+
+### Phase A: Source Pipeline PCM 实时流集成
+
+| 组件 | 改动 |
+|------|------|
+| `source/mod.rs` | `ListenerRouting::ProgressiveBatch(PcmSender)` 变体替代独立字段 |
+| `runtime.rs` | `start_progressive_batch_stream()` — 从 PCM channel 接收帧并馈入 Manager |
+| `session/types.rs` | `SessionParams.progressive_batch_pcm_tx` 传递 Sender |
+| `supervisor.rs` | 判断 `transcription_mode == ProgressiveBatch` → 创建 channel + 不透传 Listener |
+| `supervisor/children.rs` | `spawn_progressive_batch_streamer` 启动 Listener2 + PCM 馈送任务 |
+| 前端 | 无需改动（`SegmentPreview` 同文件路径，stream 自动增量展示） |
+
+### Phase B: 重试 + Drain 超时 + Partial Stitch
+
+| 功能 | 实现位置 | 描述 |
+|------|----------|------|
+| `drain(timeout)` | `mod.rs:241-256` | `tokio::time::timeout(segment_duration_ms * 1.5)` 避免无限等待 |
+| Partial stitch | `stitcher.rs` | `stitch()` 永远返回 `Response`，missing 段标记 `abandoned_segments` + `gap_warnings` |
+| Partial finish | `mod.rs:382-391` | `finish()` drain 后有 failed 段仍返回可用结果，仅全失败才 Err |
+| 测试覆盖率 | `tests/` | retry/drain/partial 场景全覆盖 |
+
+### Phase C: 持久化 + Continue
+
+| 组件 | 改动 |
+|------|------|
+| `progressive_batch_jobs/segments` 表 | DB 迁移 + Drizzle schema + `persist_batch_event` |
+| `Manager::resume()` | 从 DB 恢复 job + segment 状态，跳过已完成段 |
+| `continue_from_file()` | 从 DB job 重启 ProgressiveBatchManager |
+| `ext.rs` | `persist_batch_event` 异步写 DB，`continue_transcription` 桥接 |
+| `commands.rs` | `continue_progressive_batch` 命令简化（`get_by_id.id == session_id`）|
+| `BatchParams` | `overlap_ms`/`max_concurrency` 贯通，Continue 从 DB 恢复配置 |
+
+### 验证总结
+
+| 命令 | 结果 |
+|------|------|
+| `cargo check` | ✅ |
+| `cargo test -p listener2-core` | ✅ 191/191 |
+| `cargo test -p plugins-transcription` | ✅ |
+| `cargo test -p db-app` | ✅ |
+| `pnpm typecheck` | ✅ |
+| `dprint fmt` | ✅ |
+
+### 剩余 Phase D
+
+右键菜单裂为三项：Re-transcribe（Total）/ Re-transcribe（Progressive）/ Continue | 部分结果提示
+
+### 设计文档同步
+- `docs/progressive-batch-hybrid-design.md` §9: 标记 A/B/C ✅
+- `docs/progressive-batch-hybrid-design.md` §10: 差异表更新（A/L/M/N/O → ✅）
+- `docs/progressive-batch-bug-list.md`: Gap A/L/M/N/O 移入 ✅ 已修复，仅剩 Gap P
+- `docs/progressive-batch-data-structures.md`: 未改动（设计本身无偏差）
+
+## Jul 27 — Sprint 2 Phase D（UI 右键菜单 ✅）
+
+### 右键菜单裂为三项（仅 stt_mode === "progressive" 时显示）
+
+| 菜单项 | 功能 | 后端调用 |
+|--------|------|----------|
+| **Re-trans(Total)** | 强制标准 batch（全文件一次性转录） | `runBatch` with `forceProgressive: false` |
+| **Re-trans(Progressive)** | 从头跑 progressive batch | `runBatch` with `forceProgressive: true` |
+| **Continue(Progressive)** | 续传未完成 progressive batch job（条件显示） | `continueProgressiveBatch` 命令 |
+
+**关键决策：**
+- 仅当用户配置 `stt_mode === "progressive"` 时，右键菜单和 Overflow 下拉菜单显示 3 项
+- `stt_mode === "batch"` 或 `"live"` 时，菜单保持原有单 "Re-transcribe" 项（等同于 Total）
+- "Continue" 仅当 DB 中存在 `interrupted`/`partial` job 时才可见（通过 `useContinuableBatchJob` + `listProgressiveBatchJobs` 查询）
+- `useContinueTranscript` 自动从 `useSTTConnection` 获取 API key
+
+### 改动文件
+
+| 文件 | 改动 |
+|------|------|
+| `apps/desktop/src/stt/useRunBatch.ts` | `RunOptions` 新增 `forceProgressive?: boolean` |
+| `apps/desktop/src/.../transcript/actions.ts` | 新增 `useContinuableBatchJob`、`useContinueTranscript`；`useRegenerateTranscript` 接受 `mode` 参数 |
+| `apps/desktop/src/.../note-input/header.tsx` | 右键菜单条件分裂 3 项 |
+| `apps/desktop/src/.../overflow/index.tsx` | Overflow 下拉菜单同样条件分裂 |
+
+### 验证
+
+| 命令 | 结果 |
+|------|------|
+| `npx tsc --noEmit` | ✅（仅 1 pre-existing 错误） |
+| `dprint fmt` | ✅ |
+
+## Jul 28 — Atomic range collapse for ≤4 CJK multi-char words
+
+### 问题
+- `acoustic_only` (no jieba) mode fragments ≤4 CJK words because `split_to_entries` always splits multi-char words into single chars, and `acoustic_only` / `acoustic_verify` can't reliably merge them back.
+- 404 words → 663 groups in test session.
+
+### 方案
+- `split_to_entries` takes `min_cjk_split_len: usize` param + returns `atomic_ranges: Vec<(usize, usize)>`.
+- CJK words with `chars.len() < min_cjk_split_len` are still split into single chars (pipeline compatibility) but their entry index range is recorded as "atomic".
+- After pipeline (`processor.process()`), `collapse_groups` merges any `WordGroup`s that fall within the same atomic range back into ONE group with the original multi-char word text.
+- Trailing punctuation from the last merged group is re-appended.
+
+### 阈值
+- `flags.jieba == true` → `min_cjk_split_len = 5` (≥5 split free for jieba; ≤4 protected)
+- `flags.jieba == false` → `min_cjk_split_len = usize::MAX` (ALL multi-char CJK words protected)
+
+### 改动文件
+
+| 文件 | 改动 |
+|------|------|
+| `crates/listener2-core/src/batch/cjk.rs` | `split_to_entries` takes `min_cjk_split_len` + returns `atomic_ranges`; new `collapse_groups` fn; `process_response` wires both |
+
+### 验证
+
+| 命令 | 结果 |
+|------|------|
+| `cargo check -p listener2-core` | ✅ |
+| `cargo test -p cjk-processor` | ✅ 14/14 |
+| `cargo test -p listener2-core` | ✅ 115/115 |
+
+## Jul 28 (PM) — Server-side CJK post-processing toggle for Speaches
+
+**设计文档同步：** `docs/cjk-processing-design.md` 已创建，记录整体 CJK 架构（本地 + 服务端）。`docs/progressive-batch-hybrid-design.md` 差异表新增 `cjk_server_side` 行。
+
+### 背景
+Speaches（OpenAI 兼容服务器）更新了 CJK 生效模式：默认不启用 CJK 后处理，需显式传 `cjk_post_process=true` 才会开启服务端 CJK 流程。
+
+### 改动
+
+**数据流：** `cjk_server_side` setting → `TranscriptionParams` → `BatchParams` → `ListenParams` → `build_transcription_options` → `CreateCustomTranscriptionOptions.cjk_post_process` → multipart form field `cjk_post_process=true`
+
+| 层 | 文件 | 改动 |
+|------|------|------|
+| Setting | `schema.ts:171` | 新增 `cjk_server_side` boolean，默认 `false` |
+| UI | `select.tsx:898-967` | SttModeSection 重构：Mode / Segment / CJK (Server) 三个控件共用一行 |
+| UI | `select.tsx:1015` | 本地 CJK 区域标题改名 "CJK post-processing (Local)" |
+| Frontend | `useRunBatch.ts:185,418` | 读取 `cjk_server_side`，传入 `TranscriptionParams` |
+| Tauri API | `plugins/transcription/api.rs:240` | `TranscriptionParams` 增加 `cjk_server_side` 字段，`From` impl 贯通 |
+| Batch params | `crates/listener2-core/batch/mod.rs:132` | `BatchParams.cjk_server_side` + `build_listen_params` 传值 |
+| HTTP layer | `crates/owhisper-client/adapter/openai/batch.rs:210-215` | `build_transcription_options` 读取 `cjk_server_side`，设置 `cjk_post_process=true` |
+| Multipart | `crates/openai-transcription/batch/request.rs:79,269-274` | `CreateCustomTranscriptionOptions.cjk_post_process` 字段，emit form field |
+
+### 验证
+
+| 命令 | 结果 |
+|------|------|
+| `cargo check -p listener2-core -p tauri-plugin-transcription` | ✅ |
+| `cargo test -p listener2-core` | ✅ 115/115 |
+| `pnpm -F @hypr/desktop typecheck` | ✅ |
+
+## Jul 29 — Sprint 3 设计定稿 + 模型对比完成（Commit 前）
+
+### 模型对比 (19 tests, all ✅)
+
+经过 5 个模型、中文/韩语/英语多维度对比：
+
+| 模型 | Dim | F-M 分离 | 中文 4-spk avg | 85s Embed 时间 |
+|------|-----|:-------:|:-------------:|:------------:|
+| **wespeaker-cnceleb-LM** ⭐默认 | 256 | 0.7301 | **0.8803** | 7.04s |
+| wespeaker-voxceleb | 256 | 0.7862 | 0.8595 | 8.24s |
+| wespeaker-cnceleb | 256 | 0.6914 | 0.8456 | 7.23s |
+| campplus-200k ⭐备选 | 192 | **0.8533** | 0.7816 | **3.71s** |
+| campplus-zh-en (csukuangfj) | 192 | N/A (x/embedding 未匹配) | — | — |
+| pyannote-local | 512 | 0.0995 | — | — |
+
+**最终选择：** 默认 `wespeaker_zh_cnceleb_resnet34_LM.onnx`（CN-Celeb 中文训练 + LM 微调），备选 `campplus_cn_en_common_200k.onnx`（最快）。
+
+### Sprint 3 设计
+
+**Pipeline:** VAD → 染色 → 时长调度(±20% 水线) → SubmitSegment 队列 → 提交(纯 OpenAI 标准) → 响应匹配
+
+**关键设计决策：**
+- **方案A**: VAD 染色优先，再 ±20% 水线合并/切分后提交
+- **本地元数据**: speaker/时序全部本地管理，不发送给服务端
+- **SubmitSegment**: 队列持久化到 DB，支持断线恢复
+- **3 Phase**: Phase A (DiarizationManager) → Phase B (DurationScheduler + SubmitManager) → Phase C (UI)
+
+### Phase A 待实现
+- [ ] 真实 agglomerative clustering（替换 `embedding.rs` 中的 `cluster()` 桩）
+- [ ] DiarizationManager（seg→embed→cluster 管线）
+- [ ] EmbeddingProvider trait（wespeaker-cnceleb-LM + campplus-200k）
+- [ ] 短段合并（<1.5s）
+- [ ] 全部测试通过
+
+### 关键文件
+- `docs/sprint-3-diarization-design.md` — 完整设计文档（含调度规则、数据结构、数据流）
+- `crates/pyannote-local/tests/diarization_pipeline.rs` — 裸测代码 (19 tests, all ✅)
 
 ## Misc
 

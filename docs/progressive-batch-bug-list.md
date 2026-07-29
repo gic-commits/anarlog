@@ -44,66 +44,13 @@
 
 ## 设计-实现差异（Gaps）
 
-### Gap A: PCM 实时流未集成 Source pipeline — Sprint 2 Phase A 🎯
-
-| 字段         | 值                                                                                                  |
-| ------------ | --------------------------------------------------------------------------------------------------- |
-| **设计参考** | `progressive-batch-data-structures.md §5.2-5.4`                                                     |
-| **现象**     | `ProgressiveBatchManager.on_audio_frame` 已实现，但未连接到 live recording 的 Source actor pipeline |
-| **当前行为** | Progressive Batch 仅通过 `run_progressive_batch_from_file` 从已有音频文件跑，不用于实时录音         |
-| **影响**     | 前端增量展示组件已就绪但无数据源 — 无法演示                                                        |
-| **修复方向** | SourceArgs 新增 `pcm_tx` 字段，`ListenerRouting` 新变体，Pipeline dispatch，Supervisor 创建 channel |
-| **Sprint 2** | Phase A — 必要前提                                                                                  |
-
-### Gap L: Stitcher 不支持 partial stitch — Sprint 2 Phase B 🎯
-
-| 字段         | 值                                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------------------- |
-| **现象**     | `stitch()` 返回 `Err(MissingSegments)`，`finish()` 遇到 any missing 立即失败                                  |
-| **影响**     | 无法支持"部分段放弃后仍返回可用结果"                                                                          |
-| **修复方向** | `stitch()` 改为永远返回 `Response`，missing 段在 metadata 中记录 `abandoned_segments` + `gap_warnings`        |
-| **Sprint 2** | Phase B — 重试协议的基础                                                                                      |
-
-### Gap M: `drain()` 无超时 — Sprint 2 Phase B 🎯
-
-| 字段         | 值                                                                            |
-| ------------ | ----------------------------------------------------------------------------- |
-| **现象**     | `drain()` 无限等待，无 timeout                                                |
-| **影响**     | Session 结束时 hang 住                                                        |
-| **修复方向** | 加 `drain(timeout)`，超时 = `segment_duration_ms * 1.5`                       |
-| **Sprint 2** | Phase B                                                                       |
-
-### Gap N: `finish()` 对 partial 结果太苛刻 — Sprint 2 Phase B 🎯
-
-| 字段         | 值                                                                                          |
-| ------------ | ------------------------------------------------------------------------------------------- |
-| **现象**     | `finish()` line 382-391：drain 后有 failed 段立即返回 Err，不给 partial 结果                |
-| **影响**     | 即使只有一个段失败，整个 session 的转写结果全部丢弃                                          |
-| **修复方向** | 允许 partial：只有完全无结果时才 Err，否则返回带 `abandoned_segments` 标记的 Response        |
-| **Sprint 2** | Phase B                                                                                     |
-
-### Gap O: v2 持久化表未创建 + Manager 不恢复 — Sprint 2 Phase C 🎯
-
-| 字段         | 值                                                                                                |
-| ------------ | ------------------------------------------------------------------------------------------------- |
-| **设计参考** | `progressive-batch-data-structures.md §3 v2` + §7.5                                               |
-| **当前状态** | 无 `progressive_batch_jobs` / `progressive_batch_segments` 表，Manager 全内存，重启即失           |
-| **修复方向** | DB 表 + Drizzle schema + `TauriBatchRuntime` 写 DB + `Manager::resume()` + `continue_from_file()` |
-| **Sprint 2** | Phase C                                                                                           |
-
-### Gap P: UI 右键菜单未区分转写模式 — Sprint 2 Phase D 🎯
-
-| 字段         | 值                                                                                     |
-| ------------ | -------------------------------------------------------------------------------------- |
-| **现象**     | 右键只有 "Re-transcribe"，不区分 Total / Progressive / Continue                        |
-| **影响**     | 用户无法触发 partial job 的 Continue                                                   |
-| **修复方向** | 菜单裂为三项 + Continue 条件显示                                                       |
-| **Sprint 2** | Phase D                                                                                |
+Sprint 2 全部 Phase A/B/C/D ✅ 已完成，当前无活跃 Gap。
 
 ### ✅ 已修复 Gaps
 
 | Gap | 内容 | 修复时间 |
 |-----|------|----------|
+| A | PCM 实时流未集成 Source pipeline | Jul 27 |
 | B | `effective_transcription_mode()` 不识别 `ProgressiveBatch` | Jul 24 |
 | F | 短音频未使用 Direct Batch 编码方式 | Jul 24 |
 | G | 长音频分段 WAV 编码未对齐 | Jul 25 |
@@ -111,6 +58,11 @@
 | I | `ProgressiveBatchManager` Runtime 事件贯通 | Jul 26 |
 | J | Stitcher `segment_boundaries` 元数据 | Jul 26 |
 | K | 前端增量展示 + 分段分隔 UI | Jul 26 |
+| L | Stitcher 不支持 partial stitch | Jul 27 |
+| M | `drain()` 无超时 | Jul 27 |
+| N | `finish()` 对 partial 结果太苛刻 | Jul 27 |
+| O | v2 持久化表未创建 + Manager 不恢复 | Jul 27 |
+| P | UI 右键菜单未区分转写模式 | Jul 27 |
 
 ### 长期 Gaps（Sprint 3+）
 
@@ -133,14 +85,14 @@
 - ✅ `cargo check` + `dprint fmt`
 - ✅ `pnpm -F @hypr/desktop typecheck`
 
-### Sprint 2（本轮）
+### Sprint 2（Phase A/B/C/D ✅ 全部完成）
 
-| Phase | 验证标准 |
-|-------|----------|
-| A | live 录音 + Progressive Batch 模式 → 前端逐段看到转写文字（`SegmentPreview`）|
-| A | `cargo check` + `cargo test -p listener2-core` + `pnpm typecheck` 全部通过 |
-| B | 段超时后仍产出结果 + `abandoned_segments` 元数据 |
-| B | `cargo test` 新增 timeout/partial stitch 测试 |
-| C | 重启后 Continue → 只提未完成段 |
-| C | `cargo test` DB roundtrip |
-| D | 右键菜单正确显示三个选项 + Continue 条件激活 |
+| Phase | 验证标准 | 状态 |
+|-------|----------|------|
+| A | live 录音 + Progressive Batch 模式 → 前端逐段看到转写文字（`SegmentPreview`）| ✅ |
+| A | `cargo check` + `cargo test -p listener2-core` + `pnpm typecheck` 全部通过 | ✅ |
+| B | 段超时后仍产出结果 + `abandoned_segments` 元数据 | ✅ |
+| B | `cargo test` 新增 timeout/partial stitch 测试 | ✅ |
+| C | 重启后 Continue → 只提未完成段 | ✅ |
+| C | `cargo test` DB roundtrip | ✅ |
+| D | 右键菜单正确显示三个选项 + Continue 条件激活 | ✅ |

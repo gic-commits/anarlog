@@ -2,6 +2,7 @@
 
 mod integration;
 
+pub use integration::continue_from_file;
 pub use integration::run_progressive_batch_from_file;
 mod queue;
 mod segmenter;
@@ -9,6 +10,7 @@ mod stitcher;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 pub use queue::{
     BatchQueue, QueueConfig, QueueProgress, QueuedSegment, SegmentResult, SubmitSegmentFn,
@@ -65,7 +67,7 @@ impl Default for ProgressiveBatchConfig {
     fn default() -> Self {
         Self {
             session_id: String::new(),
-            sample_rate: 48000,
+            sample_rate: 16000,
             segment_duration_ms: 30000,
             overlap_ms: 1000,
             max_concurrency: 2,
@@ -79,6 +81,13 @@ impl Default for ProgressiveBatchConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct PersistedCompletedSegment {
+    pub index: usize,
+    pub global_start_ms: i64,
+    pub response: batch::Response,
+}
+
 pub enum ManagerState {
     Accumulating {
         buffer: Vec<f32>,
@@ -90,6 +99,8 @@ pub enum ManagerState {
     },
     Completed {
         result: batch::Response,
+        partial: bool,
+        abandoned_indices: Vec<usize>,
     },
     Failed {
         error: String,
@@ -116,8 +127,58 @@ impl ProgressiveBatchManager {
             tracing::warn!("failed to create segments dir: {e}");
         }
         Self {
-            state: ManagerState::Accumulating {
-                buffer: Vec::new(),
+            state: ManagerState::Accumulating { buffer: Vec::new() },
+            segments_dir,
+            write_wav_fn: default_write_wav(),
+            submit_fn: default_submit_fn(),
+            runtime: None,
+            config,
+        }
+    }
+
+    /// Create a Manager from persisted completed segments (Continue path).
+    /// Pre-loads the stitcher with already-completed segments so they are
+    /// skipped when streaming audio. Only non-completed segments will be
+    /// re-submitted.
+    pub fn resume(
+        config: ProgressiveBatchConfig,
+        completed: Vec<PersistedCompletedSegment>,
+    ) -> Self {
+        let segments_dir = config.session_dir.join("progressive-batch");
+        if let Err(e) = std::fs::create_dir_all(&segments_dir) {
+            tracing::warn!("failed to create segments dir: {e}");
+        }
+        let mut stitcher = Stitcher::new(StitcherConfig {
+            overlap_ms: config.overlap_ms as u64,
+            segment_duration_ms: config.segment_duration_ms as u64,
+            total_segments: 0,
+        });
+        for seg in &completed {
+            stitcher.add_segment(CompletedSegment {
+                index: seg.index,
+                global_start_ms: seg.global_start_ms,
+                response: seg.response.clone(),
+            });
+        }
+        Self {
+            state: ManagerState::Active {
+                segmenter: Segmenter::new(SegmenterConfig {
+                    sample_rate: config.sample_rate,
+                    segment_duration_ms: config.segment_duration_ms,
+                    overlap_ms: config.overlap_ms,
+                }),
+                queue: BatchQueue::with_submit_fn(
+                    QueueConfig {
+                        base_url: config.base_url.clone(),
+                        api_key: config.api_key.clone(),
+                        max_concurrency: config.max_concurrency,
+                        model: config.model.clone(),
+                        language: config.language.clone(),
+                        provider: config.provider,
+                    },
+                    default_submit_fn(),
+                ),
+                stitcher,
             },
             segments_dir,
             write_wav_fn: default_write_wav(),
@@ -141,9 +202,7 @@ impl ProgressiveBatchManager {
         let segments_dir = config.session_dir.join("progressive-batch");
         let _ = std::fs::create_dir_all(&segments_dir);
         Self {
-            state: ManagerState::Accumulating {
-                buffer: Vec::new(),
-            },
+            state: ManagerState::Accumulating { buffer: Vec::new() },
             segments_dir,
             write_wav_fn: write_wav,
             submit_fn: submit,
@@ -188,12 +247,19 @@ impl ProgressiveBatchManager {
                 stitcher,
             } => {
                 let segments = segmenter.feed(samples);
-                if !segments.is_empty() {
-                    tracing::debug!("[progressive] active: produced {} segments", segments.len(),);
-                }
-                for seg in segments {
+                for seg in &segments {
+                    if stitcher.contains(seg.index) {
+                        continue;
+                    }
                     let path = segments_dir.join(format!("seg_{}.wav", seg.index));
-                    write_queue.push((path, seg));
+                    write_queue.push((path, seg.clone()));
+                }
+                if !segments.is_empty() {
+                    tracing::debug!(
+                        "[progressive] active: produced {} segments, {} new",
+                        segments.len(),
+                        write_queue.len(),
+                    );
                 }
                 let completed = queue.poll_completed();
                 if !completed.is_empty() {
@@ -203,24 +269,29 @@ impl ProgressiveBatchManager {
                     );
                 }
                 for result in completed {
-                    if let SegmentResult::Completed {
-                        index,
-                        global_start_ms,
-                        response,
-                    } = result
-                    {
-                        if let Some(ref rt) = runtime {
-                            rt.emit(BatchEvent::BatchSegmentResult {
-                                session_id: self.config.session_id.clone(),
-                                segment_index: index,
-                                response: response.clone(),
-                            });
-                        }
-                        stitcher.add_segment(CompletedSegment {
+                    match result {
+                        SegmentResult::Completed {
                             index,
                             global_start_ms,
                             response,
-                        });
+                        } => {
+                            if let Some(ref rt) = runtime {
+                                rt.emit(BatchEvent::BatchSegmentResult {
+                                    session_id: self.config.session_id.clone(),
+                                    segment_index: index,
+                                    global_start_ms,
+                                    response: response.clone(),
+                                });
+                            }
+                            stitcher.add_segment(CompletedSegment {
+                                index,
+                                global_start_ms,
+                                response,
+                            });
+                        }
+                        SegmentResult::Failed { index, .. } => {
+                            stitcher.add_abandoned(index);
+                        }
                     }
                 }
                 None
@@ -269,6 +340,7 @@ impl ProgressiveBatchManager {
             let stitcher = Stitcher::new(StitcherConfig {
                 overlap_ms: self.config.overlap_ms as u64,
                 segment_duration_ms: self.config.segment_duration_ms as u64,
+                total_segments: 0,
             });
 
             for seg in &segments {
@@ -320,14 +392,16 @@ impl ProgressiveBatchManager {
                 });
                 let feed_segments = segmenter.feed(&buffer);
                 let flushed = segmenter.flush();
+                let all_segments: Vec<_> = feed_segments.iter().chain(flushed.iter()).collect();
                 let qc = self.queue_config();
                 let sc = StitcherConfig {
                     overlap_ms: self.config.overlap_ms as u64,
                     segment_duration_ms: self.config.segment_duration_ms as u64,
+                    total_segments: all_segments.len(),
                 };
                 let mut queue = BatchQueue::with_submit_fn(qc, self.submit_fn.clone());
                 let stitcher = Stitcher::new(sc);
-                for seg in feed_segments.iter().chain(flushed.iter()) {
+                for seg in all_segments {
                     self.write_and_enqueue(seg, &mut queue);
                 }
                 (queue, stitcher)
@@ -343,13 +417,22 @@ impl ProgressiveBatchManager {
                     flushed.len(),
                 );
                 for seg in &flushed {
+                    if stitcher.contains(seg.index) {
+                        continue;
+                    }
                     self.write_and_enqueue(seg, &mut queue);
                 }
                 (queue, stitcher)
             }
-            ManagerState::Completed { result } => {
+            ManagerState::Completed {
+                result,
+                partial: _,
+                abandoned_indices: _,
+            } => {
                 self.state = ManagerState::Completed {
                     result: result.clone(),
+                    partial: false,
+                    abandoned_indices: vec![],
                 };
                 return Ok(result);
             }
@@ -371,67 +454,77 @@ impl ProgressiveBatchManager {
             qp_before.failed.len(),
         );
 
-        let drain_results = queue.drain().await;
+        let qp = queue.progress();
+        let remaining = (qp.pending + qp.inflight) as u64;
+        let max_concur = self.config.max_concurrency as u64;
+        let waves = remaining.div_ceil(max_concur).max(1);
+        let drain_timeout =
+            Duration::from_millis(waves * self.config.segment_duration_ms as u64 * 2);
+        tracing::info!(
+            "[progressive] finish: drain timeout={}ms (remaining={} waves={} concurrency={})",
+            drain_timeout.as_millis(),
+            remaining,
+            waves,
+            max_concur,
+        );
+        let drain_results = queue.drain(drain_timeout).await;
 
         tracing::debug!(
             "[progressive] finish: drain returned {} results",
             drain_results.len(),
         );
 
-        // Check for permanent failures before stitching
-        let qp = queue.progress();
-        if !qp.failed.is_empty() {
-            let errors: Vec<String> = qp
-                .failed
-                .iter()
-                .map(|(idx, e)| format!("seg {idx}: {e}"))
-                .collect();
-            let msg = format!("segment failures: {}", errors.join("; "));
+        for result in drain_results.into_iter().chain(queue.poll_completed()) {
+            match result {
+                SegmentResult::Completed {
+                    index,
+                    global_start_ms,
+                    response,
+                } => {
+                    if let Some(ref rt) = self.runtime {
+                        rt.emit(BatchEvent::BatchSegmentResult {
+                            session_id: self.config.session_id.clone(),
+                            segment_index: index,
+                            global_start_ms,
+                            response: response.clone(),
+                        });
+                    }
+                    stitcher.add_segment(CompletedSegment {
+                        index,
+                        global_start_ms,
+                        response,
+                    });
+                }
+                SegmentResult::Failed { index, .. } => {
+                    stitcher.add_abandoned(index);
+                }
+            }
+        }
+
+        let has_completed = stitcher.segment_count() > 0;
+        if !has_completed {
+            let msg = "no segments completed".to_string();
             self.state = ManagerState::Failed { error: msg.clone() };
             return Err(msg);
         }
 
-        for result in drain_results.into_iter().chain(queue.poll_completed()) {
-            if let SegmentResult::Completed {
-                index,
-                global_start_ms,
-                response,
-            } = result
-            {
-                if let Some(ref rt) = self.runtime {
-                    rt.emit(BatchEvent::BatchSegmentResult {
-                        session_id: self.config.session_id.clone(),
-                        segment_index: index,
-                        response: response.clone(),
-                    });
-                }
-                stitcher.add_segment(CompletedSegment {
-                    index,
-                    global_start_ms,
-                    response,
-                });
+        let is_partial = !stitcher.abandoned_indices().is_empty();
+        let abandoned = stitcher.abandoned_indices().to_vec();
+        match stitcher.stitch() {
+            Ok(result) => {
+                self.state = ManagerState::Completed {
+                    result: result.clone(),
+                    partial: is_partial,
+                    abandoned_indices: abandoned,
+                };
+                let _ = std::fs::remove_dir_all(&self.segments_dir);
+                Ok(result)
             }
-        }
-
-        if stitcher.is_complete() {
-            match stitcher.stitch() {
-                Ok(result) => {
-                    self.state = ManagerState::Completed {
-                        result: result.clone(),
-                    };
-                    let _ = std::fs::remove_dir_all(&self.segments_dir);
-                    Ok(result)
-                }
-                Err(e) => {
-                    let msg = format!("stitch failed: {e:?}");
-                    self.state = ManagerState::Failed { error: msg.clone() };
-                    Err(msg)
-                }
+            Err(e) => {
+                let msg = format!("stitch failed: {e:?}");
+                self.state = ManagerState::Failed { error: msg.clone() };
+                Err(msg)
             }
-        } else {
-            let msg = "not all segments completed".to_string();
-            self.state = ManagerState::Failed { error: msg.clone() };
-            Err(msg)
         }
     }
 
@@ -593,6 +686,8 @@ mod tests {
                 metadata: serde_json::json!({}),
                 results: batch::Results { channels: vec![] },
             },
+            partial: false,
+            abandoned_indices: vec![],
         };
         manager.on_audio_frame(&[0.0; 10]);
         assert!(matches!(manager.state(), ManagerState::Completed { .. }));
@@ -1075,7 +1170,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_partial_failure_returns_error() {
+    async fn test_partial_failure_returns_partial_result() {
         let submit_fn: SubmitSegmentFn = Arc::new(|seg: QueuedSegment, _: QueueConfig| {
             async move {
                 if seg.index == 1 {
@@ -1134,15 +1229,16 @@ mod tests {
 
         let result = manager.finish().await;
         assert!(
-            result.is_err(),
-            "finish should fail when a segment permanently fails"
+            result.is_ok(),
+            "finish should return partial result when some segments fail"
         );
-        let err = result.unwrap_err();
+        let response = result.unwrap();
+        let abandoned = response.metadata["abandoned_segments"].as_array().unwrap();
         assert!(
-            err.contains("segment failures"),
-            "error should mention segment failures: {err}"
+            abandoned.contains(&serde_json::json!(1)),
+            "segment 1 should be in abandoned_segments"
         );
-        assert!(matches!(manager.state(), ManagerState::Failed { .. }));
+        assert!(matches!(manager.state(), ManagerState::Completed { .. }));
     }
 
     #[tokio::test]

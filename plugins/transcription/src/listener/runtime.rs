@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use hypr_transcription_core::listener::ListenerRuntime;
+use hypr_transcription_core::listener2 as core;
 use ractor::{ActorRef, call_t, registry};
 use tauri_plugin_settings::SettingsPluginExt;
 use tauri_specta::Event;
@@ -128,6 +131,75 @@ impl ListenerRuntime for TauriRuntime {
     fn emit_data(&self, event: hypr_transcription_core::listener::SessionDataEvent) {
         if let Err(error) = CaptureDataEvent::from(event).emit(&self.app) {
             tracing::error!(?error, "failed_to_emit_data_event");
+        }
+    }
+
+    fn start_progressive_batch_stream(
+        &self,
+        params: hypr_transcription_core::listener::ProgressiveBatchParams,
+        pcm_rx: tokio::sync::mpsc::Receiver<Arc<[f32]>>,
+    ) {
+        let app = self.app.clone();
+
+        tauri::async_runtime::spawn(async move {
+            let config = core::ProgressiveBatchConfig {
+                session_id: params.session_id.clone(),
+                sample_rate: params.sample_rate,
+                segment_duration_ms: 30000,
+                overlap_ms: 1000,
+                max_concurrency: 2,
+                base_url: params.base_url,
+                api_key: params.api_key,
+                model: Some(params.model),
+                language: params.language,
+                provider: core::BatchProvider::OpenAI,
+                session_dir: std::env::temp_dir()
+                    .join(format!("progressive-{}", params.session_id)),
+            };
+
+            let runtime = Arc::new(LiveBatchRuntime { app: app.clone() });
+            let mut manager = core::ProgressiveBatchManager::new(config).with_runtime(runtime);
+
+            let mut rx = pcm_rx;
+            while let Some(frame) = rx.recv().await {
+                manager.on_audio_frame(&frame);
+            }
+
+            match manager.finish().await {
+                Ok(response) => {
+                    let total_words = response
+                        .results
+                        .channels
+                        .first()
+                        .and_then(|c| c.alternatives.first())
+                        .map(|a| a.words.len())
+                        .unwrap_or(0);
+                    tracing::info!(
+                        session_id = %params.session_id,
+                        total_words,
+                        "progressive_batch session finished"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        session_id = %params.session_id,
+                        error = %e,
+                        "progressive_batch session failed"
+                    );
+                }
+            }
+        });
+    }
+}
+
+struct LiveBatchRuntime {
+    app: tauri::AppHandle,
+}
+
+impl core::BatchRuntime for LiveBatchRuntime {
+    fn emit(&self, event: core::BatchEvent) {
+        if let Err(e) = crate::TranscriptionEvent::from(event).emit(&self.app) {
+            tracing::error!(?e, "failed to emit progressive batch event");
         }
     }
 }

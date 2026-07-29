@@ -158,6 +158,21 @@ export const SETTING_DEFINITIONS = {
     type: "number",
     path: ["ai", "stt_segment_duration"],
   },
+  cjk_post_process: {
+    type: "boolean",
+    path: ["ai", "cjk_post_process"],
+    default: true as boolean,
+  },
+  cjk_features: {
+    type: "string",
+    path: ["ai", "cjk_features"],
+    default: '{"punctuation":true,"jieba":true,"acoustic_merge":true}' as string,
+  },
+  cjk_server_side: {
+    type: "boolean",
+    path: ["ai", "cjk_server_side"],
+    default: false as boolean,
+  },
   timezone: {
     type: "string",
     path: ["general", "timezone"],

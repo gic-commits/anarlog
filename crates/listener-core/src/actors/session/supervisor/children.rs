@@ -2,7 +2,9 @@ use hypr_supervisor::{RestartBudget, RetryStrategy, spawn_with_retry};
 use ractor::concurrency::Duration;
 use ractor::{Actor, ActorCell, ActorRef};
 
+use crate::TranscriptionMode;
 use crate::actors::session::types::SessionContext;
+use crate::actors::source::ListenerRouting;
 use crate::actors::{
     ChannelMode, ListenerActor, ListenerArgs, RecArgs, RecMsg, RecorderActor, SourceActor,
     SourceArgs, SourceMsg,
@@ -139,10 +141,21 @@ pub(super) async fn try_restart_source(
         return false;
     }
 
+    let listener_routing =
+        if state.ctx.params.transcription_mode == TranscriptionMode::ProgressiveBatch {
+            let (tx, rx) = tokio::sync::mpsc::channel(256);
+            state
+                .ctx
+                .runtime
+                .start_progressive_batch_stream(state.ctx.progressive_batch_params(), rx);
+            ListenerRouting::ProgressiveBatch(tx)
+        } else {
+            state.mode.listener_routing(state.listener_cell.as_ref())
+        };
+
     let sup = supervisor_cell;
     let ctx = state.ctx.clone();
     let recorder_cell = state.recorder_cell.as_ref().cloned();
-    let listener_routing = state.mode.listener_routing(state.listener_cell.as_ref());
 
     let cell = spawn_with_retry(&RETRY_STRATEGY, || {
         let sup = sup.clone();

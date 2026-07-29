@@ -49,6 +49,7 @@ pub enum BatchEvent {
     BatchSegmentResult {
         session_id: String,
         segment_index: usize,
+        global_start_ms: i64,
         response: BatchResponse,
     },
     #[serde(rename = "batchFailed")]

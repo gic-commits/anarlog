@@ -76,6 +76,7 @@ pub struct CreateCustomTranscriptionOptions {
     pub language: Option<String>,
     pub response_format: Option<WhisperResponseFormat>,
     pub timestamp_granularities: Vec<TimestampGranularity>,
+    pub cjk_post_process: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -123,6 +124,7 @@ impl CreateTranscriptionOptions {
                 language: None,
                 response_format: use_response_format.then_some(WhisperResponseFormat::VerboseJson),
                 timestamp_granularities: Vec::new(),
+                cjk_post_process: false,
             }),
         }
     }
@@ -270,6 +272,13 @@ impl CreateTranscriptionOptions {
                     fields.push(MultipartTextField {
                         name: "timestamp_granularities[]",
                         value: granularity.to_string(),
+                    });
+                }
+
+                if options.cjk_post_process {
+                    fields.push(MultipartTextField {
+                        name: "cjk_post_process",
+                        value: "true".to_string(),
                     });
                 }
             }

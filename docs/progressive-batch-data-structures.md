@@ -741,9 +741,9 @@ self.frame_task = Some(handle);
 | ------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `crates/listener-core/src/lib.rs:31`                    | `TranscriptionMode` 新增 `ProgressiveBatch` 变体                       | ✅                                                                                         |
 | `plugins/transcription/src/api.rs:52`                   | `default_transcription_mode()` 处理 `ProgressiveBatch` 选择            | ✅                                                                                         |
-| `crates/listener-core/src/actors/session/supervisor.rs` | `ProgressiveBatch` 模式：不启动 Listener，启动 ProgressiveBatchManager | ❌ 未实现。`effective_transcription_mode()` 只识别 `Batch`，`ProgressiveBatch` 回退 `Live` |
+| `crates/listener-core/src/actors/session/supervisor.rs` | `ProgressiveBatch` 模式：不启动 Listener，创建 PCM channel 转发给 ProgressiveBatchManager | ✅ `supervisor.rs:64-75` 检测 `ProgressiveBatch` 模式，创建 `(tx, rx)`；`post_start` 通过 `runtime.start_progressive_batch_stream()` 消费 PCM |
 
-> **⚠️ 当前 `ProgressiveBatch` 仅用于 batch re-transcription 路径。** 在 live recording 场景下，用户的 `stt_mode=progressive` 被 `default_transcription_mode()` 正确识别，但 `SessionParams.transcription_mode` 传给 live session supervisor 后，`effective_transcription_mode()` 在 `types.rs` 将其作为 `Live` 处理，仍启动 WebSocket listener。
+> **当前状态：`ProgressiveBatch` 已完全集成到 live recording 路径。** `effective_transcription_mode()` (`types.rs:52-54`) 正确返回 `ProgressiveBatch`；supervisor 不启动 Listener，而是创建 PCM channel → `start_progressive_batch_stream()` → `ProgressiveBatchManager`。`runtime.rs:137-189` 消费 PCM 流并经理完整的状态机生命周期。
 
 ### 5.2 SourceArgs 变更
 
@@ -759,12 +759,10 @@ pub struct SourceArgs {
     pub listener_routing: ListenerRouting,
     pub recorder: Option<ActorRef<RecMsg>>,
 
-    /// ← 设计文档描述，尚未实现
-    pub progressive_batch_pcm_tx: Option<tokio::sync::mpsc::Sender<Arc<[f32]>>>,
-}
+    }
 ```
 
-> **当前状态：** ❌ 本小节所有内容（§5.2-5.6）均为设计目标，尚未实现。当前 Progressive Batch 仅通过 `run_progressive_batch_from_file` 用于从已有音频文件跑 batch（re-transcription 路径），未与 live recording 的 Source pipeline 集成。
+> **当前状态：** ✅ 设计目标已实现，但有实现差异。SourceArgs 未新增 `progressive_batch_pcm_tx` 字段 — PCM 通道通过 `ListenerRouting::ProgressiveBatch(PcmSender)` 枚举变体传递（`source/mod.rs:54`），supervisor 在 `children.rs:151` 设置 routing，pipeline dispatch 在 `pipeline.rs:156` 发送 PCM 帧到该 channel。`start_progressive_batch_stream` (`runtime.rs:137-189`) 消费 PCM 流。
 
 ### 5.3 Pipeline 变更
 
@@ -804,42 +802,11 @@ pub fn spawn_source(args: SourceArgs) -> ... {
 }
 ```
 
-> **当前状态：** ❌ 未实现。`spawn_source` 不识别 `TranscriptionMode::ProgressiveBatch`。
+> **当前状态：** ✅ 已实现。`supervisor.rs:64-75` Supervisor 在 `pre_start` 中检测 `ProgressiveBatch` 模式，创建 PCM channel `(tx, rx)`，`children.rs:145-151` 设置 `ListenerRouting::ProgressiveBatch(tx)` 传入 SourceArgs。Source 不再传递 `progressive_batch_pcm_tx` 独立字段 — PCM 通道通过 `ListenerRouting` 枚举变体传递。
 
 ### 5.5 `Listener2` 集成（`plugins/transcription/src/listener2/`）
 
-```rust
-// 设计文档描述，尚未实现
-// plugins/transcription/src/listener2/ext.rs
-pub struct Listener2 {
-    sessions: Arc<Mutex<HashMap<String, BatchSessionControl>>>,
-    progressive_batch: Arc<Mutex<HashMap<String, ProgressiveBatchManager>>>,  // ← 新增
-}
-
-impl Listener2 {
-    /// 创建 ProgressiveBatchManager（由 capture start 调用）
-    pub fn start_progressive_batch(
-        &self,
-        session_id: &str,
-        config: ProgressiveBatchConfig,
-        runtime: Arc<dyn BatchRuntime>,
-    ) -> PcmSender;
-
-    /// 等待结果（由 startTranscription 调用）
-    pub async fn wait_progressive_batch_result(
-        &self,
-        session_id: &str,
-    ) -> Result<batch::Response>;
-
-    /// 录音结束时 flush（由 capture stop 调用）
-    pub async fn finalize_progressive_batch(
-        &self,
-        session_id: &str,
-    ) -> Result<()>;
-}
-```
-
-> **当前状态：** ❌ 未实现。当前 `ProgressiveBatchManager` 由 `run_progressive_batch_from_file` 内部创建，不经过 `Listener2`。`transcriptionEvent::Completed` 走标准 `BatchRuntime::emit` 路径。
+> **当前状态：** ✅ 设计目标已实现，但采用不同的架构。ProgressiveBatchManager **不经过 `Listener2`**。live PCM 流由 `start_progressive_batch_stream()` (`plugins/transcription/src/listener/runtime.rs:137-189`) 直接创建并管理 `ProgressiveBatchManager`，在内存中消费 PCM 帧 → `on_audio_frame` → `finish()`。re-transcription 路径通过 `run_progressive_batch_from_file` / `continue_from_file` 在 `listener2-core` 内创建 Manager。两种路径的 `BatchSegmentResult`/`Completed` 事件统一走 `BatchRuntime::emit`。
 
 ### 5.6 `startTranscription` 命令变更
 
@@ -1089,14 +1056,20 @@ crates/listener2-core/src/
 | Integration               | `integration.rs` | `run_progressive_batch_from_file` — 公共入口，透传 `runtime` 参数                          | 嵌入 Manager 测试 |
 | **合计**                  | **5 文件**       | **~113 K 代码**                                                                            | **109+**          |
 
-### 未实现的部分（设计文档有但代码尚无）
+### Sprint 2 已完成（Phase A/B/C）
 
-| #   | 需要                                                  | 设计参考章节 | 说明                                                                                                 |
-| --- | ----------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------- |
-| 1   | live recording Source pipeline 集成                   | §5.2-5.4     | `SourceArgs.pcm_tx`、Pipeline dispatch、Session Supervisor 均未改动                                  |
-| 2   | `effective_transcription_mode()` 修复                 | §5.1         | `ProgressiveBatch` 当前回退为 `Live`，应触发 batch 路径                                              |
-| 3   | 前端进度条（已通过增量展示替代）                    | §6 v2        | `BatchSegmentResult` 事件 + 前端 buffer + `SegmentPreview` 已实现，替代了原进度条设计                  |
-| 4   | v2 持久化表                                           | §3 v2        | `progressive_batch_jobs` / `progressive_batch_segments` 表未创建                                     |
-| 5   | 用户可配置 segment_overlap_ms / max_retries           | §9 v2        | 当前硬编码 1000ms / 3                                                                                |
-| 6   | 实时录音时 ProgressiveBatch 模式走通                  | §5.1-5.4     | §5.1 修复 + §5.2-5.4 实现 + 前端 `stt_mode=progressive` → `TranscriptionMode::ProgressiveBatch` 贯通 |
+| #   | 需要                                                        | 状态 | 实现位置                                                                       |
+| --- | ----------------------------------------------------------- | ---- | ------------------------------------------------------------------------------ |
+| 1   | live recording Source pipeline 集成                         | ✅   | `supervisor.rs:64-75` PCM channel → `ListenerRouting::ProgressiveBatch`        |
+| 2   | `effective_transcription_mode()` 处理 `ProgressiveBatch`    | ✅   | `types.rs:52-54` 优先返回 `ProgressiveBatch`                                   |
+| 3   | 前端增量展示（替代进度条）                                   | ✅   | `BatchSegmentResult` 事件 + `batchSegments` buffer + `SegmentPreview`          |
+| 4   | v2 持久化表 + Continue                                      | ✅   | `20260726000000_progressive_batch_jobs.sql` + `resume()` + `continue_from_file` |
+| 5   | 重试 + Drain 超时 + Partial Stitch                          | ✅   | `finish()` drain timeout + stitcher partial + test                             |
+| 6   | 实时录音时 ProgressiveBatch 模式走通                         | ✅   | live PCM → runtime `start_progressive_batch_stream()` → Manager 完整周期        |
+
+### Sprint 2 完成（Phase A/B/C/D ✅）
+
+| #   | 需要                                | 设计参考章节 | 说明                                               |
+| --- | ----------------------------------- | ------------ | -------------------------------------------------- |
+| 1   | UI 右键菜单区分转写模式              | §7.6         | Re-transcribe 裂为3项 + Continue 条件显示 + 部分结果提示 |
 

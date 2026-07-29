@@ -127,3 +127,41 @@ pub struct SessionActionItemRow {
     pub created_at: String,
     pub updated_at: String,
 }
+
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow, serde::Serialize)]
+pub struct ProgressiveBatchJobRow {
+    pub id: String,
+    pub session_id: String,
+    pub status: String,
+    pub provider: String,
+    pub model: String,
+    pub base_url: String,
+    pub language: String,
+    pub segment_duration_ms: i64,
+    pub overlap_ms: i64,
+    pub max_concurrency: i64,
+    pub total_segments: i64,
+    pub completed_segments: i64,
+    pub failed_segments: i64,
+    pub abandoned_segments: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow, serde::Serialize)]
+pub struct ProgressiveBatchSegmentRow {
+    pub id: String,
+    pub job_id: String,
+    pub segment_index: i64,
+    pub global_start_ms: i64,
+    pub global_end_ms: i64,
+    pub status: String,
+    pub retry_count: i64,
+    pub max_retries: i64,
+    pub error: Option<String>,
+    pub response_json: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
