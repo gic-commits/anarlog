@@ -528,9 +528,48 @@ Speaches（OpenAI 兼容服务器）更新了 CJK 生效模式：默认不启用
 | `cargo test -p db-app` | ✅ 44/44 |
 | `cargo test -p pyannote-local` | ✅ 36/36 (15 unit + 21 integration) |
 
-### 剩余 Phase C
+## 下一步工作排布
 
-UI (Settings toggle + model select + threshold slider + speaker 渲染) — 待启动
+### Phase 0: VAD Min-Cut + Merge（替换 DurationScheduler）
+
+算法定稿（WhisperX），VAD 段超 max_duration 在 [½τ, τ] 找最低分切开，短段合并到 ≤τ 后提交。
+
+| 任务 | 文件 | 说明 |
+|------|------|------|
+| 0a | `crates/pyannote-local/src/min_cut_merge.rs` | Min-Cut 算法 + Merge 逻辑，~150 行 |
+| 0b | `crates/listener2-core/.../integration.rs` | `schedule_segments` → `min_cut_merge` |
+| 0c | Diarization 路径 | 替换 `DurationScheduler` |
+| 0d | `duration_scheduler.rs` | 移除（代码 + 8 个 unit tests） |
+
+### Phase 1: UI 渐进显示修复
+
+解决 `running_batch` 屏幕 spinner 占满全屏、SegmentPreview 被挤出可视区的问题。
+
+| 任务 | 文件 | 说明 |
+|------|------|------|
+| 1a | `index.tsx` | `hasSegments` → 紧凑进度条 + `SegmentPreview` 主区域；无 segments → 保持全屏 spinner |
+| 1b | `index.tsx` | 移除 `SegmentPreview` 中的 Dashed Line 分隔符（VAD 自然分段后不再需要）|
+| 1c | `batch.ts` | `handleBatchResponse` 清理 `batchSegments` 时序修复（等 DB 写入完成再清）|
+
+### Phase 2: Speaker Diarization UI
+
+Sprint 3 Phase C — 设置页 + 渲染。
+
+| 任务 | 文件 | 说明 |
+|------|------|------|
+| 2a | Settings + `select.tsx` | Diarization toggle + model 选择 + threshold slider |
+| 2b | `segment.tsx` / renderer | Speaker 标签 + 颜色渲染 |
+| 2c | CJK 后处理 | 兼容 speaker 标签（保留不丢弃） |
+
+### 远期优化方向
+
+**VAD 静音压缩（实测后评估）：**
+- 当前 Progressive Batch 提交每组 VAD 段时，组内各 VAD 段之间的静音间隙原封不动送至 Whisper，约 30-50% 的音频长度是无效计算。
+- 优化思路：每组改用拼接 `Segment.samples`（纯人声片段，不含静音），Whisper 只需转写有效人声。
+- 代价：Whisper 返回的词级时间戳对应压缩后的时间轴，需要在 Stitcher 里用 `global_start_ms` + 组内 gap map 展开回原始时间轴。Whisper 基于内容而非时间均匀分布，展开不是简单线性映射，需要逐字追踪。
+- 建议：先用真实录音实测静音占比（如 10 条各 30s 的组），确认收益后再决定是否实现展开逻辑。
+
+**`max_gap_ms`**：Merge 前置检查 VAD 段间 gap（如 >60s 硬分界），可做但收益有限（服务端已跳过静音）。
 
 ### 关键文件
 - `docs/sprint-3-diarization-design.md` — 完整设计文档

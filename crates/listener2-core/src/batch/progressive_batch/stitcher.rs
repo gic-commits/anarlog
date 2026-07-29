@@ -189,6 +189,21 @@ impl Stitcher {
             }
         }
 
+        // Coalesce orphan segments (≤2 words) into the previous segment.
+        let mut coalesced_boundaries: Vec<usize> = vec![0];
+        for i in 1..boundaries.len() {
+            let seg_start = boundaries[i];
+            let seg_end = boundaries.get(i + 1).copied().unwrap_or(tagged.len());
+            if seg_end - seg_start <= 2 {
+                let prev_idx = tagged[seg_start - 1].seg_index;
+                for j in seg_start..seg_end {
+                    tagged[j].seg_index = prev_idx;
+                }
+            } else {
+                coalesced_boundaries.push(seg_start);
+            }
+        }
+
         let all_words: Vec<batch::Word> = tagged.into_iter().map(|t| t.word).collect();
 
         let transcript = all_words
@@ -203,7 +218,7 @@ impl Stitcher {
             "total_duration": total_duration,
             "segments_stitched": self.segments.len(),
             "segments_total": segments_total,
-            "segment_boundaries": boundaries,
+            "segment_boundaries": coalesced_boundaries,
         });
 
         if !missing.is_empty() {
@@ -564,6 +579,117 @@ mod tests {
             abandoned.contains(&serde_json::json!(0)),
             "segment 0 should be abandoned"
         );
+    }
+
+    #[test]
+    fn test_coalesce_orphan_single_word_segment() {
+        let mut stitcher = Stitcher::new(config(1000));
+        stitcher.add_segment(seg(
+            0,
+            0,
+            vec![
+                make_word(0.0, 1.0, "hello"),
+                make_word(28.0, 29.0, "world"),
+            ],
+        ));
+        // Segment 1 has only 1 word — coalesced into segment 0
+        // Segment 2 also has 1 word — also coalesced (cascade)
+        stitcher.add_segment(seg(
+            1,
+            29000,
+            vec![make_word(0.0, 0.5, "orphan")],
+        ));
+        stitcher.add_segment(seg(
+            2,
+            58000,
+            vec![make_word(0.0, 1.0, "today")],
+        ));
+        let result = stitcher.stitch().unwrap();
+        let boundaries = result.metadata["segment_boundaries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap() as usize)
+            .collect::<Vec<_>>();
+        // All orphans coalesced → single segment → 1 boundary
+        assert_eq!(boundaries, vec![0], "all orphans coalesced into one");
+        let words = &result.results.channels[0].alternatives[0].words;
+        assert_eq!(words.len(), 4);
+        assert_eq!(words[0].word, "hello");
+        assert_eq!(words[2].word, "orphan");
+        assert_eq!(words[3].word, "today");
+    }
+
+    #[test]
+    fn test_coalesce_orphan_between_large_segments() {
+        let mut stitcher = Stitcher::new(config(1000));
+        stitcher.add_segment(seg(
+            0,
+            0,
+            vec![make_word(0.0, 1.0, "alpha")],
+        ));
+        // Segment 1 has 2 words — coalesced into segment 0
+        stitcher.add_segment(seg(
+            1,
+            29000,
+            vec![
+                make_word(0.0, 0.5, "orphan_one"),
+                make_word(0.5, 1.0, "orphan_two"),
+            ],
+        ));
+        // Segment 2 has 5 words — large enough to survive
+        stitcher.add_segment(seg(
+            2,
+            58000,
+            vec![
+                make_word(0.0, 1.0, "beta"),
+                make_word(1.0, 2.0, "gamma"),
+                make_word(2.0, 3.0, "delta"),
+                make_word(3.0, 4.0, "epsilon"),
+                make_word(4.0, 5.0, "zeta"),
+            ],
+        ));
+        let result = stitcher.stitch().unwrap();
+        let boundaries = result.metadata["segment_boundaries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap() as usize)
+            .collect::<Vec<_>>();
+        // After coalescing: seg0(alpha+orphans), seg2(beta..zeta) → 2 boundaries
+        assert_eq!(boundaries.len(), 2, "1 orphan coalesced, large seg kept");
+        assert_eq!(boundaries[0], 0);
+        assert_eq!(boundaries[1], 3, "seg2 starts at word 3 (after coalesced orphans)");
+        let words = &result.results.channels[0].alternatives[0].words;
+        assert_eq!(words.len(), 8);
+    }
+
+    #[test]
+    fn test_large_segment_not_coalesced() {
+        let mut stitcher = Stitcher::new(config(1000));
+        stitcher.add_segment(seg(
+            0,
+            0,
+            vec![make_word(0.0, 1.0, "alpha")],
+        ));
+        // Segment 1 has 3 words — NOT coalesced (threshold ≤2)
+        stitcher.add_segment(seg(
+            1,
+            29000,
+            vec![
+                make_word(0.0, 0.3, "three"),
+                make_word(0.3, 0.6, "word"),
+                make_word(0.6, 1.0, "segment"),
+            ],
+        ));
+        let result = stitcher.stitch().unwrap();
+        let boundaries = result.metadata["segment_boundaries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap() as usize)
+            .collect::<Vec<_>>();
+        assert_eq!(boundaries.len(), 2, "3-word segment preserved");
     }
 
     #[test]

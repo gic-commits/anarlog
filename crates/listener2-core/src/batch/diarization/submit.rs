@@ -17,7 +17,6 @@ const MAX_CONCURRENCY: usize = 2;
 pub struct SpeakerSegmentData {
     pub index: usize,
     pub speaker: usize,
-    pub global_start_ms: i64,
     pub pcm_f32: Vec<f32>,
 }
 
@@ -26,7 +25,6 @@ impl Default for SpeakerSegmentData {
         Self {
             index: 0,
             speaker: 0,
-            global_start_ms: 0,
             pcm_f32: Vec::new(),
         }
     }
@@ -34,19 +32,9 @@ impl Default for SpeakerSegmentData {
 
 enum SegmentStatus {
     Pending(SpeakerSegmentData),
-    InFlight {
-        data: SpeakerSegmentData,
-        started_at: Instant,
-    },
-    Completed {
-        data: SpeakerSegmentData,
-        response: batch::Response,
-    },
-    Failed {
-        data: SpeakerSegmentData,
-        error: String,
-        retry_count: u32,
-    },
+    InFlight { data: SpeakerSegmentData },
+    Completed { data: SpeakerSegmentData, response: batch::Response },
+    Failed { data: SpeakerSegmentData },
 }
 
 impl SegmentStatus {
@@ -103,23 +91,11 @@ impl DiarizationSubmitter {
         }
     }
 
-    pub fn enqueue(&mut self, data: SpeakerSegmentData) {
-        self.segments.push(SegmentStatus::Pending(data));
-        self.try_dispatch();
-    }
-
     pub fn enqueue_all(&mut self, segments: Vec<SpeakerSegmentData>) {
         for seg in segments {
             self.segments.push(SegmentStatus::Pending(seg));
         }
         self.try_dispatch();
-    }
-
-    pub fn poll_completed(&mut self) -> Vec<(usize, usize, batch::Response)> {
-        while let Ok(worker_result) = self.result_rx.try_recv() {
-            self.apply_result(worker_result);
-        }
-        self.collect_completed()
     }
 
     pub fn progress(&self) -> (usize, usize, usize) {
@@ -135,10 +111,6 @@ impl DiarizationSubmitter {
             }
         }
         (pending, completed, failed)
-    }
-
-    pub fn total(&self) -> usize {
-        self.segments.len()
     }
 
     pub async fn drain(&mut self, timeout: Duration) -> Vec<(usize, usize, batch::Response)> {
@@ -189,18 +161,14 @@ impl DiarizationSubmitter {
             .count()
     }
 
-    fn fail_remaining(&mut self, reason: &str) {
+    fn fail_remaining(&mut self, _reason: &str) {
         for seg in &mut self.segments {
             if matches!(
                 seg,
                 SegmentStatus::Pending(_) | SegmentStatus::InFlight { .. }
             ) {
                 let data = seg.take_data();
-                *seg = SegmentStatus::Failed {
-                    data,
-                    error: reason.to_string(),
-                    retry_count: 0,
-                };
+                *seg = SegmentStatus::Failed { data };
             }
         }
     }
@@ -234,10 +202,7 @@ impl DiarizationSubmitter {
                     let params = self.params.clone();
                     let tx = self.result_tx.clone();
 
-                    self.segments[idx] = SegmentStatus::InFlight {
-                        data: data.clone(),
-                        started_at: Instant::now(),
-                    };
+                    self.segments[idx] = SegmentStatus::InFlight { data: data.clone() };
                     self.inflight_count += 1;
 
                     let span = tracing::info_span!("diarization_submit", idx = data.index);
@@ -269,20 +234,16 @@ impl DiarizationSubmitter {
                 error,
                 exhausted,
             } => {
-                let retry_count = self.count_retries(index);
+                let retries = self.count_retries(index);
                 if let Some(seg) = self.segments.iter_mut().find(|s| s.data().index == index) {
                     let data = seg.take_data();
-                    *seg = SegmentStatus::Failed {
-                        data,
-                        error: error.clone(),
-                        retry_count: retry_count + 1,
-                    };
+                    *seg = SegmentStatus::Failed { data };
                 }
-                if !exhausted && retry_count < MAX_RETRIES {
+                if !exhausted && retries < MAX_RETRIES {
                     tracing::warn!(
                         "[diarization] retrying segment {} (attempt {}/{}): {}",
                         index,
-                        retry_count + 1,
+                        retries + 1,
                         MAX_RETRIES,
                         error,
                     );
@@ -295,7 +256,7 @@ impl DiarizationSubmitter {
                     tracing::error!(
                         "[diarization] segment {} failed permanently after {} retries: {}",
                         index,
-                        retry_count + 1,
+                        retries + 1,
                         error,
                     );
                 }

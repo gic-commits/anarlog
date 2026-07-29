@@ -23,10 +23,10 @@
   │    ─ cosine distance matrix → threshold=0.35
   │    ─ 输出说话人标签
   │
-  ├─ [NEW] 时长调度 (Merge/Split)
-  │    ─ 以 max_duration=30s 为参考，±20% 水线
-  │    ─ 合并短 VAD 段 → 接近 max_duration
-  │    ─ 超限强制切分
+   ├─ [NEW] VAD Min-Cut + Merge（WhisperX 算法）
+   │    ─ 超 max_duration 的段在 [½τ, τ] 区间内找 VAD 最低分切开
+   │    ─ 短段合并到累积 ≤τ 后提交
+   │    ─ 取代 ±20% 水线策略（DurationScheduler）
   │
   ├─ SubmitSegment 队列
   │    ─ 每个 segment 携带本地元数据 (speaker, time, batch_id)
@@ -84,59 +84,31 @@ curl -L -o tests/models/campplus_cn_en_common_200k.onnx \
 
 裸测代码：`crates/pyannote-local/tests/diarization_pipeline.rs` (19 tests, all ✅)
 
-## 4. 时长调度（VAD + 固定时长调和）
+## 4. 时长调度 — VAD Min-Cut + Merge
 
-### 4.1 方案选择：方案A
+### 4.1 决策
 
-```
-VAD → 染色 → 合并/切分 → 提交
-```
+采用 **WhisperX (Oxford, Interspeech 2023) 的 VAD Min-Cut + Merge** 方案，取代原定的 DurationScheduler ±20% 水线策略（后者已实现但将被替换）。
 
-不采用"固定分段 → 段内独立 VAD"（方案B），因为方案B会导致同说话人跨段时 Speaker_id 不一致。
+核心变化：从"积累后决策"改为"先切大段 + 后合小段"，最终每段 ≈τ 且边界在弱语音区。
 
-### 4.2 ±20% 水线规则
+### 4.2 Min-Cut
 
-以 `max_duration = 30s` 为例：
-
-| 累计时长 | VAD 状态 | 行为 |
-|:-------:|:--------:|------|
-| < 24s (80%) | 段已结束 | 合并下一段 |
-| 24s ~ 30s (80%~100%) | 段已结束 | ✅ **立即提交**（提前命中） |
-| 30s ~ 36s (100%~120%) | 段已结束 | ✅ **立即提交**（允许超限） |
-| **> 36s (120%)** | **段未结束** | ⚠️ **强制切分**：按 100% 切，溢出部分留到下一批 |
-
-### 4.3 合并策略
+VAD 段 > `max_duration`（默认 30s）时，在 [½τ, τ] 区间内找 VAD 置信度最低点切开：
 
 ```
-pending_queue: Vec<SpeakerSegment>  // 待提交段
-
-for each segment from VAD:
-    push to pending_queue
-    
-    total = sum(seg.end - seg.start for seg in pending_queue)
-    
-    if segment just ended AND total >= max_duration * 0.8:
-        if total <= max_duration * 1.2:
-            submit_batch(pending_queue)  // 提前命中或允许超限
-            pending_queue.clear()
-        elif total > max_duration * 1.2:
-            // 强制切分：切到 100%
-            split_point = find_split_time(pending_queue, max_duration)
-            submit_batch(pending_queue[..split_point])
-            pending_queue = pending_queue[split_point..]
-    elif segment not ended AND total > max_duration * 1.2:
-        // 等不到段结束了，强制切
-        split_point = find_split_time(pending_queue, max_duration)
-        submit_batch(pending_queue[..split_point])
-        pending_queue = pending_queue[split_point..]
+如果 is_active 且 当前段长 ≥ max_dur:
+    搜索区间 = [current_pos + max_dur/2, current_pos + max_dur]
+    cut_point = argmin(VAD_scores[搜索区间])
 ```
 
-### 4.4 短段处理
+### 4.3 Merge
 
-VAD 产生的超短段（<1.5s）：
-1. 嵌入提取会失败 → 标记为"无嵌入"
-2. 合并到相邻最近的有效段（短段合并）
-3. 不单独提交
+相邻短 VAD 段合并到累积 ≤τ 后提交。边界条件与 Progressive Batch §4.1.3 一致。
+
+### 4.4 短段处理（不变）
+
+VAD 产生的超短段（<1.5s）合并到相邻有效段，不单独提交。
 
 ## 5. 本地元数据 + 服务端纯净协议
 
@@ -251,30 +223,21 @@ impl DiarizationManager {
 }
 ```
 
-### 6.2 DurationScheduler（新增）
+### 6.2 MinCutMerge（替换 DurationScheduler）
 
 ```rust
-struct DurationScheduler {
-    max_duration_ms: u32,     // 默认 30000
-    watermark_low: f64,       // 0.8
-    watermark_high: f64,      // 1.2
+struct MinCutMergeConfig {
+    max_duration_ms: u32,    // 默认 30000
+    model: VADModel,         // VAD 得分来源
 }
 
-impl DurationScheduler {
-    fn new(max_duration_ms: u32) -> Self;
-    
-    // 判断当前 pending 队列是否可以提交
-    fn should_submit(&self, pending: &[SpeakerSegment], 
-                     last_segment_ended: bool) -> SubmitDecision;
-    
-    // 需要切分时，找到切分点
-    fn find_split(&self, pending: &[SpeakerSegment]) -> usize;
-}
-
-enum SubmitDecision {
-    Wait,                       // 继续合并
-    Submit(usize),              // 提交前 N 个段
-    SplitAndSubmit(usize),      // 切到第 N 个，提交前半
+impl MinCutMerge {
+    /// 输入 VAD segments，输出提交组（每组 ≈max_duration）
+    fn process(
+        vad_segments: &[VADSegment],
+        vad_scores: &[f64],       // VAD 帧级得分（用于 Min-Cut 找最低点）
+        config: &MinCutMergeConfig,
+    ) -> Vec<Vec<VADSegment>>;
 }
 ```
 
@@ -322,8 +285,8 @@ run_batch / run_progressive_batch
   ├─ [NEW] DiarizationManager::process(audio_f32)
   │     → Vec<SpeakerSegment> (已染色)
   │
-  ├─ [NEW] DurationScheduler
-  │     → 合并/切分 SubmitSegment 队列
+   ├─ [NEW] MinCutMerge
+   │     → 合并/切分 SubmitSegment 队列
   │
   ├─ [NEW] SubmitManager::submit_next_batch()
   │     → 纯标准 OpenAI 请求
@@ -358,7 +321,7 @@ DiarizationManager::process(audio_f32)
   ├─ Agglomerative Clustering (threshold)
   └─ short segment merge
              ↓
-DurationScheduler (merge/split ±20%)
+MinCutMerge (Min-Cut + Merge, 每段≈τ)
              ↓
 SubmitManager
   ├─ enqueue(SubmitSegment)
@@ -370,17 +333,24 @@ Stitcher → UI display (speaker labels + colors)
 
 ## 9. Phase 分解
 
-### Phase A: DiarizationManager + 聚类 + 短段合并（~2天）
+### Phase 0: Min-Cut + Merge 替换 DurationScheduler（待启动）
 
-- [ ] 实现真实 agglomerative clustering（替换 `embedding.rs` 中的 `cluster()` 桩）
-- [ ] 实现 `DiarizationManager`，封装 seg→embed→cluster 管线
-- [ ] 实现 `EmbeddingProvider` trait（wespeaker-cnceleb-LM + campplus-200k）
-- [ ] 短段合并（<1.5s 合并到相邻段）
-- [ ] 全部测试通过
+- [ ] 新增 `crates/pyannote-local/src/min_cut_merge.rs`（Min-Cut 算法 + Merge 逻辑，~150 行）
+- [ ] `integration.rs` 切换为 `min_cut_merge`（替换 `schedule_segments` 调用）
+- [ ] 替换 Diarization 路径中的 `DurationScheduler`
+- [ ] 移除 `duration_scheduler.rs`（代码 + 8 个单元测试）
 
-### Phase B: 时长调度 + SubmitManager + DB（~1天 ✅）
+### Phase A: DiarizationManager + 聚类 + 短段合并（~2天 ✅）
 
-- [x] 实现 `DurationScheduler`（±20% 水线规则）
+- [x] 实现真实 agglomerative clustering（替换 `embedding.rs` 中的 `cluster()` 桩）
+- [x] 实现 `DiarizationManager`，封装 seg→embed→cluster 管线
+- [x] 实现 `EmbeddingProvider` trait（wespeaker-cnceleb-LM + campplus-200k）
+- [x] 短段合并（<1.5s 合并到相邻段）
+- [x] 全部测试通过
+
+### Phase B: 时长调度 + SubmitManager + DB（~1天 ✅, 后续 Min-Cut + Merge 替换 DurationScheduler）
+
+- [x] 实现 `DurationScheduler`（±20% 水线规则，**待替换为 Min-Cut + Merge**）
 - [x] 实现 `SubmitManager`（`DiarizationSubmitter`: 队列 + N=2 并发 + 指数退避重试 + drain 超时 + 响应匹配）
 - [x] DB 持久化 schema + 迁移（`diarization_jobs` / `diarization_segments` 表）
 - [x] Drizzle schema（`diarizationJobs` / `diarizationSegments`）

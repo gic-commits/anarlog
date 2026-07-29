@@ -235,6 +235,9 @@ pub async fn continue_progressive_batch<R: tauri::Runtime>(
         cjk_enabled: true,
         cjk_features: None,
         cjk_server_side: false,
+        diarization_enabled: false,
+        diarization_model: None,
+        diarization_threshold: 0.35,
     };
 
     let output = app

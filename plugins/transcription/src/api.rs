@@ -238,6 +238,16 @@ pub struct TranscriptionParams {
     pub cjk_features: Option<listener2::CjkLayerFlags>,
     #[serde(default)]
     pub cjk_server_side: bool,
+    #[serde(default)]
+    pub diarization_enabled: bool,
+    #[serde(default)]
+    pub diarization_model: Option<String>,
+    #[serde(default = "default_diarization_threshold")]
+    pub diarization_threshold: f32,
+}
+
+fn default_diarization_threshold() -> f32 {
+    0.35
 }
 
 fn default_cjk_enabled() -> bool {
@@ -426,6 +436,9 @@ impl From<TranscriptionParams> for listener2::BatchParams {
             cjk_enabled: value.cjk_enabled,
             cjk_features: value.cjk_features,
             cjk_server_side: value.cjk_server_side,
+            diarization_enabled: value.diarization_enabled,
+            diarization_model: value.diarization_model,
+            diarization_threshold: value.diarization_threshold,
         }
     }
 }

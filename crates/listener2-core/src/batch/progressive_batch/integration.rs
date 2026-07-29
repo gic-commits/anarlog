@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
 use hypr_audio_utils::Source;
+use hypr_pyannote_local::diarization::SpeakerSegment;
+use hypr_pyannote_local::duration_scheduler::{DurationSchedulerConfig, schedule_segments};
+use hypr_pyannote_local::segmentation::Segmenter;
 
 use crate::batch::{BatchParams, BatchRunMode, BatchRunOutput};
 use crate::{BatchEvent, BatchRuntime};
@@ -20,6 +23,8 @@ fn mime_type_for_extension(path: &std::path::Path) -> &'static str {
     }
 }
 
+const TARGET_SAMPLE_RATE: u32 = 16000;
+
 pub async fn run_progressive_batch_from_file(
     runtime: Arc<dyn BatchRuntime>,
     params: BatchParams,
@@ -35,9 +40,8 @@ pub async fn run_progressive_batch_from_file(
         }
     })?;
 
-    let file_sample_rate: u32 = source.sample_rate().into();
-    let file_channels: usize = source.channels().get().into();
-
+    let src_sample_rate: u32 = source.sample_rate().into();
+    let channels: usize = source.channels().get().into();
     let segment_duration_ms = params.segment_duration_ms.unwrap_or(30000);
 
     let duration_secs = source
@@ -45,7 +49,6 @@ pub async fn run_progressive_batch_from_file(
         .map(|d| d.as_secs_f64())
         .unwrap_or(f64::MAX);
 
-    // Audio shorter than one segment → POST original file directly.
     if duration_secs < segment_duration_ms as f64 / 1000.0 {
         return submit_file_direct(
             runtime,
@@ -56,67 +59,215 @@ pub async fn run_progressive_batch_from_file(
         .await;
     }
 
+    // Load full audio to mono f32 at source rate.
+    let raw: Vec<f32> = source.collect();
+    let mono_src: Vec<f32> = if channels > 1 {
+        raw.chunks_exact(channels)
+            .map(|c| c.iter().sum::<f32>() / channels as f32)
+            .collect()
+    } else {
+        raw
+    };
+
+    // Resample to TARGET_SAMPLE_RATE (16kHz) for VAD and transcription.
+    let pcm_f32 = if src_sample_rate == TARGET_SAMPLE_RATE {
+        mono_src
+    } else {
+        let ratio = src_sample_rate as f64 / TARGET_SAMPLE_RATE as f64;
+        let last = mono_src.len().saturating_sub(1);
+        let out_len = (mono_src.len() as f64 / ratio).round() as usize;
+        let mut out = Vec::with_capacity(out_len);
+        for i in 0..out_len {
+            let pos = i as f64 * ratio;
+            let lo = (pos.floor() as usize).min(last);
+            let hi = (pos.ceil() as usize).min(last);
+            let frac = pos - lo as f64;
+            out.push(mono_src[lo] * (1.0 - frac as f32) + mono_src[hi] * frac as f32);
+        }
+        out
+    };
+
+    // Convert to i16 for VAD.
+    let pcm_i16: Vec<i16> = pcm_f32
+        .iter()
+        .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+        .collect();
+
+    // VAD segmentation.
+    let mut segmenter = Segmenter::new(TARGET_SAMPLE_RATE).map_err(|e| {
+        crate::BatchFailure::ProgressiveBatchFailed {
+            message: format!("VAD init failed: {e}"),
+        }
+    })?;
+    let vad_segments = segmenter
+        .process(&pcm_i16, TARGET_SAMPLE_RATE)
+        .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+            message: format!("VAD failed: {e}"),
+        })?;
+
+    if vad_segments.is_empty() {
+        return submit_file_direct(
+            runtime,
+            std::path::Path::new(&file_path),
+            &params,
+            &session_id,
+        )
+        .await;
+    }
+
+    let speaker_segments: Vec<SpeakerSegment> = vad_segments
+        .iter()
+        .map(|s| SpeakerSegment {
+            start: s.start,
+            end: s.end,
+            speaker: 0,
+            embedding_valid: false,
+        })
+        .collect();
+
+    let groups = schedule_segments(
+        speaker_segments,
+        DurationSchedulerConfig {
+            max_duration_ms: segment_duration_ms,
+            ..Default::default()
+        },
+    );
+
+    let total = groups.len();
+    tracing::info!(
+        "[vad-batch] {} groups from {} VAD segments for session {}",
+        total,
+        vad_segments.len(),
+        session_id,
+    );
+
     let session_dir = std::env::temp_dir().join(format!("progressive-batch-{session_id}"));
     let _ = std::fs::create_dir_all(&session_dir);
 
-    let language = params.languages.first().map(|l| l.to_string());
-
-    let config = ProgressiveBatchConfig {
-        session_id: session_id.clone(),
-        sample_rate: file_sample_rate,
-        segment_duration_ms,
-        overlap_ms: 1000,
-        max_concurrency: 2,
-        base_url: params.base_url,
-        api_key: params.api_key,
-        model: params.model,
-        language,
-        provider: params.provider,
-        session_dir,
+    let stitcher_config = StitcherConfig {
+        overlap_ms: 0,
+        segment_duration_ms: segment_duration_ms as u64,
+        total_segments: total,
     };
+    let mut stitcher = Stitcher::new(stitcher_config);
 
-    let mut manager = ProgressiveBatchManager::new(config).with_runtime(runtime);
+    for (group_idx, group) in groups.iter().enumerate() {
+        let start_sample = (group[0].start * TARGET_SAMPLE_RATE as f64) as usize;
+        let end_sample = ((group.last().unwrap().end * TARGET_SAMPLE_RATE as f64) as usize)
+            .min(pcm_i16.len());
+        let global_start_ms = (group[0].start * 1000.0) as i64;
 
-    // Stream PCM in chunks to avoid loading entire file into memory.
-    const CHUNK_FRAMES: usize = 48000 * 10;
-    let mut buf: Vec<f32> = Vec::with_capacity(CHUNK_FRAMES * file_channels);
+        let audio_bytes = pcm_i16[start_sample..end_sample]
+            .iter()
+            .flat_map(|&s| s.to_le_bytes())
+            .collect::<Vec<u8>>();
 
-    for sample in source {
-        buf.push(sample);
-        if buf.len() >= CHUNK_FRAMES * file_channels {
-            let mono: Vec<f32> = if file_channels > 1 {
-                buf.chunks_exact(file_channels)
-                    .map(|c| c.iter().sum::<f32>() / file_channels as f32)
-                    .collect()
-            } else {
-                std::mem::take(&mut buf)
-            };
-            manager.on_audio_frame(&mono);
-            buf.clear();
-        }
-    }
+        let file_part = reqwest::multipart::Part::bytes(audio_bytes)
+            .file_name("audio.raw")
+            .mime_str("audio/pcm")
+            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+                message: format!("failed to create multipart: {e}"),
+            })?;
 
-    if !buf.is_empty() {
-        let mono: Vec<f32> = if file_channels > 1 {
-            buf.chunks_exact(file_channels)
-                .map(|c| c.iter().sum::<f32>() / file_channels as f32)
-                .collect()
-        } else {
-            buf
+        let listen_params = owhisper_interface::ListenParams {
+            model: params.model.clone(),
+            languages: params.languages.clone(),
+            ..Default::default()
         };
-        manager.on_audio_frame(&mono);
+
+        let url = owhisper_client::OpenAIAdapter::transcription_url(&params.base_url)
+            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+                message: format!("invalid URL: {e}"),
+            })?;
+
+        let form =
+            owhisper_client::OpenAIAdapter::build_batch_multipart(file_part, &listen_params, true, false)
+                .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+                    message: format!("failed to build form: {e}"),
+                })?;
+
+        let client = owhisper_client::create_client();
+        let resp = client
+            .post(url)
+            .multipart(form)
+            .header("Authorization", format!("Bearer {}", params.api_key))
+            .send()
+            .await
+            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+                message: format!("HTTP request failed: {e}"),
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            tracing::warn!(
+                "[vad-batch] group {} failed ({}): {}",
+                group_idx,
+                status,
+                body,
+            );
+            stitcher.add_abandoned(group_idx);
+            continue;
+        }
+
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+                message: format!("failed to read response body: {e}"),
+            })?;
+
+        let segment_response: owhisper_interface::batch::Response =
+            if matches!(params.provider, crate::batch::BatchProvider::OpenAI) {
+                owhisper_client::OpenAIAdapter::parse_batch_response(&body).map_err(|e| {
+                    crate::BatchFailure::ProgressiveBatchFailed {
+                        message: format!("failed to parse response: {e}"),
+                    }
+                })?
+            } else {
+                serde_json::from_str(&body).map_err(|e| {
+                    crate::BatchFailure::ProgressiveBatchFailed {
+                        message: format!("failed to parse response: {e}"),
+                    }
+                })?
+            };
+
+        runtime.emit(BatchEvent::BatchSegmentResult {
+            session_id: session_id.clone(),
+            segment_index: group_idx,
+            global_start_ms,
+            response: segment_response.clone(),
+        });
+
+        stitcher.add_segment(CompletedSegment {
+            index: group_idx,
+            global_start_ms,
+            response: segment_response,
+        });
     }
 
-    let response = manager
-        .finish()
-        .await
-        .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed { message: e })?;
+    let has_completed = stitcher.segment_count() > 0;
+    if !has_completed {
+        return Err(crate::BatchFailure::ProgressiveBatchFailed {
+            message: "no groups completed successfully".to_string(),
+        }
+        .into());
+    }
 
-    Ok(BatchRunOutput {
-        session_id,
-        mode: BatchRunMode::Direct,
-        response,
-    })
+    match stitcher.stitch() {
+        Ok(response) => {
+            let _ = std::fs::remove_dir_all(&session_dir);
+            Ok(BatchRunOutput {
+                session_id,
+                mode: BatchRunMode::Direct,
+                response,
+            })
+        }
+        Err(e) => Err(crate::BatchFailure::ProgressiveBatchFailed {
+            message: format!("stitch failed: {e:?}"),
+        }
+        .into()),
+    }
 }
 
 async fn submit_file_direct(
@@ -221,8 +372,8 @@ async fn submit_file_direct(
 }
 
 /// Continue a previously interrupted/partial progressive batch.
-/// Pre-loads completed segments from DB, streams audio, and only
-/// submits segments whose indices are not already completed.
+/// This still uses the old fixed-segment ProgressiveBatchManager for
+/// backward compatibility with existing DB records.
 pub async fn continue_from_file(
     runtime: Arc<dyn BatchRuntime>,
     params: BatchParams,
@@ -259,8 +410,6 @@ pub async fn continue_from_file(
         session_dir,
     };
 
-    // Manager starts in Active state with pre-loaded completed segments.
-    // on_audio_frame will skip segments already in the stitcher.
     let mut manager =
         ProgressiveBatchManager::resume(config, completed_segments).with_runtime(runtime);
 

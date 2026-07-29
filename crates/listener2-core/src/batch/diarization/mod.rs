@@ -61,7 +61,6 @@ pub(super) async fn run_diarization_batch(
             SpeakerSegmentData {
                 index: idx,
                 speaker,
-                global_start_ms: (group.first().unwrap().start * 1000.0) as i64,
                 pcm_f32: audio[start_sample..end_sample].to_vec(),
             }
         })

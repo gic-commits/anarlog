@@ -544,6 +544,9 @@ async fn persist_batch_event(
                 tracing::warn!("[diarization_persist] update job count failed: {e}");
             }
         }
+
+        core::BatchEvent::BatchCompleted { .. }
+        | core::BatchEvent::BatchResponseStreamed { .. } => {}
     }
 }
 
@@ -799,6 +802,9 @@ mod tests {
             cjk_enabled: true,
             cjk_features: None,
             cjk_server_side: false,
+            diarization_enabled: false,
+            diarization_model: None,
+            diarization_threshold: 0.35,
         }
     }
 

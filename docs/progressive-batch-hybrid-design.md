@@ -78,25 +78,59 @@ Progressive Batch 仅在录音时长远超 batch 推理时间时才有收益。�
 
 **未来扩展：** 可在录音过程中做渐进式评估——如果录音进行到 30s 时已预计超过段长，提前启动分段器。
 
-### 4.1 Segmenter（分段器）
+### 4.1 Segmenter（分段器）— VAD Min-Cut + Merge
 
-**输入：** PCM 音频流（从 capture 引擎实时到达）
-**输出：** `Vec<AudioSegment>`（每段包含 samples + 时间范围）
+**输入：** PCM 16kHz f32/i16 全量音频（从文件加载或流式采集）
+**输出：** `Vec<Vec<Segment>>`（多组 VAD 段，每组≈max_duration，边界在弱语音区）
 
-**分段策略（二选一，可配置）：**
+**策略：WhisperX (Oxford, Interspeech 2023) 的 VAD Min-Cut + Merge**
 
-| 策略                 | 优点                   | 缺点         |
-| -------------------- | ---------------------- | ------------ |
-| VAD 分段             | 段落语义完整           | 段长不可控   |
-| 固定时长（默认 30s） | 段长均匀，便于估算进度 | 可能切断句子 |
+#### 4.1.1 VAD 预分割
 
-**建议初始实现：** 固定 30s 分段 + **1s 段间重叠**（减少切句概率）。后续可升级到 VAD 分段。
+先用 `pyannote Segmenter`（5.7MB ONNX）对全量音频跑 VAD，输出纯人声片段：
 
-> **服务端反馈：** batch 端点额外有一层 VAD（`stt.py:154`），会在客户端分段之上再跑 VAD 检测静音并生成 `clip_timestamps`。这意味着：
->
-> 1. 固定 30s 分段后，服务端 VAD 会进一步裁剪段内静音 — 客户端拼接时的时间轴校准需考虑
-> 2. 重叠分段的两段中，静音部分会被 VAD 跳过，但**语音部分会重复转录** — stitcher 需用时间戳去重
-> 3. 分段越大效率越高（HTTP 开销占比更小），建议允许用户配置 `segment_duration_ms`（60s 比 30s 更优）
+```
+Segment { start: f64, end: f64, samples: Vec<i16> }
+```
+
+后续**所有操作以 VAD 段为最小单元**，不与固定时间窗口交叉。
+
+#### 4.1.2 Min-Cut（超长段切分）
+
+连续人声段超过 `max_duration`（默认 30s）时，在 [½τ, τ] 区间内找 **VAD 置信度最低点** 切开：
+
+```
+输入: scores[], max_dur, onset_th, offset_th
+如果 is_active 且 当前段长 ≥ max_dur:
+    搜索区间 = [current_pos + max_dur/2, current_pos + max_dur]
+    cut_point = argmin(scores[搜索区间])
+    在此处切分 → 两段
+```
+
+保证：
+- 每段 ≤ max_duration
+- 切分点在最低激活区（最接近静音的位置），避免切在词中
+- 搜索区间下限 ½τ 保证切出来的后段有足够上下文
+
+#### 4.1.3 Merge（短段合并）
+
+相邻短 VAD 段合并，总时长不超过 τ（默认 30s）。合并规则：
+- 短段持续加入 pending 队列
+- 累积时长 ≥ τ × 0.8 且当前 VAD 段结束时 → 提交（提前命中）
+- 累积时长在 [τ, τ×1.2] 且当前 VAD 段结束时 → 提交（允许超限）  
+- 累积时长 > τ×1.2 且当前 VAD 段未结束时 → 强制切分（在 ≤τ 处切）
+
+> **额外保护：`max_gap_ms`**（远期可加）
+> 如果 pending 队列中最新 VAD 段与上一个段之间的静音间隔 > `max_gap_ms`（如 60s），
+> 则不等累积到阈值，立即 flush 当前队列作为独立组提交，避免长静音泡在组内。
+> 当前服务端 VAD 已跳过静音，此项收益有限，列为远期优化。
+
+#### 4.1.4 首段/末段无特殊处理
+
+Min-Cut + Merge 天然处理所有段一致：
+- 首段长 → Min-Cut 在 min 激活点切开 → 第一段 ≈τ 即可提交
+- 末段短 → Merge 到前一组（或单独提交）
+- 不需要等待"自然结束"的额外超时机制
 
 ```
 固定 30s + 1s overlap:
@@ -329,8 +363,19 @@ OpenAI (Speaches)
 
 ### Sprint 3：优化（待定）
 
-- [ ] VAD 分段策略
-- [ ] 动态 segment_duration_ms 自适应
+- [x] VAD Min-Cut + Merge 策略研究（Jul 29 ✅）
+- [ ] **Phase 0**: 实现 Min-Cut + Merge 替代 DurationScheduler
+  - [ ] 新增 `crates/pyannote-local/src/min_cut_merge.rs`（Min-Cut 算法 + Merge 逻辑）
+  - [ ] `integration.rs` 从 `schedule_segments` 切换为 `min_cut_merge`
+  - [ ] `duration_scheduler.rs` 保留，Diarization 路径后续对齐
+- [ ] **Phase 1**: UI 渐进显示修复
+  - [ ] `index.tsx`: `hasSegments` → 紧凑进度 + SegmentPreview
+  - [ ] 移除 Dashed Line 分隔符（VAD 自然分段后不再需要）
+  - [ ] `handleBatchResponse` 清理时序修复（不清空 batchSegments）
+- [ ] **Phase 2**: Speaker Diarization UI（Sprint 3 Phase C）
+  - [ ] Settings: toggle + model 选择 + threshold slider
+  - [ ] Segment 渲染: speaker 标签 + 颜色
+  - [ ] CJK 后处理兼容 speaker 标签
 - [ ] WebSocket 控制面设计评审（如需要）
 
 ---
@@ -361,6 +406,9 @@ OpenAI (Speaches)
 | 前端增量展示                     | 无                                                  | `batchSegments` Map + `handleBatchSegmentResult` + `SegmentPreview` + `empty.tsx segmentCount` | ✅ 片段级先到先展示            |
 | 分段虚线分隔                     | 无                                                  | `segment.tsx` 检测 `word.metadata.segment_boundary` 渲染虚线        | ✅ 段落间视觉分隔              |
 | Server-side CJK (Speaches)       | 无                                                  | `cjk_server_side` boolean 贯通：UI→`TranscriptionParams`→`BatchParams`→`ListenParams`→`CreateCustomTranscriptionOptions.cjk_post_process`→multipart form field `cjk_post_process=true` | ✅ 默认关闭，开启后所有 batch 模式（Direct / Progressive）的 HTTP 请求均带该参数 |
+| 分段策略                         | DurationScheduler ±20% 水线                         | VAD Min-Cut + Merge（WhisperX 算法）                                   | ✅ Jul 29 定稿，待实现         |
+| 渐进显示                         | `TranscriptEmptyState` spinner + `SegmentPreview` 在下方 | `hasSegments` 时紧凑进度条 + `SegmentPreview` 主区域                 | ⏳ 待改（Phase 1）             |
+| 段落分隔                         | Dashed Line 分隔符（固定窗口段提示）                 | 无分隔符（VAD 自然分段天然可区分）                                     | ⏳ 待改（Phase 1）             |
 
 ---
 
