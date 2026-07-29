@@ -690,6 +690,19 @@ impl From<listener2::BatchEvent> for TranscriptionEvent {
                 code,
                 error,
             },
+            listener2::BatchEvent::DiarizationStarted { session_id, .. } => {
+                Self::Started { session_id }
+            }
+            listener2::BatchEvent::DiarizationSegmentResult {
+                session_id,
+                segment_index,
+                response,
+                ..
+            } => Self::SegmentResult {
+                session_id,
+                segment_index,
+                response,
+            },
         }
     }
 }

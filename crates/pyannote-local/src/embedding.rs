@@ -5,6 +5,8 @@ use hypr_onnx::{
     ort::{self, session::Session, value::TensorRef},
 };
 
+use crate::embedding_providers::EmbeddingProvider;
+
 const EMBEDDING_ONNX: &[u8] = include_bytes!("./data/embedding.onnx");
 
 pub struct EmbeddingExtractor {
@@ -47,10 +49,48 @@ impl EmbeddingExtractor {
         let embeddings = ort_out.iter().copied().collect::<Vec<_>>();
         Ok(embeddings)
     }
+}
 
-    pub fn cluster(&self, _n_clusters: usize, embeddings: &[f32]) -> Vec<usize> {
-        let assignments = vec![0; embeddings.len()];
-        assignments
+/// Wraps the built-in pyannote-local embedding model as an EmbeddingProvider
+pub struct PyannoteEmbeddingProvider {
+    extractor: EmbeddingExtractor,
+}
+
+impl PyannoteEmbeddingProvider {
+    pub fn new() -> Self {
+        Self {
+            extractor: EmbeddingExtractor::new(),
+        }
+    }
+}
+
+impl Default for PyannoteEmbeddingProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EmbeddingProvider for PyannoteEmbeddingProvider {
+    fn compute(&mut self, samples_f32: &[f32]) -> Result<Option<Vec<f32>>, crate::Error> {
+        match self.extractor.compute(samples_f32.iter().copied()) {
+            Ok(emb) => {
+                if emb.iter().all(|v| v.is_finite()) {
+                    Ok(Some(emb))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(crate::Error::KnfError(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn embedding_dim(&self) -> usize {
+        512
+    }
+
+    fn name(&self) -> &str {
+        "pyannote-local"
     }
 }
 

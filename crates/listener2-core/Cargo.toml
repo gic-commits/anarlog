@@ -16,6 +16,7 @@ hypr-cjk-processor = { workspace = true, optional = true }
 hypr-denoise = { workspace = true, features = ["onnx"] }
 hypr-host = { workspace = true }
 hypr-language = { workspace = true }
+hypr-pyannote-local = { workspace = true }
 hypr-transcribe-core = { workspace = true }
 hypr-transcribe-soniqo = { workspace = true }
 

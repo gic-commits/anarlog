@@ -461,7 +461,7 @@ Speaches（OpenAI 兼容服务器）更新了 CJK 生效模式：默认不启用
 | `cargo test -p listener2-core` | ✅ 115/115 |
 | `pnpm -F @hypr/desktop typecheck` | ✅ |
 
-## Jul 29 — Sprint 3 设计定稿 + 模型对比完成（Commit 前）
+## Jul 29 — Sprint 3 Phase A/B 全部完成 🔥
 
 ### 模型对比 (19 tests, all ✅)
 
@@ -488,16 +488,53 @@ Speaches（OpenAI 兼容服务器）更新了 CJK 生效模式：默认不启用
 - **SubmitSegment**: 队列持久化到 DB，支持断线恢复
 - **3 Phase**: Phase A (DiarizationManager) → Phase B (DurationScheduler + SubmitManager) → Phase C (UI)
 
-### Phase A 待实现
-- [ ] 真实 agglomerative clustering（替换 `embedding.rs` 中的 `cluster()` 桩）
-- [ ] DiarizationManager（seg→embed→cluster 管线）
-- [ ] EmbeddingProvider trait（wespeaker-cnceleb-LM + campplus-200k）
-- [ ] 短段合并（<1.5s）
-- [ ] 全部测试通过
+### Phase A: DiarizationManager（~2天 ✅）
+
+| 组件 | 文件 | 描述 |
+|------|------|------|
+| `DiarizationManager` | `crates/pyannote-local/src/diarization.rs` | VAD → embed → short segment merge → cluster 管线 |
+| `SpeakerSegment` | `diarization.rs:27-32` | start/end/speaker/embedding_valid |
+| `DiarizationConfig` | `diarization.rs:8-13` | model_path/threshold/min_segment_duration/sample_rate |
+| 短段合并 | `diarization.rs:198-218` | `<1.5s` 合并到相邻有效段 |
+| Agglomerative clustering | `crates/pyannote-local/src/clustering.rs` | cosine distance + average-linkage + threshold |
+| `EmbeddingProvider` trait | `crates/pyannote-local/src/embedding_providers.rs` | compute(⩍) / embedding_dim / name |
+| `FbankEmbedding` | `embedding_providers.rs` | 自动 tensor name probe (NAME_SETS) |
+| `PyannoteEmbeddingProvider` | `crates/pyannote-local/src/embedding.rs` | 内置 pyannote-local 模型包装 |
+| 集成测试 | `tests/diarization_pipeline.rs` | 21 tests (模型对比 + 多语言 + Manager) |
+
+### Phase B: DurationScheduler + SubmitManager + DB（~1天 ✅）
+
+| 组件 | 文件 | 描述 |
+|------|------|------|
+| `DurationScheduler` | `crates/pyannote-local/src/duration_scheduler.rs` | ±20% 水线调度 (Wait/Submit/SplitAndSubmit) |
+| `schedule_segments()` | `duration_scheduler.rs:103-126` | 批量调度入口 |
+| `DiarizationSubmitter` | `crates/listener2-core/src/batch/diarization/submit.rs` | 队列 + N=2 并发 + 指数退避重试(3次) + drain 超时 |
+| `run_submitter()` | `mod.rs:88-126` | 集成提交 + 事件 emit + speaker 标签合并 |
+| `BatchParams` 字段 | `crates/listener2-core/src/batch/mod.rs:134-139` | diarization_enabled/model/threshold |
+| `BatchEvent` 变体 | `crates/listener2-core/src/events.rs:62-77` | DiarizationStarted + DiarizationSegmentResult |
+| DB 迁移 | `crates/db-app/migrations/20260729000000_diarization_jobs.sql` | diarization_jobs + diarization_segments 表 |
+| Drizzle schema | `packages/db/src/schema.ts` | diarizationJobs + diarizationSegments |
+| Rust 行类型 | `crates/db-app/src/session_types.rs` | DiarizationJobRow + DiarizationSegmentRow |
+| 持久化 handler | `plugins/transcription/src/listener2/ext.rs:474-552` | persist_batch_event 写 diarization 表 |
+| `TranscriptionEvent::from` | `plugins/transcription/src/api.rs` | 映射 diarization 事件到前端 |
+
+### 验证总结
+
+| 命令 | 结果 |
+|------|------|
+| `cargo check -p listener2-core` | ✅ |
+| `cargo check -p db-app` | ✅ |
+| `cargo test -p listener2-core` | ✅ 115/115 |
+| `cargo test -p db-app` | ✅ 44/44 |
+| `cargo test -p pyannote-local` | ✅ 36/36 (15 unit + 21 integration) |
+
+### 剩余 Phase C
+
+UI (Settings toggle + model select + threshold slider + speaker 渲染) — 待启动
 
 ### 关键文件
-- `docs/sprint-3-diarization-design.md` — 完整设计文档（含调度规则、数据结构、数据流）
-- `crates/pyannote-local/tests/diarization_pipeline.rs` — 裸测代码 (19 tests, all ✅)
+- `docs/sprint-3-diarization-design.md` — 完整设计文档
+- `crates/pyannote-local/tests/diarization_pipeline.rs` — 21 integration tests
 
 ## Misc
 

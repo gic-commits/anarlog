@@ -471,7 +471,79 @@ async fn persist_batch_event(
             }
         }
 
-        _ => {}
+        core::BatchEvent::DiarizationStarted { session_id, total_segments } => {
+            let model = params.diarization_model.clone().unwrap_or_default();
+            let threshold = params.diarization_threshold;
+
+            if let Err(e) = sqlx::query(
+                "INSERT OR IGNORE INTO diarization_jobs
+                 (id, session_id, status, model, threshold, total_segments)
+                 VALUES (?1, ?2, 'running', ?3, ?4, ?5)",
+            )
+            .bind(session_id)
+            .bind(session_id)
+            .bind(&model)
+            .bind(threshold as f64)
+            .bind(*total_segments as i64)
+            .execute(pool)
+            .await
+            {
+                tracing::warn!("[diarization_persist] create job failed: {e}");
+            }
+        }
+
+        core::BatchEvent::DiarizationSegmentResult {
+            session_id,
+            segment_index,
+            speaker,
+            response,
+            ..
+        } => {
+            let segment_id = format!("{session_id}_{segment_index}");
+            let response_json = match serde_json::to_string(response) {
+                Ok(j) => j,
+                Err(e) => {
+                    tracing::warn!("[diarization_persist] serialize response failed: {e}");
+                    return;
+                }
+            };
+
+            if let Err(e) = sqlx::query(
+                "INSERT OR REPLACE INTO diarization_segments
+                 (id, job_id, segment_index, speaker, status, response_json, updated_at)
+                 VALUES (
+                   ?1, ?2, ?3, ?4, 'completed', ?5,
+                   strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 )",
+            )
+            .bind(&segment_id)
+            .bind(session_id)
+            .bind(*segment_index as i64)
+            .bind(*speaker as i64)
+            .bind(&response_json)
+            .execute(pool)
+            .await
+            {
+                tracing::warn!("[diarization_persist] upsert segment failed: {e}");
+            }
+
+            if let Err(e) = sqlx::query(
+                "UPDATE diarization_jobs
+                 SET completed_segments = (
+                   SELECT COUNT(*) FROM diarization_segments
+                   WHERE job_id = ?2 AND status = 'completed'
+                 ),
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = ?1",
+            )
+            .bind(session_id)
+            .bind(session_id)
+            .execute(pool)
+            .await
+            {
+                tracing::warn!("[diarization_persist] update job count failed: {e}");
+            }
+        }
     }
 }
 

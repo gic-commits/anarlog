@@ -58,6 +58,19 @@ pub enum BatchEvent {
         code: BatchErrorCode,
         error: String,
     },
+    #[serde(rename = "diarizationStarted")]
+    DiarizationStarted {
+        session_id: String,
+        total_segments: usize,
+    },
+    #[serde(rename = "diarizationSegmentResult")]
+    DiarizationSegmentResult {
+        session_id: String,
+        segment_index: usize,
+        speaker: usize,
+        global_start_ms: i64,
+        response: BatchResponse,
+    },
 }
 
 #[derive(serde::Serialize, Clone)]

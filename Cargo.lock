@@ -10766,6 +10766,7 @@ dependencies = [
  "language",
  "owhisper-client",
  "owhisper-interface",
+ "pyannote-local",
  "ractor",
  "reqwest 0.13.2",
  "serde",

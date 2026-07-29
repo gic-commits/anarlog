@@ -378,13 +378,18 @@ Stitcher → UI display (speaker labels + colors)
 - [ ] 短段合并（<1.5s 合并到相邻段）
 - [ ] 全部测试通过
 
-### Phase B: 时长调度 + SubmitManager（~2天）
+### Phase B: 时长调度 + SubmitManager + DB（~1天 ✅）
 
-- [ ] 实现 `DurationScheduler`（±20% 水线规则）
-- [ ] 实现 `SubmitManager`（队列 + 提交 + 响应匹配）
-- [ ] DB 持久化 schema + 断线恢复
-- [ ] `BatchParams` 字段贯通
-- [ ] 全部测试通过
+- [x] 实现 `DurationScheduler`（±20% 水线规则）
+- [x] 实现 `SubmitManager`（`DiarizationSubmitter`: 队列 + N=2 并发 + 指数退避重试 + drain 超时 + 响应匹配）
+- [x] DB 持久化 schema + 迁移（`diarization_jobs` / `diarization_segments` 表）
+- [x] Drizzle schema（`diarizationJobs` / `diarizationSegments`）
+- [x] Rust 行类型（`DiarizationJobRow` / `DiarizationSegmentRow`）
+- [x] `persist_batch_event` 持久化 handler
+- [x] `BatchEvent::DiarizationStarted` + `DiarizationSegmentResult` 变体
+- [x] `TranscriptionEvent::from` 映射
+- [x] `BatchParams` 字段贯通（`diarization_enabled` / `diarization_model` / `diarization_threshold`）
+- [x] 全部测试通过（listener2-core 115/115, db-app 44/44, pyannote-local 36/36）
 
 ### Phase C: UI（~1天）
 

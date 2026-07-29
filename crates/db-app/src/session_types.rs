@@ -165,3 +165,33 @@ pub struct ProgressiveBatchSegmentRow {
     pub created_at: String,
     pub updated_at: String,
 }
+
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow, serde::Serialize)]
+pub struct DiarizationJobRow {
+    pub id: String,
+    pub session_id: String,
+    pub status: String,
+    pub model: String,
+    pub threshold: f64,
+    pub total_segments: i64,
+    pub completed_segments: i64,
+    pub failed_segments: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow, serde::Serialize)]
+pub struct DiarizationSegmentRow {
+    pub id: String,
+    pub job_id: String,
+    pub segment_index: i64,
+    pub speaker: i64,
+    pub global_start_ms: i64,
+    pub status: String,
+    pub retry_count: i64,
+    pub response_json: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}

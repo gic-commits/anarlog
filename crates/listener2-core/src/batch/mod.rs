@@ -1,6 +1,7 @@
 mod accumulator;
 #[cfg(feature = "cjk")]
 mod cjk;
+mod diarization;
 mod progressive;
 mod progressive_batch;
 mod simple;
@@ -130,6 +131,16 @@ pub struct BatchParams {
     pub cjk_features: Option<CjkLayerFlags>,
     #[serde(default)]
     pub cjk_server_side: bool,
+    #[serde(default)]
+    pub diarization_enabled: bool,
+    #[serde(default)]
+    pub diarization_model: Option<String>,
+    #[serde(default = "default_diarization_threshold")]
+    pub diarization_threshold: f32,
+}
+
+fn default_diarization_threshold() -> f32 {
+    0.35
 }
 
 fn default_cjk_enabled() -> bool {
@@ -286,6 +297,10 @@ async fn run_batch_inner(
         .await;
     }
 
+    if params.diarization_enabled {
+        return diarization::run_diarization_batch(runtime, params).await;
+    }
+
     match params.provider {
         BatchProvider::Am => {
             let adapter_kind = resolve_batch_adapter_kind(&params, &listen_params);
@@ -434,6 +449,9 @@ mod tests {
             cjk_enabled: true,
             cjk_features: None,
             cjk_server_side: false,
+            diarization_enabled: false,
+            diarization_model: None,
+            diarization_threshold: 0.35,
         }
     }
 

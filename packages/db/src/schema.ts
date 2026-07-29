@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 const currentTimestamp = sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`;
 
@@ -509,4 +509,40 @@ export const progressiveBatchSegments = sqliteTable(
     index("idx_pbs_job").on(table.jobId),
     index("idx_pbs_status").on(table.status),
   ],
+);
+
+export const diarizationJobs = sqliteTable(
+  "diarization_jobs",
+  {
+    id: text("id").primaryKey().notNull(),
+    sessionId: text("session_id").notNull().default(""),
+    status: text("status").notNull().default("running"),
+    model: text("model").notNull().default(""),
+    threshold: real("threshold").notNull().default(0.35),
+    totalSegments: integer("total_segments").notNull().default(0),
+    completedSegments: integer("completed_segments").notNull().default(0),
+    failedSegments: integer("failed_segments").notNull().default(0),
+    createdAt: text("created_at").notNull().default(currentTimestamp),
+    updatedAt: text("updated_at").notNull().default(currentTimestamp),
+    completedAt: text("completed_at"),
+    error: text("error"),
+  },
+  (table) => [index("idx_dj_session").on(table.sessionId)],
+);
+
+export const diarizationSegments = sqliteTable(
+  "diarization_segments",
+  {
+    id: text("id").primaryKey().notNull(),
+    jobId: text("job_id").notNull().default(""),
+    segmentIndex: integer("segment_index").notNull().default(0),
+    speaker: integer("speaker").notNull().default(0),
+    globalStartMs: integer("global_start_ms").notNull().default(0),
+    status: text("status").notNull().default("pending"),
+    retryCount: integer("retry_count").notNull().default(0),
+    responseJson: text("response_json"),
+    createdAt: text("created_at").notNull().default(currentTimestamp),
+    updatedAt: text("updated_at").notNull().default(currentTimestamp),
+  },
+  (table) => [index("idx_ds_job").on(table.jobId)],
 );

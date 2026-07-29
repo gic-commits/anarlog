@@ -115,6 +115,11 @@ pub const APP_MIGRATION_STEPS: &[hypr_db_migrate::MigrationStep] = &[
         scope: hypr_db_migrate::MigrationScope::Plain,
         sql: include_str!("../migrations/20260726000000_progressive_batch_jobs.sql"),
     },
+    hypr_db_migrate::MigrationStep {
+        id: "20260729000000_diarization_jobs",
+        scope: hypr_db_migrate::MigrationScope::Plain,
+        sql: include_str!("../migrations/20260729000000_diarization_jobs.sql"),
+    },
 ];
 
 pub fn schema() -> hypr_db_migrate::DbSchema {
@@ -327,6 +332,8 @@ mod tests {
                 "chat_groups",
                 "chat_messages",
                 "daily_notes",
+                "diarization_jobs",
+                "diarization_segments",
                 "entity_mentions",
                 "events",
                 "humans",

@@ -1704,3 +1704,83 @@ fn test_benchmark_3min_chinese() {
         );
     }
 }
+
+// ===========================================================================
+// DiarizationManager integration test
+// ===========================================================================
+
+#[test]
+fn test_diarization_manager_pyannote() {
+    use pyannote_local::diarization::{DiarizationConfig, DiarizationManager};
+
+    const SR: u32 = 16000;
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/data");
+
+    // Build F-M-F concatenation
+    let (female, _) = load_audio_f32(&base.join("female_welcome_1.mp3"), SR);
+    let (male, _) = load_audio_f32(&base.join("male_welcome_1.mp3"), SR);
+    let silence = vec![0.0f32; (SR * 1) as usize];
+    let combined: Vec<f32> = [
+        female,
+        silence.clone(),
+        male,
+        silence,
+    ]
+    .concat();
+
+    let audio_i16: Vec<i16> = combined
+        .iter()
+        .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+        .collect();
+
+    let mut manager = DiarizationManager::new(DiarizationConfig {
+        model_path: None, // 使用内置 pyannote-local
+        ..Default::default()
+    })
+    .expect("create manager");
+
+    let result = manager.process(&audio_i16).expect("diarize");
+    println!("\n=== DiarizationManager Integration (pyannote-local) ===");
+    println!("segments: {}  speakers: {}", result.segments.len(), result.n_speakers);
+    for seg in &result.segments {
+        println!("  {:.2}-{:.2}s → Speaker_{}", seg.start, seg.end, seg.speaker);
+    }
+}
+
+#[test]
+fn test_diarization_manager_wespeaker() {
+    use pyannote_local::diarization::{DiarizationConfig, DiarizationManager};
+
+    let model_path = Path::new(MODELS_DIR).join("wespeaker_zh_cnceleb_resnet34_LM.onnx");
+    if !model_path.exists() {
+        println!("\n=== DiarizationManager Wespeaker: SKIPPED (model not found) ===");
+        return;
+    }
+
+    const SR: u32 = 16000;
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/data");
+
+    let (female, _) = load_audio_f32(&base.join("female_welcome_1.mp3"), SR);
+    let (male, _) = load_audio_f32(&base.join("male_welcome_1.mp3"), SR);
+    let silence = vec![0.0f32; (SR * 1) as usize];
+    let combined: Vec<f32> = [female, silence.clone(), male, silence].concat();
+
+    let audio_i16: Vec<i16> = combined
+        .iter()
+        .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+        .collect();
+
+    let mut manager = DiarizationManager::new(DiarizationConfig {
+        model_path: Some(model_path.to_string_lossy().to_string()),
+        ..Default::default()
+    })
+    .expect("create manager");
+
+    let result = manager.process(&audio_i16).expect("diarize");
+    println!("\n=== DiarizationManager Integration (wespeaker-cnceleb-LM) ===");
+    println!("segments: {}  speakers: {}", result.segments.len(), result.n_speakers);
+    for seg in &result.segments {
+        println!("  {:.2}-{:.2}s → Speaker_{}", seg.start, seg.end, seg.speaker);
+    }
+    assert!(result.n_speakers >= 1, "should find at least 1 speaker");
+}
