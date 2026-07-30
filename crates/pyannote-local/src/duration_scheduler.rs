@@ -3,8 +3,8 @@ use crate::diarization::SpeakerSegment;
 #[derive(Debug, Clone)]
 pub struct DurationSchedulerConfig {
     pub max_duration_ms: u32,
-    pub watermark_low: f64,   // 0.8
-    pub watermark_high: f64,  // 1.2
+    pub watermark_low: f64,  // 0.8
+    pub watermark_high: f64, // 1.2
 }
 
 impl Default for DurationSchedulerConfig {
@@ -176,8 +176,14 @@ mod tests {
         };
         // 2 × 13s = 26s = 87% (>= 80%)
         let mut sched = DurationScheduler::new(config);
-        assert_eq!(sched.add_segment(make_seg(0.0, 13.0, 0)), SubmitDecision::Wait);
-        assert_eq!(sched.add_segment(make_seg(13.0, 26.0, 0)), SubmitDecision::Submit);
+        assert_eq!(
+            sched.add_segment(make_seg(0.0, 13.0, 0)),
+            SubmitDecision::Wait
+        );
+        assert_eq!(
+            sched.add_segment(make_seg(13.0, 26.0, 0)),
+            SubmitDecision::Submit
+        );
     }
 
     #[test]

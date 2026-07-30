@@ -166,12 +166,28 @@ export const SETTING_DEFINITIONS = {
   cjk_features: {
     type: "string",
     path: ["ai", "cjk_features"],
-    default: '{"punctuation":true,"jieba":true,"acoustic_merge":true}' as string,
+    default:
+      '{"punctuation":true,"jieba":true,"acoustic_merge":true}' as string,
   },
   cjk_server_side: {
     type: "boolean",
     path: ["ai", "cjk_server_side"],
     default: false as boolean,
+  },
+  diarization_enabled: {
+    type: "boolean",
+    path: ["ai", "diarization_enabled"],
+    default: false as boolean,
+  },
+  diarization_model: {
+    type: "string",
+    path: ["ai", "diarization_model"],
+    default: "wespeaker_zh_cnceleb_resnet34_LM.onnx" as string,
+  },
+  diarization_threshold: {
+    type: "number",
+    path: ["ai", "diarization_threshold"],
+    default: 0.35 as number,
   },
   timezone: {
     type: "string",

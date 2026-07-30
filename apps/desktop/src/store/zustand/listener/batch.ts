@@ -158,12 +158,10 @@ export const createBatchSlice = <T extends BatchState>(
 
       const { [sessionId]: _, ...rest } = state.batch;
       const { [sessionId]: __, ...restPreview } = state.batchPreview;
-      const { [sessionId]: ___, ...restSegments } = state.batchSegments;
       return {
         ...state,
         batch: rest,
         batchPreview: restPreview,
-        batchSegments: restSegments,
       };
     });
 

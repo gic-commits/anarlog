@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::clustering;
-use crate::embedding_providers::{create_provider_from_path, EmbeddingProvider};
+use crate::embedding_providers::{EmbeddingProvider, create_provider_from_path};
 use crate::segmentation::{Segment, Segmenter};
 
 #[derive(Debug, Clone)]
@@ -56,7 +56,9 @@ impl DiarizationManager {
                 if path.exists() {
                     create_provider_from_path(path)?
                 } else {
-                    eprintln!("[pyannote-local] model not found: {path:?}, falling back to pyannote-local");
+                    eprintln!(
+                        "[pyannote-local] model not found: {path:?}, falling back to pyannote-local"
+                    );
                     Box::new(crate::embedding::PyannoteEmbeddingProvider::new())
                 }
             }

@@ -1313,7 +1313,13 @@ fn test_campplus_korean() {
         })
         .collect();
 
-    print_wespeaker_comparison("campplus-zh-en", "korean_1 (30s)", &cp_embs, &hy_embs, &segments);
+    print_wespeaker_comparison(
+        "campplus-zh-en",
+        "korean_1 (30s)",
+        &cp_embs,
+        &hy_embs,
+        &segments,
+    );
 }
 
 // ===========================================================================
@@ -1376,7 +1382,13 @@ fn test_campplus_200k_korean() {
         })
         .collect();
 
-    print_wespeaker_comparison("campplus-200k", "korean_1 (30s)", &cp_embs, &hy_embs, &segments);
+    print_wespeaker_comparison(
+        "campplus-200k",
+        "korean_1 (30s)",
+        &cp_embs,
+        &hy_embs,
+        &segments,
+    );
 }
 
 // ===========================================================================
@@ -1414,22 +1426,26 @@ fn load_wav_i16(path: &Path) -> (Vec<i16>, u32) {
     let source = rodio::Decoder::try_from(file).unwrap();
     let sr: u32 = source.sample_rate().into();
     let f32s: Vec<f32> = source.collect();
-    let i16s: Vec<i16> = f32s.iter().map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).collect();
+    let i16s: Vec<i16> = f32s
+        .iter()
+        .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+        .collect();
     (i16s, sr)
 }
 
-fn embed_with_model(seg: &Segment, session: &mut Session, inp: &str, out: &str) -> Option<Vec<f32>> {
+fn embed_with_model(
+    seg: &Segment,
+    session: &mut Session,
+    inp: &str,
+    out: &str,
+) -> Option<Vec<f32>> {
     if seg.samples.len() < 16000 {
         return None;
     }
     embed_ws_seg(seg, session, inp, out)
 }
 
-fn run_cn_speaker_test(
-    model_path: &Path,
-    model_label: &str,
-    model_dim: usize,
-) {
+fn run_cn_speaker_test(model_path: &Path, model_label: &str, model_dim: usize) {
     let sond = Path::new(SOND_DIR);
     let spk_files = ["spk1.wav", "spk2.wav", "spk3.wav", "spk4.wav"];
     let mut spk_embs: Vec<(&str, Option<Vec<f32>>)> = Vec::new();
@@ -1448,12 +1464,16 @@ fn run_cn_speaker_test(
 
     for &fname in &spk_files {
         let path = sond.join(fname);
-        if !path.exists() { continue; }
+        if !path.exists() {
+            continue;
+        }
         let (audio_i16, sr) = load_wav_i16(&path);
         let segments = segmenter.process(&audio_i16, sr).unwrap();
         let mut best_emb: Option<Vec<f32>> = None;
         for seg in &segments {
-            if seg.samples.len() < 24000 { continue; }
+            if seg.samples.len() < 24000 {
+                continue;
+            }
             if let Some(emb) = embed_with_model(seg, &mut session, inp, out) {
                 if emb.len() == model_dim {
                     best_emb = Some(emb);
@@ -1465,7 +1485,8 @@ fn run_cn_speaker_test(
     }
 
     println!("\n=== Chinese Speaker Discrimination: {model_label} (dim={model_dim}) ===");
-    let valid: Vec<(&&str, &[f32])> = spk_embs.iter()
+    let valid: Vec<(&&str, &[f32])> = spk_embs
+        .iter()
         .filter_map(|(n, e)| e.as_deref().map(|e| (n, e)))
         .collect();
     println!("valid speakers: {}/{}", valid.len(), spk_files.len());
@@ -1474,7 +1495,9 @@ fn run_cn_speaker_test(
         println!("  {name}: dim={} mean={:.4}", emb.len(), mean);
     }
 
-    if valid.len() < 2 { return; }
+    if valid.len() < 2 {
+        return;
+    }
 
     let n = valid.len();
     let mut dist = vec![0.0f32; n * n];
@@ -1488,7 +1511,9 @@ fn run_cn_speaker_test(
 
     println!("\nCross-speaker distance matrix:"); // Print like a table later
     print!("          ");
-    for i in 0..n { print!("  {:<8}", valid[i].0); }
+    for i in 0..n {
+        print!("  {:<8}", valid[i].0);
+    }
     println!();
     for i in 0..n {
         print!("{:<8} ", valid[i].0);
@@ -1502,7 +1527,12 @@ fn run_cn_speaker_test(
     let avg_dist = {
         let mut s = 0.0f32;
         let mut c = 0usize;
-        for i in 0..n { for j in i + 1..n { s += dist[i * n + j]; c += 1; } }
+        for i in 0..n {
+            for j in i + 1..n {
+                s += dist[i * n + j];
+                c += 1;
+            }
+        }
         s / c as f32
     };
     println!("\n{model_label}: {distinct} speaker pairs, avg cross={avg_dist:.4}");
@@ -1520,9 +1550,21 @@ fn run_cn_speaker_test(
 fn test_chinese_speaker_all_models() {
     let models: Vec<(&str, &str, usize)> = vec![
         ("campplus_cn_en_common_200k.onnx", "campplus-200k", 192),
-        ("wespeaker-voxceleb-resnet34-LM.onnx", "wespeaker-voxceleb", 256),
-        ("wespeaker_zh_cnceleb_resnet34.onnx", "wespeaker-cnceleb", 256),
-        ("wespeaker_zh_cnceleb_resnet34_LM.onnx", "wespeaker-cnceleb-LM", 256),
+        (
+            "wespeaker-voxceleb-resnet34-LM.onnx",
+            "wespeaker-voxceleb",
+            256,
+        ),
+        (
+            "wespeaker_zh_cnceleb_resnet34.onnx",
+            "wespeaker-cnceleb",
+            256,
+        ),
+        (
+            "wespeaker_zh_cnceleb_resnet34_LM.onnx",
+            "wespeaker-cnceleb-LM",
+            256,
+        ),
     ];
     let base = Path::new(MODELS_DIR);
 
@@ -1560,14 +1602,24 @@ fn test_chinese_record_diarization() {
     // Test each model
     let models: Vec<(&str, &str, usize)> = vec![
         ("campplus_cn_en_common_200k.onnx", "campplus-200k", 192),
-        ("wespeaker-voxceleb-resnet34-LM.onnx", "wespeaker-voxceleb", 256),
-        ("wespeaker_zh_cnceleb_resnet34_LM.onnx", "wespeaker-cnceleb-LM", 256),
+        (
+            "wespeaker-voxceleb-resnet34-LM.onnx",
+            "wespeaker-voxceleb",
+            256,
+        ),
+        (
+            "wespeaker_zh_cnceleb_resnet34_LM.onnx",
+            "wespeaker-cnceleb-LM",
+            256,
+        ),
     ];
 
     let base = Path::new(MODELS_DIR);
     for (fname, label, _dim) in &models {
         let model_path = base.join(fname);
-        if !model_path.exists() { continue; }
+        if !model_path.exists() {
+            continue;
+        }
 
         let mut session = hypr_onnx::load_model_from_path(&model_path).expect("load model");
         let (inp, out) = NAME_SETS
@@ -1587,21 +1639,31 @@ fn test_chinese_record_diarization() {
         }
         let embed_time = t0.elapsed();
 
-        let valid: Vec<(usize, &[f32])> = embs.iter()
+        let valid: Vec<(usize, &[f32])> = embs
+            .iter()
             .enumerate()
             .filter_map(|(i, e)| e.as_deref().map(|e| (i, e)))
             .collect();
-        println!("\n  {label}: {}/{} valid embs ({:.3}s)",
-            valid.len(), segments.len(), embed_time.as_secs_f64());
+        println!(
+            "\n  {label}: {}/{} valid embs ({:.3}s)",
+            valid.len(),
+            segments.len(),
+            embed_time.as_secs_f64()
+        );
 
-        if valid.len() < 3 { continue; }
+        if valid.len() < 3 {
+            continue;
+        }
 
         let n = valid.len();
         let mut dist = vec![0.0f32; n * n];
-        for i in 0..n { for j in i + 1..n {
-            let d = cosine_distance(valid[i].1, valid[j].1);
-            dist[i * n + j] = d; dist[j * n + i] = d;
-        }}
+        for i in 0..n {
+            for j in i + 1..n {
+                let d = cosine_distance(valid[i].1, valid[j].1);
+                dist[i * n + j] = d;
+                dist[j * n + i] = d;
+            }
+        }
 
         println!("    Threshold sweep:");
         for &t in &[0.02, 0.08, 0.20, 0.35, 0.45, 0.55] {
@@ -1629,7 +1691,10 @@ fn test_benchmark_3min_chinese() {
     let (audio_i16, sr) = load_wav_i16(&path);
     let duration_s = audio_i16.len() as f64 / sr as f64;
     println!("\n=== 3-Minute Benchmark ===");
-    println!("audio duration: {duration_s:.1}s ({:.1}min)", duration_s / 60.0);
+    println!(
+        "audio duration: {duration_s:.1}s ({:.1}min)",
+        duration_s / 60.0
+    );
     println!("samples: {}", audio_i16.len());
 
     // segmentation timing (shared)
@@ -1637,23 +1702,43 @@ fn test_benchmark_3min_chinese() {
     let mut segmenter = Segmenter::new(SR).unwrap();
     let segments = segmenter.process(&audio_i16, sr).unwrap();
     let seg_time = t_seg.elapsed();
-    println!("segmentation: {:.3}s ({} segments)", seg_time.as_secs_f64(), segments.len());
+    println!(
+        "segmentation: {:.3}s ({} segments)",
+        seg_time.as_secs_f64(),
+        segments.len()
+    );
 
     let models: Vec<(&str, &str, usize)> = vec![
         ("campplus_cn_en_common_200k.onnx", "campplus-200k", 192),
-        ("wespeaker-voxceleb-resnet34-LM.onnx", "wespeaker-voxceleb", 256),
-        ("wespeaker_zh_cnceleb_resnet34.onnx", "wespeaker-cnceleb", 256),
-        ("wespeaker_zh_cnceleb_resnet34_LM.onnx", "wespeaker-cnceleb-LM", 256),
+        (
+            "wespeaker-voxceleb-resnet34-LM.onnx",
+            "wespeaker-voxceleb",
+            256,
+        ),
+        (
+            "wespeaker_zh_cnceleb_resnet34.onnx",
+            "wespeaker-cnceleb",
+            256,
+        ),
+        (
+            "wespeaker_zh_cnceleb_resnet34_LM.onnx",
+            "wespeaker-cnceleb-LM",
+            256,
+        ),
     ];
 
     let base = Path::new(MODELS_DIR);
-    println!("\n{:<20} {:>10} {:>10} {:>10} {:>12} {:>12} {:>15}",
-        "Model", "Dim", "Segs", "Emb/s", "Embed(s)", "Cluster(s)", "Total(s)");
+    println!(
+        "\n{:<20} {:>10} {:>10} {:>10} {:>12} {:>12} {:>15}",
+        "Model", "Dim", "Segs", "Emb/s", "Embed(s)", "Cluster(s)", "Total(s)"
+    );
     println!("{}", "-".repeat(85));
 
     for (fname, label, dim) in &models {
         let model_path = base.join(fname);
-        if !model_path.exists() { continue; }
+        if !model_path.exists() {
+            continue;
+        }
 
         let mut session = hypr_onnx::load_model_from_path(&model_path).expect("load model");
         let (inp, out) = NAME_SETS
@@ -1673,7 +1758,8 @@ fn test_benchmark_3min_chinese() {
         }
         let embed_time = t0.elapsed();
 
-        let valid: Vec<(usize, &[f32])> = embs.iter()
+        let valid: Vec<(usize, &[f32])> = embs
+            .iter()
             .enumerate()
             .filter_map(|(i, e)| e.as_deref().map(|e| (i, e)))
             .collect();
@@ -1682,10 +1768,13 @@ fn test_benchmark_3min_chinese() {
         if valid.len() >= 2 {
             let n = valid.len();
             let mut dist = vec![0.0f32; n * n];
-            for i in 0..n { for j in i + 1..n {
-                let d = cosine_distance(valid[i].1, valid[j].1);
-                dist[i * n + j] = d; dist[j * n + i] = d;
-            }}
+            for i in 0..n {
+                for j in i + 1..n {
+                    let d = cosine_distance(valid[i].1, valid[j].1);
+                    dist[i * n + j] = d;
+                    dist[j * n + i] = d;
+                }
+            }
             let _cids = agglomerative_cluster(&dist, n, 0.35);
         }
         let cluster_time = t1.elapsed();
@@ -1693,9 +1782,12 @@ fn test_benchmark_3min_chinese() {
         let total = seg_time + embed_time + cluster_time;
         let emb_per_s = if embed_time.as_secs_f64() > 0.0 {
             segments.len() as f64 / embed_time.as_secs_f64()
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
-        println!("{label:<20} {dim:>4}dim {n_segs:>4} {emb_per_s:>8.1}/s {embed_time:>8.3}s {cluster_time:>8.3}s {total:>9.3}s",
+        println!(
+            "{label:<20} {dim:>4}dim {n_segs:>4} {emb_per_s:>8.1}/s {embed_time:>8.3}s {cluster_time:>8.3}s {total:>9.3}s",
             n_segs = segments.len(),
             emb_per_s = emb_per_s,
             embed_time = embed_time.as_secs_f64(),
@@ -1720,13 +1812,7 @@ fn test_diarization_manager_pyannote() {
     let (female, _) = load_audio_f32(&base.join("female_welcome_1.mp3"), SR);
     let (male, _) = load_audio_f32(&base.join("male_welcome_1.mp3"), SR);
     let silence = vec![0.0f32; (SR * 1) as usize];
-    let combined: Vec<f32> = [
-        female,
-        silence.clone(),
-        male,
-        silence,
-    ]
-    .concat();
+    let combined: Vec<f32> = [female, silence.clone(), male, silence].concat();
 
     let audio_i16: Vec<i16> = combined
         .iter()
@@ -1741,9 +1827,16 @@ fn test_diarization_manager_pyannote() {
 
     let result = manager.process(&audio_i16).expect("diarize");
     println!("\n=== DiarizationManager Integration (pyannote-local) ===");
-    println!("segments: {}  speakers: {}", result.segments.len(), result.n_speakers);
+    println!(
+        "segments: {}  speakers: {}",
+        result.segments.len(),
+        result.n_speakers
+    );
     for seg in &result.segments {
-        println!("  {:.2}-{:.2}s → Speaker_{}", seg.start, seg.end, seg.speaker);
+        println!(
+            "  {:.2}-{:.2}s → Speaker_{}",
+            seg.start, seg.end, seg.speaker
+        );
     }
 }
 
@@ -1778,9 +1871,16 @@ fn test_diarization_manager_wespeaker() {
 
     let result = manager.process(&audio_i16).expect("diarize");
     println!("\n=== DiarizationManager Integration (wespeaker-cnceleb-LM) ===");
-    println!("segments: {}  speakers: {}", result.segments.len(), result.n_speakers);
+    println!(
+        "segments: {}  speakers: {}",
+        result.segments.len(),
+        result.n_speakers
+    );
     for seg in &result.segments {
-        println!("  {:.2}-{:.2}s → Speaker_{}", seg.start, seg.end, seg.speaker);
+        println!(
+            "  {:.2}-{:.2}s → Speaker_{}",
+            seg.start, seg.end, seg.speaker
+        );
     }
     assert!(result.n_speakers >= 1, "should find at least 1 speaker");
 }

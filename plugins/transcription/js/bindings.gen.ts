@@ -243,7 +243,7 @@ export type ChannelProfile = "DirectMic" | "RemoteParty" | "MixedCapture"
 /**
  * Per-layer feature flags for CJK post-processing.
  */
-export type CjkLayerFlags = { punctuation?: boolean; jieba?: boolean; acoustic_verify?: boolean; oov_merge?: boolean }
+export type CjkLayerFlags = { punctuation?: boolean; jieba?: boolean; acoustic_merge?: boolean }
 export type DegradedError = { type: "authentication_failed"; provider: string } | { type: "upstream_unavailable"; message: string } | { type: "connection_timeout" } | { type: "stream_error"; message: string }
 export type DenoiseEvent = { type: "denoiseStarted"; session_id: string } | { type: "denoiseProgress"; session_id: string; percentage: number } | { type: "denoiseCompleted"; session_id: string } | { type: "denoiseFailed"; session_id: string; error: string }
 export type DenoiseParams = { session_id: string; input_path: string; output_path: string }
@@ -274,7 +274,7 @@ export type Token = { text: string; start_time: number; end_time: number; speake
 export type TranscriptionEvent = { type: "started"; session_id: string } | { type: "progress"; session_id: string; event: BatchStreamEvent } | { type: "completed"; session_id: string; response: BatchResponse; mode: BatchRunMode } | { type: "segmentResult"; session_id: string; segment_index: number; response: BatchResponse } | { type: "stopped"; session_id: string } | { type: "failed"; session_id: string; code: BatchErrorCode; error: string }
 export type TranscriptionMode = "live" | "batch" | "progressiveBatch"
 export type TranscriptionOutput = { session_id: string; mode: BatchRunMode; response: BatchResponse }
-export type TranscriptionParams = { session_id: string; provider: BatchProvider; file_path: string; model?: string | null; base_url: string; api_key: string; languages?: string[]; keywords?: string[]; num_speakers?: number | null; min_speakers?: number | null; max_speakers?: number | null; progressive_batch?: boolean; segment_duration_ms?: number | null; overlap_ms?: number | null; max_concurrency?: number | null; cjk_enabled?: boolean; cjk_features?: CjkLayerFlags | null; cjk_server_side?: boolean }
+export type TranscriptionParams = { session_id: string; provider: BatchProvider; file_path: string; model?: string | null; base_url: string; api_key: string; languages?: string[]; keywords?: string[]; num_speakers?: number | null; min_speakers?: number | null; max_speakers?: number | null; progressive_batch?: boolean; segment_duration_ms?: number | null; overlap_ms?: number | null; max_concurrency?: number | null; cjk_enabled?: boolean; cjk_features?: CjkLayerFlags | null; cjk_server_side?: boolean; diarization_enabled?: boolean; diarization_model?: string | null; diarization_threshold?: number }
 export type VttWord = { text: string; start_ms: number; end_ms: number; speaker: string | null }
 /**
  * Whether a finalized word is stable or awaiting correction.

@@ -16,6 +16,7 @@ import {
 } from "@hypr/plugin-local-stt";
 import { commands as openerCommands } from "@hypr/plugin-opener2";
 import type { AIProviderStorage } from "@hypr/store";
+import { Checkbox } from "@hypr/ui/components/ui/checkbox";
 import { Input } from "@hypr/ui/components/ui/input";
 import {
   Select,
@@ -24,7 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@hypr/ui/components/ui/select";
-import { Checkbox } from "@hypr/ui/components/ui/checkbox";
 import { Switch } from "@hypr/ui/components/ui/switch";
 import { sonnerToast } from "@hypr/ui/components/ui/toast";
 import {
@@ -366,6 +366,8 @@ export function SelectProviderAndModel() {
       {visibleProvider === "openai" && isConfigured && <SttModeSection />}
 
       {isConfigured && <CjkToggleSection />}
+
+      {isConfigured && <DiarizationSection />}
     </div>
   );
 }
@@ -916,11 +918,8 @@ function SttModeSection() {
       <span className="text-muted-foreground text-xs">
         <Trans>Mode</Trans>
       </span>
-      <Select
-        value={mode}
-        onValueChange={(v) => setSettings({ stt_mode: v })}
-      >
-        <SelectTrigger className="bg-card h-7 text-xs shadow-none w-28">
+      <Select value={mode} onValueChange={(v) => setSettings({ stt_mode: v })}>
+        <SelectTrigger className="bg-card h-7 w-28 text-xs shadow-none">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -943,7 +942,7 @@ function SttModeSection() {
         value={String(segmentDuration)}
         onValueChange={(v) => setSettings({ stt_segment_duration: Number(v) })}
       >
-        <SelectTrigger className="bg-card h-7 text-xs shadow-none w-20">
+        <SelectTrigger className="bg-card h-7 w-20 text-xs shadow-none">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -955,7 +954,7 @@ function SttModeSection() {
         </SelectContent>
       </Select>
 
-      <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+      <label className="text-muted-foreground flex cursor-pointer items-center gap-1.5 text-xs">
         <Switch
           checked={serverSide}
           onCheckedChange={(v) => setSettings({ cjk_server_side: v })}
@@ -976,9 +975,7 @@ const CJK_LAYER_LABELS: {
   { key: "acoustic_merge", label: "Acoustic merge" },
 ];
 
-function parseCjkFeatures(
-  raw: string | undefined,
-): Record<string, boolean> {
+function parseCjkFeatures(raw: string | undefined): Record<string, boolean> {
   if (!raw) {
     return {};
   }
@@ -1037,11 +1034,117 @@ function CjkToggleSection() {
               <Checkbox
                 checked={features[key] ?? true}
                 onCheckedChange={(v) =>
-                  setFeature(key, v === "indeterminate" ? true : !!v)}
+                  setFeature(key, v === "indeterminate" ? true : !!v)
+                }
               />
               <span className="text-muted-foreground">{label}</span>
             </label>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiarizationSection() {
+  const { diarization_enabled, diarization_model, diarization_threshold } =
+    useConfigValues([
+      "diarization_enabled",
+      "diarization_model",
+      "diarization_threshold",
+    ] as const) as {
+      diarization_enabled: boolean | undefined;
+      diarization_model: string | undefined;
+      diarization_threshold: number | undefined;
+    };
+  const setSettings = useSetSettingValues();
+
+  const enabled = diarization_enabled ?? false;
+  const model = diarization_model ?? "wespeaker_zh_cnceleb_resnet34_LM.onnx";
+  const threshold = diarization_threshold ?? 0.35;
+
+  const MODELS: { value: string; label: string }[] = [
+    {
+      value: "wespeaker_zh_cnceleb_resnet34_LM.onnx",
+      label: "CN-Celeb LM (default)",
+    },
+    {
+      value: "wespeaker_zh_cnceleb_resnet34.onnx",
+      label: "CN-Celeb",
+    },
+    {
+      value: "wespeaker-voxceleb-resnet34-LM.onnx",
+      label: "VoxCeleb",
+    },
+    {
+      value: "campplus_cn_en_common_200k.onnx",
+      label: "Cam++ 200k (fast)",
+    },
+  ];
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h4 className="text-sm font-medium">
+            <Trans>Speaker diarization</Trans>
+          </h4>
+          <p className="text-muted-foreground text-xs">
+            <Trans>
+              Identify who spoke when using speaker embedding models
+            </Trans>
+          </p>
+        </div>
+        <Switch
+          checked={enabled}
+          onCheckedChange={(v) => setSettings({ diarization_enabled: v })}
+        />
+      </div>
+
+      {enabled && (
+        <div className="ml-1 flex flex-col gap-3 pt-1">
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground w-16 shrink-0 text-xs">
+              <Trans>Model</Trans>
+            </span>
+            <Select
+              value={model}
+              onValueChange={(v) => setSettings({ diarization_model: v })}
+            >
+              <SelectTrigger className="bg-card h-7 flex-1 text-xs shadow-none">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MODELS.map((m) => (
+                  <SelectItem key={m.value} value={m.value}>
+                    {m.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground w-16 shrink-0 text-xs">
+              <Trans>Threshold</Trans>
+            </span>
+            <div className="flex flex-1 items-center gap-2">
+              <input
+                type="range"
+                min={0.1}
+                max={0.9}
+                step={0.05}
+                value={threshold}
+                onChange={(e) =>
+                  setSettings({ diarization_threshold: Number(e.target.value) })
+                }
+                className="bg-muted accent-foreground [&::-webkit-slider-thumb]:bg-foreground h-1 w-full cursor-pointer appearance-none rounded-full [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full"
+              />
+              <span className="text-muted-foreground w-8 text-right text-xs tabular-nums">
+                {threshold.toFixed(2)}
+              </span>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -40,11 +40,7 @@ fn compute_fbank_cmn(samples_f32: &[f32]) -> Option<Array2<f32>> {
     Some(features)
 }
 
-fn probe_model(
-    input_name: &str,
-    output_name: &str,
-    session: &mut Session,
-) -> bool {
+fn probe_model(input_name: &str, output_name: &str, session: &mut Session) -> bool {
     let test_f32 = vec![0.0f32; 16000];
     if let Some(features) = compute_fbank_cmn(&test_f32) {
         let feats: Array3<f32> = features.insert_axis(Axis(0));
@@ -101,10 +97,7 @@ pub struct FbankEmbedding {
 }
 
 impl FbankEmbedding {
-    pub fn new(
-        model_path: &std::path::Path,
-        model_name: String,
-    ) -> Result<Self, crate::Error> {
+    pub fn new(model_path: &std::path::Path, model_name: String) -> Result<Self, crate::Error> {
         let mut session = hypr_onnx::load_model_from_path(model_path)?;
 
         let (inp, out) = NAME_SETS
@@ -117,8 +110,8 @@ impl FbankEmbedding {
             });
 
         // Determine dim by running a dummy pass
-        let test_emb = embed_fbank_cmn(&vec![0.0f32; 16000], &mut session, inp, out)
-            .unwrap_or_default();
+        let test_emb =
+            embed_fbank_cmn(&vec![0.0f32; 16000], &mut session, inp, out).unwrap_or_default();
         let dim = test_emb.len();
 
         Ok(Self {
@@ -133,7 +126,12 @@ impl FbankEmbedding {
 
 impl EmbeddingProvider for FbankEmbedding {
     fn compute(&mut self, samples_f32: &[f32]) -> Result<Option<Vec<f32>>, crate::Error> {
-        Ok(embed_fbank_cmn(samples_f32, &mut self.session, self.input_name, self.output_name))
+        Ok(embed_fbank_cmn(
+            samples_f32,
+            &mut self.session,
+            self.input_name,
+            self.output_name,
+        ))
     }
 
     fn embedding_dim(&self) -> usize {
@@ -154,5 +152,6 @@ pub fn create_provider_from_path(
         .and_then(|s| s.to_str())
         .unwrap_or("unknown");
 
-    FbankEmbedding::new(model_path, name.to_string()).map(|e| Box::new(e) as Box<dyn EmbeddingProvider>)
+    FbankEmbedding::new(model_path, name.to_string())
+        .map(|e| Box::new(e) as Box<dyn EmbeddingProvider>)
 }

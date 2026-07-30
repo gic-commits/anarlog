@@ -103,20 +103,14 @@ mod tests {
 
     #[test]
     fn test_two_close_segments() {
-        let c = cluster_embeddings(
-            &[vec![1.0, 0.0], vec![0.99, 0.01]],
-            0.35,
-        );
+        let c = cluster_embeddings(&[vec![1.0, 0.0], vec![0.99, 0.01]], 0.35);
         assert_eq!(c.len(), 2);
         assert_eq!(c[0], c[1]); // same cluster
     }
 
     #[test]
     fn test_two_far_segments() {
-        let c = cluster_embeddings(
-            &[vec![1.0, 0.0], vec![-1.0, 0.0]],
-            0.35,
-        );
+        let c = cluster_embeddings(&[vec![1.0, 0.0], vec![-1.0, 0.0]], 0.35);
         assert_eq!(c.len(), 2);
         assert_ne!(c[0], c[1]); // different clusters
     }

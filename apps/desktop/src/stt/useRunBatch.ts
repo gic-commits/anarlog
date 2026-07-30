@@ -183,6 +183,9 @@ export const useRunBatch = (sessionId: string) => {
   const cjkPostProcess = useConfigValue("cjk_post_process");
   const cjkFeaturesRaw = useConfigValue("cjk_features");
   const cjkServerSide = useConfigValue("cjk_server_side");
+  const diarizationEnabled = useConfigValue("diarization_enabled");
+  const diarizationModel = useConfigValue("diarization_model");
+  const diarizationThreshold = useConfigValue("diarization_threshold");
   const audioRetention = normalizeAudioRetention(
     useConfigValue("audio_retention"),
   );
@@ -416,6 +419,13 @@ export const useRunBatch = (sessionId: string) => {
           }
         })(),
         cjk_server_side: cjkServerSide ?? false,
+        diarization_enabled:
+          options?.forceProgressive === false
+            ? false
+            : (diarizationEnabled ?? false),
+        diarization_model:
+          diarizationEnabled && diarizationModel ? diarizationModel : undefined,
+        diarization_threshold: diarizationThreshold ?? 0.35,
       };
 
       try {

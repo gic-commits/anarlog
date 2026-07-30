@@ -28,21 +28,38 @@ export function Transcript({
     void stopTranscription(sessionId);
   }, [sessionId, stopTranscription]);
 
+  const runningBatch = screen.kind === "running_batch" ? screen : null;
+  const hasSegments =
+    runningBatch && Object.keys(runningBatch.segmentResponses).length > 0;
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
-      {screen.kind === "running_batch" && (
+      {runningBatch && hasSegments && (
         <>
-          <TranscriptEmptyState
-            isBatching
-            percentage={screen.percentage}
-            phase={screen.phase}
-            segmentCount={Object.keys(screen.segmentResponses).length}
-            onStopTranscription={
-              screen.phase === "importing" ? undefined : handleStopTranscription
+          <CompactProgress
+            percentage={runningBatch.percentage}
+            phase={runningBatch.phase}
+            segmentCount={Object.keys(runningBatch.segmentResponses).length}
+            onStop={
+              runningBatch.phase === "importing"
+                ? undefined
+                : handleStopTranscription
             }
           />
-          <SegmentPreview segmentResponses={screen.segmentResponses} />
+          <SegmentPreview segmentResponses={runningBatch.segmentResponses} />
         </>
+      )}
+      {runningBatch && !hasSegments && (
+        <TranscriptEmptyState
+          isBatching
+          percentage={runningBatch.percentage}
+          phase={runningBatch.phase}
+          onStopTranscription={
+            runningBatch.phase === "importing"
+              ? undefined
+              : handleStopTranscription
+          }
+        />
       )}
       {screen.kind === "batch_fallback" && (
         <BatchState
@@ -78,6 +95,42 @@ export function Transcript({
   );
 }
 
+function CompactProgress({
+  percentage,
+  phase,
+  segmentCount,
+  onStop,
+}: {
+  percentage?: number;
+  phase?: "importing" | "transcribing";
+  segmentCount: number;
+  onStop?: () => void;
+}) {
+  const pct =
+    typeof percentage === "number" ? Math.round(percentage * 100) : null;
+
+  return (
+    <div className="flex items-center gap-3 border-b px-4 py-2">
+      <Spinner size={14} />
+      <div className="text-muted-foreground flex-1 text-xs">
+        {phase === "importing"
+          ? "Importing audio..."
+          : `Transcribing... ${pct !== null ? `${pct}%` : ""}`}
+        {" · "}
+        {segmentCount} segment{segmentCount > 1 ? "s" : ""} done
+      </div>
+      {onStop && (
+        <button
+          onClick={onStop}
+          className="text-muted-foreground hover:text-foreground text-xs underline"
+        >
+          Stop
+        </button>
+      )}
+    </div>
+  );
+}
+
 function SegmentPreview({
   segmentResponses,
 }: {
@@ -103,20 +156,12 @@ function SegmentPreview({
   }
 
   return (
-    <div className="scrollbar-thin flex-1 space-y-3 overflow-y-auto px-4 pb-4">
-      {entries.map(({ index, transcript }, i) => (
+    <div className="scrollbar-thin flex-1 space-y-4 overflow-y-auto px-4 pt-3 pb-4">
+      {entries.map(({ index, transcript }) => (
         <div key={index}>
-          {i > 0 && (
-            <div className="border-t-border mx-2 my-3 border-t border-dashed" />
-          )}
-          <div className="group relative">
-            <div className="text-muted-foreground mb-1 text-xs font-medium">
-              Segment {index + 1}
-            </div>
-            <p className="text-foreground text-sm leading-relaxed whitespace-pre-wrap">
-              {transcript || "(no speech detected)"}
-            </p>
-          </div>
+          <p className="text-foreground text-sm leading-relaxed whitespace-pre-wrap">
+            {transcript || "(no speech detected)"}
+          </p>
         </div>
       ))}
     </div>

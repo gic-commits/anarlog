@@ -8,7 +8,7 @@ use hypr_transcribe_core::TARGET_SAMPLE_RATE;
 use owhisper_interface::batch;
 
 use hypr_pyannote_local::diarization::{DiarizationConfig, DiarizationManager};
-use hypr_pyannote_local::duration_scheduler::{DurationSchedulerConfig, schedule_segments};
+use hypr_pyannote_local::min_cut_merge::{MinCutMergeConfig, min_cut_merge_speaker};
 
 use submit::{DiarizationSubmitter, SpeakerSegmentData};
 
@@ -31,11 +31,12 @@ pub(super) async fn run_diarization_batch(
 
     let speaker_segments = run_diarization(&audio, sample_rate, &params)?;
 
-    let groups = schedule_segments(
+    let groups = min_cut_merge_speaker(
         speaker_segments,
-        DurationSchedulerConfig {
+        &audio,
+        sample_rate,
+        MinCutMergeConfig {
             max_duration_ms: params.segment_duration_ms.unwrap_or(30000),
-            ..Default::default()
         },
     );
 

@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use hypr_audio_utils::Source;
-use hypr_pyannote_local::diarization::SpeakerSegment;
-use hypr_pyannote_local::duration_scheduler::{DurationSchedulerConfig, schedule_segments};
+use hypr_pyannote_local::min_cut_merge::{MinCutMergeConfig, min_cut_merge};
 use hypr_pyannote_local::segmentation::Segmenter;
 
 use crate::batch::{BatchParams, BatchRunMode, BatchRunOutput};
@@ -105,7 +104,18 @@ pub async fn run_progressive_batch_from_file(
             message: format!("VAD failed: {e}"),
         })?;
 
-    if vad_segments.is_empty() {
+    let vad_count = vad_segments.len();
+
+    let groups = min_cut_merge(
+        vad_segments,
+        &pcm_i16,
+        TARGET_SAMPLE_RATE,
+        MinCutMergeConfig {
+            max_duration_ms: segment_duration_ms,
+        },
+    );
+
+    if groups.is_empty() {
         return submit_file_direct(
             runtime,
             std::path::Path::new(&file_path),
@@ -115,29 +125,11 @@ pub async fn run_progressive_batch_from_file(
         .await;
     }
 
-    let speaker_segments: Vec<SpeakerSegment> = vad_segments
-        .iter()
-        .map(|s| SpeakerSegment {
-            start: s.start,
-            end: s.end,
-            speaker: 0,
-            embedding_valid: false,
-        })
-        .collect();
-
-    let groups = schedule_segments(
-        speaker_segments,
-        DurationSchedulerConfig {
-            max_duration_ms: segment_duration_ms,
-            ..Default::default()
-        },
-    );
-
     let total = groups.len();
     tracing::info!(
         "[vad-batch] {} groups from {} VAD segments for session {}",
         total,
-        vad_segments.len(),
+        vad_count,
         session_id,
     );
 
