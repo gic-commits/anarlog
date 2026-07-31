@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use hypr_transcription_core::listener::ListenerRuntime;
 use hypr_transcription_core::listener2 as core;
+use hypr_transcription_core::listener2::BatchRuntime;
 use ractor::{ActorRef, call_t, registry};
 use tauri_plugin_settings::SettingsPluginExt;
 use tauri_specta::Event;
@@ -158,7 +159,8 @@ impl ListenerRuntime for TauriRuntime {
             };
 
             let runtime = Arc::new(LiveBatchRuntime { app: app.clone() });
-            let mut manager = core::ProgressiveBatchManager::new(config).with_runtime(runtime);
+            let mut manager =
+                core::ProgressiveBatchManager::new(config).with_runtime(runtime.clone());
 
             // Set up diarization engine if enabled
             let mut diarization_engine = if params.diarization_enabled {
@@ -229,6 +231,12 @@ impl ListenerRuntime for TauriRuntime {
                         total_words,
                         "progressive_batch session finished"
                     );
+
+                    runtime.emit(core::BatchEvent::BatchResponse {
+                        session_id: params.session_id.clone(),
+                        response,
+                        mode: core::BatchRunMode::Streamed,
+                    });
                 }
                 Err(e) => {
                     tracing::error!(
@@ -236,6 +244,12 @@ impl ListenerRuntime for TauriRuntime {
                         error = %e,
                         "progressive_batch session failed"
                     );
+
+                    runtime.emit(core::BatchEvent::BatchFailed {
+                        session_id: params.session_id.clone(),
+                        code: core::BatchErrorCode::ProgressiveBatchFailed,
+                        error: e.to_string(),
+                    });
                 }
             }
         });

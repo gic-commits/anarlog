@@ -24,6 +24,12 @@ const {
   leftSidebarExpanded,
   setLeftSidebarExpandedMock,
   deleteProcessedAudioForRetentionMock,
+  createBatchTranscriptPersistMock,
+  waitForLiveBatchResultMock,
+  setBatchPersistMock,
+  clearBatchPersistMock,
+  clearBatchSegmentsMock,
+  handleBatchResponseMock,
 } = vi.hoisted(() => ({
   queueAutoEnhanceMock: vi.fn(),
   queueAutoEnhanceIfSummaryEmptyMock: vi.fn(),
@@ -43,6 +49,12 @@ const {
   leftSidebarExpanded: { value: true },
   setLeftSidebarExpandedMock: vi.fn(),
   deleteProcessedAudioForRetentionMock: vi.fn(),
+  createBatchTranscriptPersistMock: vi.fn(),
+  waitForLiveBatchResultMock: vi.fn(),
+  setBatchPersistMock: vi.fn(),
+  clearBatchPersistMock: vi.fn(),
+  clearBatchSegmentsMock: vi.fn(),
+  handleBatchResponseMock: vi.fn(),
 }));
 
 vi.mock("@hypr/plugin-transcription", () => ({
@@ -63,6 +75,7 @@ vi.mock("./useKeywords", () => ({
 vi.mock("./useRunBatch", () => ({
   STOPPED_TRANSCRIPTION_ERROR_MESSAGE: "Transcription stopped.",
   canRunBatchTranscription: vi.fn(() => true),
+  createBatchTranscriptPersist: createBatchTranscriptPersistMock,
   isStoppedTranscriptionError: vi.fn(
     (error: unknown) =>
       (error instanceof Error ? error.message : String(error)) ===
@@ -87,6 +100,10 @@ vi.mock("~/services/audio-retention", () => ({
   deleteProcessedAudioForRetention: deleteProcessedAudioForRetentionMock,
   normalizeAudioRetention: (value: unknown) =>
     typeof value === "string" ? value : "forever",
+}));
+
+vi.mock("~/store/zustand/listener/general-batch", () => ({
+  waitForLiveBatchResult: waitForLiveBatchResultMock,
 }));
 
 vi.mock("~/contexts/shell", () => ({
@@ -288,6 +305,74 @@ describe("useStartListening", () => {
     });
 
     expect(runBatchMock).toHaveBeenCalledWith("/tmp/session.wav");
+    expect(queueAutoEnhanceIfSummaryEmptyMock).toHaveBeenCalledWith(
+      "session-1",
+    );
+    expect(deleteProcessedAudioForRetentionMock).toHaveBeenCalledWith(
+      "forever",
+      "session-1",
+    );
+  });
+
+  test("waits for the live batch result instead of re-running batch for progressive capture", async () => {
+    useConfigValueMock.mockImplementation((key) =>
+      key === "ai_language" ? "en" : key === "stt_mode" ? "progressive" : [],
+    );
+    createBatchTranscriptPersistMock.mockReturnValue({
+      persist: vi.fn(),
+      awaitPending: vi.fn(async () => {}),
+    });
+    waitForLiveBatchResultMock.mockResolvedValue(true);
+    useListenerMock.mockImplementation((selector) =>
+      selector({
+        start: startMock,
+        setBatchPersist: setBatchPersistMock,
+        clearBatchPersist: clearBatchPersistMock,
+        clearBatchSegments: clearBatchSegmentsMock,
+        handleBatchResponse: handleBatchResponseMock,
+      }),
+    );
+
+    const { result } = renderHook(() => useStartListening("session-1"));
+
+    await act(async () => {
+      await result.current();
+    });
+
+    expect(createBatchTranscriptPersistMock).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      session: {
+        id: "session-1",
+        user_id: "user-1",
+        raw_md: "Existing memo",
+      },
+      provider: "hyprnote",
+      model: "am-test",
+    });
+    expect(setBatchPersistMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.any(Function),
+    );
+    expect(clearBatchSegmentsMock).toHaveBeenCalledWith("session-1");
+
+    const onStopped = startMock.mock.calls[0]?.[1]?.onStopped;
+    await act(async () => {
+      await onStopped?.("session-1", {
+        durationSeconds: 42,
+        audioPath: "/tmp/session.wav",
+        requestedLiveTranscription: false,
+        liveTranscriptionActive: false,
+      });
+    });
+
+    expect(runBatchMock).not.toHaveBeenCalled();
+    expect(waitForLiveBatchResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        handleBatchResponse: handleBatchResponseMock,
+        clearBatchPersist: clearBatchPersistMock,
+      }),
+      "session-1",
+    );
     expect(queueAutoEnhanceIfSummaryEmptyMock).toHaveBeenCalledWith(
       "session-1",
     );

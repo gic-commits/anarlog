@@ -78,7 +78,7 @@ export function Transcript({
           }
         />
       )}
-      {screen.kind === "batch_fallback" && (
+      {screen.kind === "batch_fallback" && !fallbackSegments && (
         <BatchState
           requestedLiveTranscription={screen.requestedLiveTranscription}
           error={screen.error}

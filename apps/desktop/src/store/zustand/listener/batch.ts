@@ -64,6 +64,7 @@ export type BatchActions = {
   handleBatchStopped: (sessionId: string) => void;
   updateBatchProgress: (sessionId: string, percentage: number) => void;
   clearBatchSession: (sessionId: string) => void;
+  clearBatchSegments: (sessionId: string) => void;
   setBatchPersist: (sessionId: string, callback: BatchPersistCallback) => void;
   clearBatchPersist: (sessionId: string) => void;
 };
@@ -305,6 +306,20 @@ export const createBatchSlice = <T extends BatchState>(
         batch: rest,
         batchPreview: restPreview,
         batchSegments: restSegments,
+      };
+    });
+  },
+
+  clearBatchSegments: (sessionId) => {
+    set((state) => {
+      if (!(sessionId in state.batchSegments)) {
+        return state;
+      }
+
+      const { [sessionId]: _, ...rest } = state.batchSegments;
+      return {
+        ...state,
+        batchSegments: rest,
       };
     });
   },

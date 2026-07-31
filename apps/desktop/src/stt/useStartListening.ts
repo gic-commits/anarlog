@@ -6,6 +6,7 @@ import { useListener } from "./contexts";
 import { getSessionKeywords } from "./useKeywords";
 import {
   canRunBatchTranscription,
+  createBatchTranscriptPersist,
   isStoppedTranscriptionError,
   useRunBatch,
 } from "./useRunBatch";
@@ -21,6 +22,7 @@ import { useSession, useSessionHasTranscript } from "~/session/queries";
 import { getSessionEvent } from "~/session/utils";
 import { useConfigValue } from "~/shared/config";
 import { id } from "~/shared/utils";
+import { waitForLiveBatchResult } from "~/store/zustand/listener/general-batch";
 import type {
   LiveTranscriptPersistCallback,
   OnStoppedCallback,
@@ -71,6 +73,10 @@ export function useStartListening(sessionId: string) {
   );
 
   const start = useListener((state) => state.start);
+  const setBatchPersist = useListener((state) => state.setBatchPersist);
+  const clearBatchPersist = useListener((state) => state.clearBatchPersist);
+  const clearBatchSegments = useListener((state) => state.clearBatchSegments);
+  const handleBatchResponse = useListener((state) => state.handleBatchResponse);
   const { conn } = useSTTConnection();
   const runBatch = useRunBatch(sessionId);
   const { leftsidebar } = useShell();
@@ -108,7 +114,12 @@ export function useStartListening(sessionId: string) {
         canRunBatchRef.current,
       );
 
-      if (postCaptureAction === "batch_then_enhance") {
+      if (isProgressiveBatch) {
+        await waitForLiveBatchResult(
+          { handleBatchResponse, clearBatchPersist },
+          sessionId,
+        );
+      } else if (postCaptureAction === "batch_then_enhance") {
         try {
           await runBatchRef.current(details.audioPath!);
         } catch (error) {
@@ -186,6 +197,23 @@ export function useStartListening(sessionId: string) {
       liveTranscriptionConfig.transcriptionMode,
     );
 
+    const isProgressiveBatch =
+      liveTranscriptionConfig.transcriptionMode === "progressiveBatch";
+
+    const batchPersist = isProgressiveBatch
+      ? createBatchTranscriptPersist({
+          sessionId,
+          session,
+          provider: conn?.provider ?? "",
+          model: conn?.model ?? "",
+        })
+      : null;
+
+    if (batchPersist) {
+      clearBatchSegments(sessionId);
+      setBatchPersist(sessionId, batchPersist.persist);
+    }
+
     const startParams = {
       session_id: sessionId,
       languages: liveTranscriptionConfig.languages,
@@ -220,6 +248,10 @@ export function useStartListening(sessionId: string) {
       if (transcriptId) {
         await softDeleteTranscript(transcriptId);
       }
+
+      if (batchPersist) {
+        clearBatchPersist(sessionId);
+      }
       return;
     }
 
@@ -240,12 +272,16 @@ export function useStartListening(sessionId: string) {
   }, [
     aiLanguage,
     audioRetention,
+    clearBatchPersist,
+    clearBatchSegments,
     conn,
     dictionaryTerms,
     hadTranscriptBeforeStart,
+    handleBatchResponse,
     participantHumanIds,
     session,
     sessionId,
+    setBatchPersist,
     start,
     spokenLanguages,
     sttMode,

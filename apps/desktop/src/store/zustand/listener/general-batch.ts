@@ -301,6 +301,87 @@ export const runBatchSession = async <T extends BatchStore>(
   await showBatchCompletedNotification(sessionId);
 };
 
+export const waitForLiveBatchResult = (
+  actions: Pick<BatchActions, "handleBatchResponse" | "clearBatchPersist">,
+  sessionId: string,
+) => {
+  const timeoutMs = 10 * 60_000;
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let unlisten: (() => void) | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const finish = (ok: boolean) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      unlisten?.();
+      actions.clearBatchPersist(sessionId);
+      resolve(ok);
+    };
+
+    timeoutId = setTimeout(() => {
+      console.warn(
+        "[waitForLiveBatchResult] timed out waiting for session %s",
+        sessionId,
+      );
+      finish(false);
+    }, timeoutMs);
+
+    transcriptionEvents.transcriptionEvent
+      .listen(({ payload }) => {
+        if (payload.session_id !== sessionId) {
+          return;
+        }
+
+        if (payload.type === "completed") {
+          console.log(
+            "[waitForLiveBatchResult] completed for session %s",
+            sessionId,
+          );
+          const handled = actions.handleBatchResponse(
+            sessionId,
+            payload.response,
+          );
+          finish(handled);
+          return;
+        }
+
+        if (payload.type === "failed") {
+          console.error(
+            "[waitForLiveBatchResult] live stream failed for session %s: error=%s code=%s",
+            sessionId,
+            payload.error,
+            payload.code,
+          );
+          finish(false);
+          return;
+        }
+
+        if (payload.type === "stopped") {
+          finish(false);
+        }
+      })
+      .then((fn) => {
+        if (settled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((error) => {
+        console.error("[waitForLiveBatchResult] listen setup failed", error);
+        finish(false);
+      });
+  });
+};
+
 export function shouldUseSyntheticBatchProgress(params: TranscriptionParams) {
   if (params.provider === "soniqo") {
     return false;

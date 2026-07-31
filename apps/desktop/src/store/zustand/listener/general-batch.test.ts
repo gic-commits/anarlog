@@ -6,6 +6,7 @@ import {
   showBatchCompletedNotification,
   shouldUseSyntheticBatchProgress,
   syntheticBatchProgress,
+  waitForLiveBatchResult,
 } from "./general-batch";
 
 import { parseBatchCompletedNotificationKey } from "~/stt/batch-completed-notification";
@@ -173,6 +174,7 @@ describe("runBatchSession", () => {
           clearBatchSession,
           handleBatchResponseStreamed,
           handleBatchSegmentResult: vi.fn(),
+          clearBatchSegments: vi.fn(),
           handleBatchFailed,
           handleBatchStopped,
           updateBatchProgress,
@@ -276,6 +278,7 @@ describe("runBatchSession", () => {
           clearBatchSession,
           handleBatchResponseStreamed,
           handleBatchSegmentResult: vi.fn(),
+          clearBatchSegments: vi.fn(),
           handleBatchFailed,
           handleBatchStopped,
           updateBatchProgress,
@@ -389,6 +392,7 @@ describe("runBatchSession", () => {
         handleBatchFailed,
         handleBatchStopped,
         handleBatchSegmentResult: vi.fn(),
+        clearBatchSegments: vi.fn(),
         updateBatchProgress,
         setBatchPersist,
       }),
@@ -482,6 +486,7 @@ describe("runBatchSession", () => {
         handleBatchFailed,
         handleBatchStopped,
         handleBatchSegmentResult: vi.fn(),
+        clearBatchSegments: vi.fn(),
         updateBatchProgress,
         setBatchPersist,
       }),
@@ -601,6 +606,7 @@ describe("runBatchSession", () => {
         handleBatchFailed,
         handleBatchStopped,
         handleBatchSegmentResult: vi.fn(),
+        clearBatchSegments: vi.fn(),
         updateBatchProgress,
         setBatchPersist,
       }),
@@ -688,6 +694,7 @@ describe("runBatchSession", () => {
           clearBatchSession,
           handleBatchResponseStreamed,
           handleBatchSegmentResult: vi.fn(),
+          clearBatchSegments: vi.fn(),
           handleBatchFailed,
           handleBatchStopped,
           updateBatchProgress,
@@ -764,6 +771,7 @@ describe("runBatchSession", () => {
           clearBatchSession,
           handleBatchResponseStreamed,
           handleBatchSegmentResult: vi.fn(),
+          clearBatchSegments: vi.fn(),
           handleBatchFailed,
           handleBatchStopped,
           updateBatchProgress,
@@ -844,6 +852,7 @@ describe("runBatchSession", () => {
           clearBatchSession,
           handleBatchResponseStreamed,
           handleBatchSegmentResult: vi.fn(),
+          clearBatchSegments: vi.fn(),
           handleBatchFailed,
           handleBatchStopped,
           updateBatchProgress,
@@ -869,5 +878,154 @@ describe("runBatchSession", () => {
       "timed_out",
     );
     expect(handleBatchStopped).not.toHaveBeenCalled();
+  });
+});
+
+describe("waitForLiveBatchResult", () => {
+  type Payload = {
+    type: string;
+    session_id: string;
+    response?: unknown;
+    code?: string;
+    error?: string;
+  };
+
+  const setupListener = () => {
+    let handler: ((event: { payload: Payload }) => void) | undefined;
+    const unlisten = vi.fn();
+    listenMock.mockImplementation(
+      async (cb: (event: { payload: Payload }) => void) => {
+        handler = cb;
+        return unlisten;
+      },
+    );
+
+    const emit = (payload: Payload) => handler?.({ payload });
+
+    return { emit, unlisten };
+  };
+
+  test("persists on completed and cleans up", async () => {
+    const handleBatchResponse = vi.fn(() => true);
+    const clearBatchPersist = vi.fn();
+    const { emit, unlisten } = setupListener();
+
+    const resultPromise = waitForLiveBatchResult(
+      { handleBatchResponse, clearBatchPersist },
+      "session-1",
+    );
+
+    emit({
+      type: "completed",
+      session_id: "session-1",
+      response: { metadata: null, results: { channels: [] } },
+    });
+
+    await expect(resultPromise).resolves.toBe(true);
+    expect(handleBatchResponse).toHaveBeenCalledWith("session-1", {
+      metadata: null,
+      results: { channels: [] },
+    });
+    expect(clearBatchPersist).toHaveBeenCalledWith("session-1");
+    expect(unlisten).toHaveBeenCalled();
+  });
+
+  test("resolves false when completed has no words", async () => {
+    const handleBatchResponse = vi.fn(() => false);
+    const clearBatchPersist = vi.fn();
+    const { emit } = setupListener();
+
+    const resultPromise = waitForLiveBatchResult(
+      { handleBatchResponse, clearBatchPersist },
+      "session-1",
+    );
+
+    emit({
+      type: "completed",
+      session_id: "session-1",
+      response: { metadata: null, results: { channels: [] } },
+    });
+
+    await expect(resultPromise).resolves.toBe(false);
+    expect(clearBatchPersist).toHaveBeenCalledWith("session-1");
+  });
+
+  test("resolves false on failed", async () => {
+    const handleBatchResponse = vi.fn();
+    const clearBatchPersist = vi.fn();
+    const { emit } = setupListener();
+
+    const resultPromise = waitForLiveBatchResult(
+      { handleBatchResponse, clearBatchPersist },
+      "session-1",
+    );
+
+    emit({
+      type: "failed",
+      session_id: "session-1",
+      code: "progressive_batch_failed",
+      error: "boom",
+    });
+
+    await expect(resultPromise).resolves.toBe(false);
+    expect(handleBatchResponse).not.toHaveBeenCalled();
+    expect(clearBatchPersist).toHaveBeenCalledWith("session-1");
+  });
+
+  test("ignores events for other sessions", async () => {
+    const handleBatchResponse = vi.fn(() => true);
+    const clearBatchPersist = vi.fn();
+    const { emit } = setupListener();
+
+    const resultPromise = waitForLiveBatchResult(
+      { handleBatchResponse, clearBatchPersist },
+      "session-1",
+    );
+
+    emit({
+      type: "completed",
+      session_id: "session-other",
+      response: { metadata: null, results: { channels: [] } },
+    });
+
+    const pending = Promise.race([
+      resultPromise.then(() => "resolved"),
+      new Promise((resolve) => setTimeout(() => resolve("pending"), 20)),
+    ]);
+
+    await expect(pending).resolves.toBe("pending");
+    expect(handleBatchResponse).not.toHaveBeenCalled();
+    expect(clearBatchPersist).not.toHaveBeenCalled();
+
+    emit({
+      type: "completed",
+      session_id: "session-1",
+      response: { metadata: null, results: { channels: [] } },
+    });
+
+    await expect(resultPromise).resolves.toBe(true);
+  });
+
+  test("times out and cleans up", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const handleBatchResponse = vi.fn();
+      const clearBatchPersist = vi.fn();
+      const { unlisten } = setupListener();
+
+      const resultPromise = waitForLiveBatchResult(
+        { handleBatchResponse, clearBatchPersist },
+        "session-1",
+      );
+
+      vi.advanceTimersByTime(10 * 60_000 + 1);
+
+      await expect(resultPromise).resolves.toBe(false);
+      expect(clearBatchPersist).toHaveBeenCalledWith("session-1");
+      expect(unlisten).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

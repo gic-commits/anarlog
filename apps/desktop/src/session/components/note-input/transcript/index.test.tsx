@@ -69,6 +69,7 @@ describe("Transcript", () => {
   let listenerState: {
     getSessionMode: (id: string) => "inactive" | "active" | "finalizing";
     batch: Record<string, { error?: string | null }>;
+    batchSegments: Record<string, unknown>;
     live: {
       degraded: null;
       requestedLiveTranscription: boolean;
@@ -90,6 +91,7 @@ describe("Transcript", () => {
     listenerState = {
       getSessionMode: () => "active",
       batch: {},
+      batchSegments: {},
       live: {
         degraded: null,
         requestedLiveTranscription: true,
