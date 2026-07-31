@@ -1061,7 +1061,7 @@ function DiarizationSection() {
 
   const enabled = diarization_enabled ?? false;
   const model = diarization_model ?? "wespeaker_zh_cnceleb_resnet34_LM.onnx";
-  const threshold = diarization_threshold ?? 0.35;
+  const threshold = diarization_threshold ?? 0.85;
 
   const MODELS: { value: string; label: string }[] = [
     {
@@ -1132,8 +1132,8 @@ function DiarizationSection() {
               <input
                 type="range"
                 min={0.1}
-                max={0.9}
-                step={0.05}
+                max={0.99}
+                step={0.01}
                 value={threshold}
                 onChange={(e) =>
                   setSettings({ diarization_threshold: Number(e.target.value) })

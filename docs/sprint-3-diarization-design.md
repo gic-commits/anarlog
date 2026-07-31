@@ -307,38 +307,41 @@ run_batch / run_progressive_batch
 ```
 Settings → diarization_enabled: bool
          → diarization_model: "wespeaker-cnceleb-LM" | "campplus-200k"
-         → diarization_threshold: f32 (0.05-0.50)
+         → diarization_threshold: f32 (0.1-0.99, 默认 0.85)
              ↓
-TranscriptionParams (plugins/transcription/api.rs)
+CaptureParams / TranscriptionParams (plugins/transcription/api.rs)
              ↓
-BatchParams (listener2-core/batch/mod.rs)
+SessionParams / BatchParams (listener-core / listener2-core/batch/mod.rs)
              ↓
-run_batch() / run_progressive_batch()
-             ↓
-DiarizationManager::process(audio_f32)
-  ├─ Segmenter (VAD)
-  ├─ EmbeddingExtractor (wespeaker-cnceleb-LM / campplus-200k)
-  ├─ Agglomerative Clustering (threshold)
-  └─ short segment merge
-             ↓
-MinCutMerge (Min-Cut + Merge, 每段≈τ)
-             ↓
-SubmitManager
-  ├─ enqueue(SubmitSegment)
-  ├─ submit_next_batch() → pure OpenAI API call
-  └─ match_response() → WordsWithSpeaker
-             ↓
-Stitcher → UI display (speaker labels + colors)
+── 文件路径（run_progressive_batch_from_file）─────────────
+Segmenter (VAD) → min_cut_merge 分组
+   ↓
+IncrementalDiarizationEngine.feed_segments(VAD段)  → finalize()
+   ↓  (speaker 段 + 聚类标签)
+每组 VAD 段 → 标准 OpenAI batch 转录
+   ↓
+词级 speaker_at_time(group_start + mid) 标注
+   ↓
+Stitcher → propagate_speaker_to_none 前后向填充 → UI
+
+── 录音流路径（plugins/transcription/src/listener/runtime.rs）─────────
+feed_pcm(i16) 实时喂入 IncrementalDiarizationEngine
+   ↓  (内部 IncrementalVad → embedding → 增量重聚类)
+manager.on_audio_frame 并行
+   ↓
+finish() → engine.finalize() 最终聚类
+   ↓
+按词中位时间 speaker_at_time() 标注 → SegmentResult 事件 → UI
 ```
 
 ## 9. Phase 分解
 
-### Phase 0: Min-Cut + Merge 替换 DurationScheduler（待启动）
+### Phase 0: Min-Cut + Merge 替换 DurationScheduler（✅ 已完成）
 
-- [ ] 新增 `crates/pyannote-local/src/min_cut_merge.rs`（Min-Cut 算法 + Merge 逻辑，~150 行）
-- [ ] `integration.rs` 切换为 `min_cut_merge`（替换 `schedule_segments` 调用）
-- [ ] 替换 Diarization 路径中的 `DurationScheduler`
-- [ ] 移除 `duration_scheduler.rs`（代码 + 8 个单元测试）
+- [x] 新增 `crates/pyannote-local/src/min_cut_merge.rs`（Min-Cut 算法 + Merge 逻辑）
+- [x] `integration.rs` 切换为 `min_cut_merge`（替换 `schedule_segments` 调用）
+- [x] 替换 Diarization 路径中的 `DurationScheduler`
+- [x] 移除 `duration_scheduler.rs`（代码 + 8 个单元测试）
 
 ### Phase A: DiarizationManager + 聚类 + 短段合并（~2天 ✅）
 
@@ -348,9 +351,9 @@ Stitcher → UI display (speaker labels + colors)
 - [x] 短段合并（<1.5s 合并到相邻段）
 - [x] 全部测试通过
 
-### Phase B: 时长调度 + SubmitManager + DB（~1天 ✅, 后续 Min-Cut + Merge 替换 DurationScheduler）
+### Phase B: 时长调度 + SubmitManager + DB（~1天 ✅）
 
-- [x] 实现 `DurationScheduler`（±20% 水线规则，**待替换为 Min-Cut + Merge**）
+- [x] ~~实现 `DurationScheduler`（±20% 水线规则）~~ → 已替换为 Min-Cut + Merge（Phase 0）
 - [x] 实现 `SubmitManager`（`DiarizationSubmitter`: 队列 + N=2 并发 + 指数退避重试 + drain 超时 + 响应匹配）
 - [x] DB 持久化 schema + 迁移（`diarization_jobs` / `diarization_segments` 表）
 - [x] Drizzle schema（`diarizationJobs` / `diarizationSegments`）
@@ -361,11 +364,24 @@ Stitcher → UI display (speaker labels + colors)
 - [x] `BatchParams` 字段贯通（`diarization_enabled` / `diarization_model` / `diarization_threshold`）
 - [x] 全部测试通过（listener2-core 115/115, db-app 44/44, pyannote-local 36/36）
 
-### Phase C: UI（~1天）
+### Phase C: UI（✅ 已完成）
 
-- [ ] Settings 页面新增 Diarization toggle + model 选择 + threshold slider
-- [ ] Segment 渲染添加 speaker 标签 + 颜色
-- [ ] CJK 后处理兼容 diarization（保留 speaker 标签）
+- [x] Settings 页面新增 Diarization toggle + model 选择 + threshold slider（`select.tsx` DiarizationSection）
+- [x] threshold 默认 0.85（经 `tests/find_threshold.rs` 真实音频 sweep 验证）
+- [x] Segment 渲染添加 speaker 标签 + 颜色
+- [x] CJK 后处理兼容 diarization（保留 speaker 标签）
+
+### Phase D: 录音流集成（✅ 代码完成，待真机验证）
+
+- [x] `IncrementalVad`（`incremental_vad.rs`）— 有状态流式 VAD，跨 `feed` 保持状态（同 segmentation.onnx 模型）
+- [x] `IncrementalDiarizationEngine`（`incremental_diarization.rs`）— 流式引擎：
+  - `feed_pcm(&[i16])` → 内部 VAD 产出段 → 即时 embedding → 按 `recluster_interval` 增量重聚类
+  - `feed_segments(&[Segment])` → 复用外部 Segmenter 的 VAD 段（batch 文件模式使用，跳过内部 VAD）
+  - `finalize()` → 收尾 VAD + 最终聚类 + 无效段近邻 speaker 填充
+  - `speaker_at_time(t)` → 半开区间 `[start, end)` 查 speaker，静音间隙返回 None（由 `propagate_speaker_to_none` 填充）
+- [x] 文件路径集成（`integration.rs`）：Segmenter VAD 先行 → `min_cut_merge` 分组 → 每段转录后按词中位时间 `speaker_at_time(group_start + mid)` 标注 → stitch 后 `propagate_speaker_to_none` 前后向填充
+- [x] 录音流集成（`plugins/transcription/src/listener/runtime.rs`）：录音中 `feed_pcm`（f32→i16 转换）→ `finish()` 时 `finalize()` → 按词中位时间标注 speaker
+- [ ] 待验证：真实设备端到端（speaker 标签是否随 `SegmentResult` 正确显示）
 
 ## 10. 开放问题
 

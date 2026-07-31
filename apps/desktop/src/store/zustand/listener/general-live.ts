@@ -17,8 +17,10 @@ import {
   type CaptureStatusEvent,
   type LiveTranscriptDelta,
   type LiveTranscriptSegmentDelta,
+  type TranscriptionEvent,
 } from "@hypr/plugin-transcription";
 
+import type { BatchActions, BatchState } from "./batch";
 import {
   type GeneralState,
   type LiveIntervalId,
@@ -39,9 +41,14 @@ type EventListeners = {
   lifecycle: (payload: CaptureLifecycleEvent) => void;
   progress: (payload: CaptureStatusEvent) => void;
   data: (payload: CaptureDataEvent) => void;
+  transcription: (payload: TranscriptionEvent) => void;
 };
 
-type LiveStore = GeneralState & TranscriptState & TranscriptActions;
+type LiveStore = GeneralState &
+  TranscriptState &
+  TranscriptActions &
+  BatchActions &
+  BatchState;
 
 const listenToAllSessionEvents = (
   handlers: EventListeners,
@@ -57,6 +64,9 @@ const listenToAllSessionEvents = (
         ),
         listenerEvents.captureDataEvent.listen(({ payload }) =>
           handlers.data(payload),
+        ),
+        listenerEvents.transcriptionEvent.listen(({ payload }) =>
+          handlers.transcription(payload),
         ),
       ]);
       return unlisteners;
@@ -246,6 +256,27 @@ const createSessionEventHandlers = <T extends LiveStore>(
       setLiveState(set, (live) => {
         live.muted = payload.value;
       });
+    }
+  },
+  transcription: (payload) => {
+    if (payload.session_id !== targetSessionId) {
+      return;
+    }
+
+    if (get().live.sessionId !== targetSessionId) {
+      return;
+    }
+
+    if (get().live.liveTranscriptionActive !== false) {
+      return;
+    }
+
+    if (payload.type === "segmentResult") {
+      get().handleBatchSegmentResult(
+        targetSessionId,
+        payload.segment_index,
+        payload.response,
+      );
     }
   },
 });

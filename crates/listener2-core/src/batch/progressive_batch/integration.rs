@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
 use hypr_audio_utils::Source;
+use hypr_pyannote_local::incremental_diarization::{
+    IncrementalDiarizationConfig, IncrementalDiarizationEngine,
+};
 use hypr_pyannote_local::min_cut_merge::{MinCutMergeConfig, min_cut_merge};
 use hypr_pyannote_local::segmentation::Segmenter;
 
@@ -92,30 +95,77 @@ pub async fn run_progressive_batch_from_file(
         .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
         .collect();
 
-    // VAD segmentation.
-    let mut segmenter = Segmenter::new(TARGET_SAMPLE_RATE).map_err(|e| {
-        crate::BatchFailure::ProgressiveBatchFailed {
-            message: format!("VAD init failed: {e}"),
-        }
-    })?;
-    let vad_segments = segmenter
-        .process(&pcm_i16, TARGET_SAMPLE_RATE)
+    // ── VAD (always needed) ──────────────────────────────────────────────
+    let raw_vad_segments: Vec<hypr_pyannote_local::segmentation::Segment> = {
+        let mut segmenter = Segmenter::new(TARGET_SAMPLE_RATE).map_err(|e| {
+            crate::BatchFailure::ProgressiveBatchFailed {
+                message: format!("VAD init failed: {e}"),
+            }
+        })?;
+        segmenter
+            .process(&pcm_i16, TARGET_SAMPLE_RATE)
+            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+                message: format!("VAD failed: {e}"),
+            })?
+    };
+
+    let vad_count = raw_vad_segments.len();
+
+    // ── Diarization (optional) ───────────────────────────────────────────
+    // Uses the same VAD segments as grouping, not the engine's internal VAD.
+    let diarization_engine: Option<IncrementalDiarizationEngine> = if params.diarization_enabled {
+        let mut engine = IncrementalDiarizationEngine::new(IncrementalDiarizationConfig {
+            sample_rate: TARGET_SAMPLE_RATE,
+            model_path: params.diarization_model.clone(),
+            threshold: params.diarization_threshold,
+            recluster_interval: usize::MAX,
+        })
         .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-            message: format!("VAD failed: {e}"),
+            message: format!("diarization init failed: {e}"),
         })?;
 
-    let vad_count = vad_segments.len();
+        engine.feed_segments(&raw_vad_segments).map_err(|e| {
+            crate::BatchFailure::ProgressiveBatchFailed {
+                message: format!("diarization feed failed: {e}"),
+            }
+        })?;
+        engine.finalize();
 
-    let groups = min_cut_merge(
-        vad_segments,
-        &pcm_i16,
-        TARGET_SAMPLE_RATE,
-        MinCutMergeConfig {
-            max_duration_ms: segment_duration_ms,
-        },
-    );
+        let speaker_segs = engine.speaker_segments();
+        let unique_speakers: std::collections::HashSet<usize> =
+            speaker_segs.iter().map(|s| s.speaker).collect();
+        tracing::info!(
+            "[diarization] {} speaker segments ({} unique speakers) using '{}' for session {}",
+            speaker_segs.len(),
+            unique_speakers.len(),
+            engine.provider_name(),
+            session_id,
+        );
+        Some(engine)
+    } else {
+        None
+    };
 
-    if groups.is_empty() {
+    // ── Grouping ────────────────────────────────────────────────────────
+    // groups: (start_sec, end_sec, speaker)
+    // Always use raw_vad_segments from Segmenter for grouping (more reliable
+    // VAD than the diarization engine's internal IncrementalVad). Speaker labels
+    // are assigned per-word via engine.speaker_at_time() after transcription.
+    if let Some(ref engine) = diarization_engine {
+        let ss = engine.speaker_segments();
+        let seg_min = ss.first().map(|s| s.start).unwrap_or(0.0);
+        let seg_max = ss.last().map(|s| s.end).unwrap_or(0.0);
+        let total_speech: f64 = ss.iter().map(|s| s.end - s.start).sum();
+        tracing::info!(
+            "[diarization] speaker segments: count={}  range=[{:.1}, {:.1}]  total_speech={:.1}s",
+            ss.len(),
+            seg_min,
+            seg_max,
+            total_speech,
+        );
+    }
+
+    if raw_vad_segments.is_empty() {
         return submit_file_direct(
             runtime,
             std::path::Path::new(&file_path),
@@ -123,6 +173,31 @@ pub async fn run_progressive_batch_from_file(
             &session_id,
         )
         .await;
+    }
+    let merged = min_cut_merge(
+        raw_vad_segments,
+        &pcm_i16,
+        TARGET_SAMPLE_RATE,
+        MinCutMergeConfig {
+            max_duration_ms: segment_duration_ms,
+        },
+    );
+    let groups: Vec<(f64, f64, usize)> = merged
+        .into_iter()
+        .map(|g| {
+            let start = g.first().map(|s| s.start).unwrap_or(0.0);
+            let end = g.last().map(|s| s.end).unwrap_or(0.0);
+            (start, end, 0)
+        })
+        .collect();
+    for (i, &(gs, ge, _spk)) in groups.iter().enumerate() {
+        tracing::info!(
+            "[vad-batch] group {}: start={:.1}s  end={:.1}s  span={:.1}s",
+            i,
+            gs,
+            ge,
+            ge - gs,
+        );
     }
 
     let total = groups.len();
@@ -143,11 +218,10 @@ pub async fn run_progressive_batch_from_file(
     };
     let mut stitcher = Stitcher::new(stitcher_config);
 
-    for (group_idx, group) in groups.iter().enumerate() {
-        let start_sample = (group[0].start * TARGET_SAMPLE_RATE as f64) as usize;
-        let end_sample = ((group.last().unwrap().end * TARGET_SAMPLE_RATE as f64) as usize)
-            .min(pcm_i16.len());
-        let global_start_ms = (group[0].start * 1000.0) as i64;
+    for (group_idx, &(group_start, group_end, _group_speaker)) in groups.iter().enumerate() {
+        let start_sample = (group_start * TARGET_SAMPLE_RATE as f64) as usize;
+        let end_sample = ((group_end * TARGET_SAMPLE_RATE as f64) as usize).min(pcm_i16.len());
+        let global_start_ms = (group_start * 1000.0) as i64;
 
         let audio_bytes = pcm_i16[start_sample..end_sample]
             .iter()
@@ -167,16 +241,22 @@ pub async fn run_progressive_batch_from_file(
             ..Default::default()
         };
 
-        let url = owhisper_client::OpenAIAdapter::transcription_url(&params.base_url)
-            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-                message: format!("invalid URL: {e}"),
+        let url =
+            owhisper_client::OpenAIAdapter::transcription_url(&params.base_url).map_err(|e| {
+                crate::BatchFailure::ProgressiveBatchFailed {
+                    message: format!("invalid URL: {e}"),
+                }
             })?;
 
-        let form =
-            owhisper_client::OpenAIAdapter::build_batch_multipart(file_part, &listen_params, true, false)
-                .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-                    message: format!("failed to build form: {e}"),
-                })?;
+        let form = owhisper_client::OpenAIAdapter::build_batch_multipart(
+            file_part,
+            &listen_params,
+            true,
+            false,
+        )
+        .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+            message: format!("failed to build form: {e}"),
+        })?;
 
         let client = owhisper_client::create_client();
         let resp = client
@@ -189,14 +269,16 @@ pub async fn run_progressive_batch_from_file(
                 message: format!("HTTP request failed: {e}"),
             })?;
 
+        let content_length = resp.content_length().unwrap_or(0);
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             tracing::warn!(
-                "[vad-batch] group {} failed ({}): {}",
+                "[vad-batch] group {} failed ({}): {}  (content_length={})",
                 group_idx,
                 status,
                 body,
+                content_length,
             );
             stitcher.add_abandoned(group_idx);
             continue;
@@ -208,8 +290,13 @@ pub async fn run_progressive_batch_from_file(
             .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
                 message: format!("failed to read response body: {e}"),
             })?;
+        tracing::info!(
+            "[vad-batch] group {} succeeded  (resp_len={})",
+            group_idx,
+            body.len(),
+        );
 
-        let segment_response: owhisper_interface::batch::Response =
+        let mut segment_response: owhisper_interface::batch::Response =
             if matches!(params.provider, crate::batch::BatchProvider::OpenAI) {
                 owhisper_client::OpenAIAdapter::parse_batch_response(&body).map_err(|e| {
                     crate::BatchFailure::ProgressiveBatchFailed {
@@ -223,6 +310,18 @@ pub async fn run_progressive_batch_from_file(
                     }
                 })?
             };
+
+        // Annotate speaker labels from the diarization engine
+        if let Some(ref engine) = diarization_engine {
+            for channel in &mut segment_response.results.channels {
+                for alt in &mut channel.alternatives {
+                    for word in &mut alt.words {
+                        let mid = (word.start + word.end) / 2.0;
+                        word.speaker = engine.speaker_at_time(group_start + mid);
+                    }
+                }
+            }
+        }
 
         runtime.emit(BatchEvent::BatchSegmentResult {
             session_id: session_id.clone(),
@@ -239,6 +338,15 @@ pub async fn run_progressive_batch_from_file(
     }
 
     let has_completed = stitcher.segment_count() > 0;
+    let abandoned_count = stitcher.abandoned_indices().len();
+    tracing::info!(
+        "[vad-batch] completed={}/{}  abandoned={}  for session {}",
+        has_completed as usize,
+        total,
+        abandoned_count,
+        session_id,
+    );
+
     if !has_completed {
         return Err(crate::BatchFailure::ProgressiveBatchFailed {
             message: "no groups completed successfully".to_string(),
@@ -247,8 +355,28 @@ pub async fn run_progressive_batch_from_file(
     }
 
     match stitcher.stitch() {
-        Ok(response) => {
+        Ok(mut response) => {
+            let word_count = response
+                .results
+                .channels
+                .first()
+                .and_then(|c| c.alternatives.first())
+                .map(|a| a.words.len())
+                .unwrap_or(0);
+            propagate_speaker_to_none(&mut response);
             let _ = std::fs::remove_dir_all(&session_dir);
+            tracing::info!(
+                "[vad-batch] stitch ok  words={}  last_end={:.1}s",
+                word_count,
+                response
+                    .results
+                    .channels
+                    .first()
+                    .and_then(|c| c.alternatives.first())
+                    .and_then(|a| a.words.last())
+                    .map(|w| w.end)
+                    .unwrap_or(0.0),
+            );
             Ok(BatchRunOutput {
                 session_id,
                 mode: BatchRunMode::Direct,
@@ -259,6 +387,39 @@ pub async fn run_progressive_batch_from_file(
             message: format!("stitch failed: {e:?}"),
         }
         .into()),
+    }
+}
+
+/// Propagate a valid speaker value to words with `speaker: None`.
+/// Uses nearest valid speaker, scanning forward then backward.
+fn propagate_speaker_to_none(response: &mut owhisper_interface::batch::Response) {
+    for channel in &mut response.results.channels {
+        for alt in &mut channel.alternatives {
+            let n = alt.words.len();
+            if n == 0 {
+                continue;
+            }
+
+            // Forward fill
+            let mut last: Option<usize> = None;
+            for w in alt.words.iter_mut() {
+                if let Some(s) = w.speaker {
+                    last = Some(s);
+                } else if let Some(s) = last {
+                    w.speaker = Some(s);
+                }
+            }
+
+            // Backward fill (catches leading None words)
+            let mut last: Option<usize> = None;
+            for w in alt.words.iter_mut().rev() {
+                if let Some(s) = w.speaker {
+                    last = Some(s);
+                } else if let Some(s) = last {
+                    w.speaker = Some(s);
+                }
+            }
+        }
     }
 }
 

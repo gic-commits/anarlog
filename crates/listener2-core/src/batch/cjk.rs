@@ -30,7 +30,10 @@ fn with_processor(features: CjkFeatures, f: impl FnOnce(&Processor)) {
     if guard.1 != features {
         let mut cfg = Config::default();
         cfg.features = features;
-        *guard = (Processor::new(cfg).expect("failed to create CJK processor"), features);
+        *guard = (
+            Processor::new(cfg).expect("failed to create CJK processor"),
+            features,
+        );
     }
     f(&guard.0);
 }
@@ -53,7 +56,11 @@ fn is_cjk_char(c: char) -> bool {
 fn split_to_entries(
     words: &[batch::Word],
     min_cjk_split_len: usize,
-) -> (Vec<WordEntry>, HashMap<(i64, i64), usize>, Vec<(usize, usize)>) {
+) -> (
+    Vec<WordEntry>,
+    HashMap<(i64, i64), usize>,
+    Vec<(usize, usize)>,
+) {
     let mut entries = Vec::new();
     let mut char_to_word: HashMap<(i64, i64), usize> = HashMap::new();
     let mut atomic_ranges: Vec<(usize, usize)> = Vec::new();
@@ -177,9 +184,7 @@ fn collapse_groups(
             let mut j = i;
             while j < groups.len() {
                 let gj = &groups[j];
-                if gj.start >= entries[r_s].start - 1e-9
-                    && gj.end <= entries[r_e - 1].end + 1e-9
-                {
+                if gj.start >= entries[r_s].start - 1e-9 && gj.end <= entries[r_e - 1].end + 1e-9 {
                     merged_chars.extend(gj.chars.clone());
                     merged_end = gj.end;
                     j += 1;

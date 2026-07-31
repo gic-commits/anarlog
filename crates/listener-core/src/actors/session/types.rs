@@ -30,6 +30,12 @@ pub struct SessionParams {
     pub self_human_id: Option<String>,
     #[serde(default)]
     pub provider: Option<String>,
+    #[serde(default)]
+    pub diarization_enabled: bool,
+    #[serde(default)]
+    pub diarization_model: Option<String>,
+    #[serde(default)]
+    pub diarization_threshold: f32,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -98,6 +104,9 @@ impl SessionContext {
             model: self.params.model.clone(),
             language: self.params.languages.first().map(|l| l.to_string()),
             sample_rate: crate::actors::SAMPLE_RATE,
+            diarization_enabled: self.params.diarization_enabled,
+            diarization_model: self.params.diarization_model.clone(),
+            diarization_threshold: self.params.diarization_threshold,
         }
     }
 }
@@ -123,6 +132,9 @@ mod tests {
             participant_human_ids: vec![],
             self_human_id: None,
             provider: None,
+            diarization_enabled: false,
+            diarization_model: None,
+            diarization_threshold: 0.35,
         }
     }
 

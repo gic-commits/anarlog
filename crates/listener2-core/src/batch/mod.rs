@@ -30,7 +30,11 @@ const fn default_true() -> bool {
 
 impl Default for CjkLayerFlags {
     fn default() -> Self {
-        Self { punctuation: true, jieba: true, acoustic_merge: true }
+        Self {
+            punctuation: true,
+            jieba: true,
+            acoustic_merge: true,
+        }
     }
 }
 

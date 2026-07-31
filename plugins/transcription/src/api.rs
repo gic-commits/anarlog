@@ -36,6 +36,12 @@ pub struct CaptureParams {
     pub self_human_id: Option<String>,
     #[serde(default)]
     pub provider: Option<String>,
+    #[serde(default)]
+    pub diarization_enabled: bool,
+    #[serde(default)]
+    pub diarization_model: Option<String>,
+    #[serde(default)]
+    pub diarization_threshold: f32,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -309,6 +315,9 @@ impl From<CaptureParams> for listener::actors::SessionParams {
             participant_human_ids: value.participant_human_ids,
             self_human_id: value.self_human_id,
             provider: value.provider,
+            diarization_enabled: value.diarization_enabled,
+            diarization_model: value.diarization_model,
+            diarization_threshold: value.diarization_threshold,
         }
     }
 }

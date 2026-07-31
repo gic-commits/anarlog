@@ -125,13 +125,15 @@ Phase 2 — 功能完善（已收敛 ⏸️）
   [-] 多语言实时转录支持 — batch 模式天然支持，不阻塞
   [ ] 自定义 prompt/关键词实时生效
 
-Sprint 3 — 本地说话人分离（待启动 ⏸️）
-  [ ] Speaker segmentation（pyannote ONNX 5.7MB）— ✅ 裸测通过
-  [ ] Speaker embedding（hypr-embedding ONNX 25MB 256-dim）— ✅ 裸测通过，选定 hypr-embedding
-  [ ] 聚类算法实现（替换 `cluster()` stub）
-  [ ] 预处理染色：给音频帧打说话人标签
-  [ ] Batch 前按说话人区分段落
-  [ ] UI toggle / 数据流
+Sprint 3 — 本地说话人分离（Phase A/B/C/D ✅ 基本完成，录音流集成待真机验证）
+  [x] Speaker segmentation（pyannote ONNX 5.7MB）
+  [x] Speaker embedding（选定 wespeaker-cnceleb-LM 256-dim）
+  [x] 聚类算法实现（cosine + average-linkage）
+  [x] 预处理染色：给音频帧打说话人标签
+  [x] VAD Min-Cut + Merge 时长调度（替换 DurationScheduler）
+  [x] 词级 speaker 标注 + 前后向填充（integration.rs + runtime.rs）
+  [x] UI toggle / 数据流（设置页 + threshold slider）
+  [x] 录音流集成 `IncrementalDiarizationEngine`（feed_pcm → finalize）— 待真机验证
 
 Phase 3 — UI 增强（待定）
   [ ] 如果 OpenAI provider + 自建服务器与原生 OpenAI 行为差异过大，加 toggle 开关
@@ -528,38 +530,79 @@ Speaches（OpenAI 兼容服务器）更新了 CJK 生效模式：默认不启用
 | `cargo test -p db-app` | ✅ 44/44 |
 | `cargo test -p pyannote-local` | ✅ 36/36 (15 unit + 21 integration) |
 
+## Jul 30 — Sprint 3 Phase C/D（VAD Min-Cut + Merge + Diarization UI）✅
+
+### Phase 0: VAD Min-Cut + Merge（替换 DurationScheduler）✅
+
+- `crates/pyannote-local/src/min_cut_merge.rs` — WhisperX 式 Min-Cut + Merge，超 max_duration 的 VAD 段在 [½τ, τ] 找最低分切开，短段合并到 ≤τ
+- `crates/listener2-core/src/batch/progressive_batch/integration.rs` — `schedule_segments` → `min_cut_merge` 分组
+- `crates/pyannote-local/src/duration_scheduler.rs` — 已移除（含 8 个 unit tests）
+- diarization 路径（batch 模式）：改用 `IncrementalDiarizationEngine.feed_segments()`（复用外部 Segmenter VAD 段，而非引擎内部 VAD）
+
+### 设置页 UI
+
+`apps/desktop/src/settings/ai/stt/select.tsx` DiarizationSection：
+- diarization toggle + model 下拉 + threshold slider（min 0.1 / max 0.99 / step 0.01）
+- **threshold 默认 0.35 → 0.85**（经真实音频 sweep 验证，见 `tests/find_threshold.rs`）
+
+## Jul 31 — 录音中实时分段回显修复 ✅（当前会话）
+
+### 问题
+
+progressive-batch 新录音模式下，录音进行中的 batch 段结果（`SegmentResult`）被前端丢弃：后端实时路径持续 emit `TranscriptionEvent::SegmentResult`，但前端录音期间**从不订阅 `transcriptionEvent`**（该订阅只在 `general-batch.ts` 的 `runBatchSession`（stop 后）里）。
+
+### 根因
+
+`general-live.ts` 的 `listenToAllSessionEvents` 只订阅 `captureLifecycle` / `captureStatus` / `captureData` 三个事件。后端 `plugins/transcription/src/listener/runtime.rs:137`（`LiveBatchRuntime::emit`）在录音中正常 emit `SegmentResult`，全部被丢弃。
+
+### 修复（4 文件，纯前端）
+
+| 文件 | 改动 |
+|------|------|
+| `general-live.ts` | `listenToAllSessionEvents` 新增 `listenerEvents.transcriptionEvent.listen`；`transcription` handler 路由 `segmentResult` → `handleBatchSegmentResult`；守卫：`payload.session_id === targetSessionId`、`live.sessionId === targetSessionId`、**`liveTranscriptionActive !== false`** |
+| `state.ts` | `batch_fallback` 屏新增 `segmentResponses: Record<number, BatchResponse>` |
+| `index.tsx` | `fallbackSegments` 时渲染 `CompactProgress`（recording 变体："Recording... transcription in progress · N segments done"，Stop → `state.stop`）+ `SegmentPreview`；`CompactProgress` 新增 `recording?: boolean` |
+| `general.test.ts` | 新增 `listenTranscriptionMock` hoisted mock |
+
+### 模式隔离（不破坏 live / 传统 batch）
+
+- **live 模式**：走 Realtime adapter emit `captureDataEvent.transcript_delta`，不 emit `SegmentResult`；前端 `liveTranscriptionActive === true` → handler 直接 return
+- **传统 batch**：录音中无 `SegmentResult`（无 progressive stream），`batchSegments` 空 → `fallbackSegments=false` → 保持原 `BatchState` 等待 UI
+- 后端只在 `TranscriptionMode::ProgressiveBatch` 时启动 `start_progressive_batch_stream`（`supervisor.rs:65,75,126`、`children.rs:145`）
+- `applyCaptureSnapshot` 用 `markLiveActive(..., snapshot.liveTranscriptionActive ?? true)` 恢复，progressive batch snapshot 为 false → attach 场景正确放行
+
+### 验证
+
+| 命令 | 结果 |
+|------|------|
+| `pnpm -F desktop typecheck` | ✅ |
+| `cargo check -p pyannote-local -p listener2-core -p listener-core -p tauri-plugin-transcription` | ✅ |
+| `cargo test -p pyannote-local` | ✅ 21 integration + 1 sweep |
+| `cargo test -p listener2-core` | ✅ 118/118 |
+| `general.test.ts` | ✅ 27/28（1 失败为 pre-existing：`handleBatchResponse persists transcript-only batch responses`，`timing.ts` 读到 `provider_word` 未 fallback `synthetic_text`，与本次改动无关）|
+| `general-batch.test.ts` / `transcript.test.ts` | ✅ 11/11、9/9 |
+
+⚠️ 命令注意：vitest 必须从 `apps/desktop` 目录运行（根目录报 `Cannot find module '~/stt/timing'`）；全量 `dprint fmt` / `vitest --run` 会挂，用 `./node_modules/.bin/dprint fmt <文件>` 与 `./node_modules/.bin/vitest run <文件>`。
+
 ## 下一步工作排布
 
-### Phase 0: VAD Min-Cut + Merge（替换 DurationScheduler）
+### Sprint 3 Phase D（录音流 diarization）— 未提交 ⚠️
 
-算法定稿（WhisperX），VAD 段超 max_duration 在 [½τ, τ] 找最低分切开，短段合并到 ≤τ 后提交。
+录音流（`plugins/transcription/src/listener/runtime.rs`）已集成 `IncrementalDiarizationEngine`：
+- 录音期间 `feed_pcm`（i16 转换）实时喂入 VAD + embedding
+- `finish()` 时 `finalize()` 重聚类，按词中位时间 `speaker_at_time()` 标注 speaker
+- 仍待验证：真实设备端到端（speaker 标签是否随 `SegmentResult` 正确显示）
 
-| 任务 | 文件 | 说明 |
-|------|------|------|
-| 0a | `crates/pyannote-local/src/min_cut_merge.rs` | Min-Cut 算法 + Merge 逻辑，~150 行 |
-| 0b | `crates/listener2-core/.../integration.rs` | `schedule_segments` → `min_cut_merge` |
-| 0c | Diarization 路径 | 替换 `DurationScheduler` |
-| 0d | `duration_scheduler.rs` | 移除（代码 + 8 个 unit tests） |
+### 已有但未落库的 diarization 改动（Jul 30-31，随本次 commit 提交）
 
-### Phase 1: UI 渐进显示修复
-
-解决 `running_batch` 屏幕 spinner 占满全屏、SegmentPreview 被挤出可视区的问题。
-
-| 任务 | 文件 | 说明 |
-|------|------|------|
-| 1a | `index.tsx` | `hasSegments` → 紧凑进度条 + `SegmentPreview` 主区域；无 segments → 保持全屏 spinner |
-| 1b | `index.tsx` | 移除 `SegmentPreview` 中的 Dashed Line 分隔符（VAD 自然分段后不再需要）|
-| 1c | `batch.ts` | `handleBatchResponse` 清理 `batchSegments` 时序修复（等 DB 写入完成再清）|
-
-### Phase 2: Speaker Diarization UI
-
-Sprint 3 Phase C — 设置页 + 渲染。
-
-| 任务 | 文件 | 说明 |
-|------|------|------|
-| 2a | Settings + `select.tsx` | Diarization toggle + model 选择 + threshold slider |
-| 2b | `segment.tsx` / renderer | Speaker 标签 + 颜色渲染 |
-| 2c | CJK 后处理 | 兼容 speaker 标签（保留不丢弃） |
+- `crates/pyannote-local/src/incremental_vad.rs`（新）— 有状态流式 VAD（同 segmentation.onnx 模型，跨 feed 保持状态）
+- `crates/pyannote-local/src/incremental_diarization.rs`（新）— 流式引擎：feed_pcm / feed_segments / finalize / speaker_at_time / recluster
+- `crates/pyannote-local/tests/find_threshold.rs`（新）— 真实音频 threshold sweep 工具
+- `BatchParams` / `CaptureParams` / `SessionParams` / `ProgressiveBatchParams` — 新增 `diarization_enabled` / `diarization_model` / `diarization_threshold` 字段贯通
+- `integration.rs` — VAD 先行（Segmenter）→ diarization 用 `feed_segments` 复用同一批 VAD 段 → 词级 `speaker_at_time` 标注 + `propagate_speaker_to_none` 前后向填充；大量 `[vad-batch]` / `[diarization]` 诊断日志
+- 前端 `useStartListening` / `useRunBatch` — diarization 三参数贯通 + useRunBatch deps 修复
+- `batch.ts` — DEV-only speaker/hint 调试日志
+- threshold 默认 0.85（schema.ts / select.tsx / useRunBatch 三处一致）
 
 ### 远期优化方向
 

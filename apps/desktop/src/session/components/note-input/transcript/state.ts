@@ -21,6 +21,7 @@ export type TranscriptScreen =
       kind: "batch_fallback";
       requestedLiveTranscription: RequestedLiveTranscription;
       error: DegradedError | null;
+      segmentResponses: Record<number, BatchResponse>;
     }
   | {
       kind: "listening";
@@ -79,6 +80,7 @@ export function useTranscriptScreen({
       kind: "batch_fallback",
       requestedLiveTranscription: live.requestedLiveTranscription,
       error: live.degraded,
+      segmentResponses: batchSegmentResponses,
     };
   }
 

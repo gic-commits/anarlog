@@ -17,6 +17,7 @@ specta-typescript = { workspace = true }
 hypr-audio = { workspace = true }
 hypr-db-app = { workspace = true }
 hypr-language = { workspace = true }
+hypr-pyannote-local = { workspace = true }
 hypr-storage = { workspace = true }
 hypr-transcribe-soniqo = { workspace = true }
 hypr-transcript = { workspace = true }

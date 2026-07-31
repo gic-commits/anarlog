@@ -7,6 +7,7 @@ const {
   listenCaptureDataMock,
   listenCaptureLifecycleMock,
   listenCaptureStatusMock,
+  listenTranscriptionMock,
   runEventHooksMock,
   setRecordingIndicatorMock,
   stopCaptureMock,
@@ -17,6 +18,7 @@ const {
   listenCaptureDataMock: vi.fn(),
   listenCaptureLifecycleMock: vi.fn(),
   listenCaptureStatusMock: vi.fn(),
+  listenTranscriptionMock: vi.fn(),
   runEventHooksMock: vi.fn(),
   setRecordingIndicatorMock: vi.fn(),
   stopCaptureMock: vi.fn(),
@@ -71,6 +73,9 @@ vi.mock("@hypr/plugin-transcription", () => ({
     captureStatusEvent: {
       listen: listenCaptureStatusMock,
     },
+    transcriptionEvent: {
+      listen: listenTranscriptionMock,
+    },
   },
 }));
 
@@ -101,6 +106,7 @@ describe("General Listener Slice", () => {
     listenCaptureDataMock.mockResolvedValue(() => {});
     listenCaptureLifecycleMock.mockResolvedValue(() => {});
     listenCaptureStatusMock.mockResolvedValue(() => {});
+    listenTranscriptionMock.mockResolvedValue(() => {});
     runEventHooksMock.mockResolvedValue({ status: "ok", data: null });
     setRecordingIndicatorMock.mockResolvedValue({ status: "ok", data: null });
     stopCaptureMock.mockResolvedValue({ status: "ok", data: null });

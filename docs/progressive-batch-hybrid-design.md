@@ -361,21 +361,22 @@ OpenAI (Speaches)
 | **C** | 持久化 + Continue | progressive_batch_jobs/segments 表 + Drizzle schema + TauriBatchRuntime 写 DB + continue_from_file() + resume() | 重启后 Continue 只重跑未完成段 | ✅ |
 | **D** | UI 右键菜单 | Re-transcribe 裂为 3 项 + Continue 条件显示 + 部分结果提示 | 端到端交互可用 | ✅ |
 
-### Sprint 3：优化（待定）
+### Sprint 3：优化（✅ 已完成）
 
 - [x] VAD Min-Cut + Merge 策略研究（Jul 29 ✅）
-- [ ] **Phase 0**: 实现 Min-Cut + Merge 替代 DurationScheduler
-  - [ ] 新增 `crates/pyannote-local/src/min_cut_merge.rs`（Min-Cut 算法 + Merge 逻辑）
-  - [ ] `integration.rs` 从 `schedule_segments` 切换为 `min_cut_merge`
-  - [ ] `duration_scheduler.rs` 保留，Diarization 路径后续对齐
-- [ ] **Phase 1**: UI 渐进显示修复
-  - [ ] `index.tsx`: `hasSegments` → 紧凑进度 + SegmentPreview
-  - [ ] 移除 Dashed Line 分隔符（VAD 自然分段后不再需要）
-  - [ ] `handleBatchResponse` 清理时序修复（不清空 batchSegments）
-- [ ] **Phase 2**: Speaker Diarization UI（Sprint 3 Phase C）
-  - [ ] Settings: toggle + model 选择 + threshold slider
-  - [ ] Segment 渲染: speaker 标签 + 颜色
-  - [ ] CJK 后处理兼容 speaker 标签
+- [x] **Phase 0**: 实现 Min-Cut + Merge 替代 DurationScheduler
+  - [x] 新增 `crates/pyannote-local/src/min_cut_merge.rs`（Min-Cut 算法 + Merge 逻辑）
+  - [x] `integration.rs` 从 `schedule_segments` 切换为 `min_cut_merge`
+  - [x] 移除 `duration_scheduler.rs`（代码 + 8 个 unit tests）
+- [x] **Phase 1**: 录音中实时分段回显修复（Jul 31 ✅）
+  - [x] `general-live.ts`: 录音期间订阅 `transcriptionEvent`，路由 `segmentResult` → `handleBatchSegmentResult`（守卫非 live 模式）
+  - [x] `state.ts`: `batch_fallback` 携带 `segmentResponses`；`index.tsx`: `CompactProgress` recording 变体 + `SegmentPreview`
+  - [x] `handleBatchResponse` 清理时序修复（不清空 batchSegments）
+- [x] **Phase 2**: Speaker Diarization UI（Sprint 3 Phase C ✅）
+  - [x] Settings: toggle + model 选择 + threshold slider（默认 0.85）
+  - [x] 词级 speaker 标注 + `propagate_speaker_to_none` 前后向填充
+  - [x] CJK 后处理兼容 speaker 标签
+- [x] 录音流集成 `IncrementalDiarizationEngine`（feed_pcm → finalize）— 待真机验证
 - [ ] WebSocket 控制面设计评审（如需要）
 
 ---
@@ -406,9 +407,14 @@ OpenAI (Speaches)
 | 前端增量展示                     | 无                                                  | `batchSegments` Map + `handleBatchSegmentResult` + `SegmentPreview` + `empty.tsx segmentCount` | ✅ 片段级先到先展示            |
 | 分段虚线分隔                     | 无                                                  | `segment.tsx` 检测 `word.metadata.segment_boundary` 渲染虚线        | ✅ 段落间视觉分隔              |
 | Server-side CJK (Speaches)       | 无                                                  | `cjk_server_side` boolean 贯通：UI→`TranscriptionParams`→`BatchParams`→`ListenParams`→`CreateCustomTranscriptionOptions.cjk_post_process`→multipart form field `cjk_post_process=true` | ✅ 默认关闭，开启后所有 batch 模式（Direct / Progressive）的 HTTP 请求均带该参数 |
-| 分段策略                         | DurationScheduler ±20% 水线                         | VAD Min-Cut + Merge（WhisperX 算法）                                   | ✅ Jul 29 定稿，待实现         |
-| 渐进显示                         | `TranscriptEmptyState` spinner + `SegmentPreview` 在下方 | `hasSegments` 时紧凑进度条 + `SegmentPreview` 主区域                 | ⏳ 待改（Phase 1）             |
-| 段落分隔                         | Dashed Line 分隔符（固定窗口段提示）                 | 无分隔符（VAD 自然分段天然可区分）                                     | ⏳ 待改（Phase 1）             |
+| 分段策略                         | DurationScheduler ±20% 水线                         | VAD Min-Cut + Merge（WhisperX 算法）                                   | ✅ Jul 29 定稿，已实现        |
+| 渐进显示                         | `TranscriptEmptyState` spinner + `SegmentPreview` 在下方 | 录音中 `CompactProgress`(recording) + `SegmentPreview` 实时显示；stop 后 `BatchState` 等待 UI | ✅ Jul 31 录音实时回显        |
+| 段落分隔                         | Dashed Line 分隔符（固定窗口段提示）                 | `segment_boundary` 元数据渲染虚线，VAD 自然分段可区分                   | ✅ 已实现                     |
+| 录音流 diarization               | 无（仅文件路径）                                    | `plugins/transcription/src/listener/runtime.rs` 集成 `IncrementalDiarizationEngine`（feed_pcm → finalize → speaker_at_time 标注） | ⚠️ 代码完成，待真机验证       |
+| 流式 VAD                         | 无                                                | `IncrementalVad`（`incremental_vad.rs`）— 同 segmentation.onnx，跨 feed 保持状态 | ✅ 已实现                     |
+| 录音流回显                       | 录音期间不显示分段结果                             | `general-live.ts` 订阅 `transcriptionEvent`，`segmentResult` → `handleBatchSegmentResult`（守卫 `liveTranscriptionActive !== false`，不影响 live / 传统 batch） | ✅ Jul 31 已实现              |
+| diarization 分组                 | 引擎内部 VAD 产出段                                | 复用外部 Segmenter VAD 段（`feed_segments`），与 `min_cut_merge` 分组一致 | ✅ 已实现                     |
+| diarization_threshold 默认       | 0.35                                              | 0.85（`tests/find_threshold.rs` 真实音频 sweep 验证）                  | ✅ schema/select/useRunBatch 三处一致 |
 
 ---
 

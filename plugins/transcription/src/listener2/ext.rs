@@ -471,7 +471,10 @@ async fn persist_batch_event(
             }
         }
 
-        core::BatchEvent::DiarizationStarted { session_id, total_segments } => {
+        core::BatchEvent::DiarizationStarted {
+            session_id,
+            total_segments,
+        } => {
             let model = params.diarization_model.clone().unwrap_or_default();
             let threshold = params.diarization_threshold;
 

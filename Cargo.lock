@@ -19259,6 +19259,7 @@ dependencies = [
  "language",
  "owhisper-client",
  "owhisper-interface",
+ "pyannote-local",
  "ractor",
  "serde",
  "serde_json",

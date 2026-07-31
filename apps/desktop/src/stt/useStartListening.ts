@@ -63,6 +63,9 @@ export function useStartListening(sessionId: string) {
   const spokenLanguages = useConfigValue("spoken_languages");
   const dictionaryTerms = useConfigValue("personalization_dictionary_terms");
   const sttMode = useConfigValue("stt_mode");
+  const diarizationEnabled = useConfigValue("diarization_enabled");
+  const diarizationModel = useConfigValue("diarization_model");
+  const diarizationThreshold = useConfigValue("diarization_threshold");
   const audioRetention = normalizeAudioRetention(
     useConfigValue("audio_retention"),
   );
@@ -195,6 +198,9 @@ export function useStartListening(sessionId: string) {
       provider: conn?.provider ?? null,
       participant_human_ids: participantHumanIds,
       self_human_id: session?.user_id || null,
+      diarization_enabled: diarizationEnabled,
+      diarization_model: diarizationModel,
+      diarization_threshold: diarizationThreshold,
     };
 
     console.log(
@@ -243,6 +249,9 @@ export function useStartListening(sessionId: string) {
     start,
     spokenLanguages,
     sttMode,
+    diarizationEnabled,
+    diarizationModel,
+    diarizationThreshold,
     setLeftSidebarExpanded,
   ]);
 

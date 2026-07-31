@@ -425,7 +425,7 @@ export const useRunBatch = (sessionId: string) => {
             : (diarizationEnabled ?? false),
         diarization_model:
           diarizationEnabled && diarizationModel ? diarizationModel : undefined,
-        diarization_threshold: diarizationThreshold ?? 0.35,
+        diarization_threshold: diarizationThreshold ?? 0.85,
       };
 
       try {
@@ -451,6 +451,14 @@ export const useRunBatch = (sessionId: string) => {
       spokenLanguages,
       startTranscription,
       sessionId,
+      sttMode,
+      sttSegmentDuration,
+      cjkPostProcess,
+      cjkFeaturesRaw,
+      cjkServerSide,
+      diarizationEnabled,
+      diarizationModel,
+      diarizationThreshold,
     ],
   );
 };

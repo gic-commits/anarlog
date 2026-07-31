@@ -149,6 +149,27 @@ export const createBatchSlice = <T extends BatchState>(
       return false;
     }
 
+    if (import.meta.env.DEV) {
+      const speakerHints = hints.filter(
+        (
+          h,
+        ): h is RuntimeSpeakerHint & {
+          data: { type: "provider_speaker_index"; speaker_index: number };
+        } =>
+          h.data.type === "provider_speaker_index" && "speaker_index" in h.data,
+      );
+      const uniqueIndices = new Set(
+        speakerHints.map((h) => h.data.speaker_index),
+      );
+      console.log(
+        "[batch] persist: %d words, %d hints (%d speaker), unique speaker indices: %s",
+        words.length,
+        hints.length,
+        speakerHints.length,
+        JSON.stringify([...uniqueIndices].sort()),
+      );
+    }
+
     persist?.(words, hints, { mode: "replace" });
 
     set((state) => {
@@ -412,6 +433,20 @@ function transformBatch(
       console.log(
         "[batch] last word metadata:",
         words[words.length - 1].metadata,
+      );
+    }
+
+    if (import.meta.env.DEV) {
+      const firstSpeaker = alternative.words?.[0]?.speaker;
+      const uniqueSpeakers = new Set(
+        alternative.words?.map((w) => w.speaker) ?? [],
+      );
+      console.log(
+        "[batch] speaker check: first=%s unique=%s hints=%d words=%d",
+        JSON.stringify(firstSpeaker),
+        JSON.stringify([...uniqueSpeakers].sort()),
+        hints.length,
+        words.length,
       );
     }
 

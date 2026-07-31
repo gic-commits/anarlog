@@ -24,6 +24,7 @@ export function Transcript({
   const { uploadAudio, uploadTranscript } = useUploadFile(sessionId);
   const regenerateTranscript = useRegenerateTranscript(sessionId);
   const stopTranscription = useListener((state) => state.stopTranscription);
+  const stopRecording = useListener((state) => state.stop);
   const handleStopTranscription = useCallback(() => {
     void stopTranscription(sessionId);
   }, [sessionId, stopTranscription]);
@@ -31,9 +32,25 @@ export function Transcript({
   const runningBatch = screen.kind === "running_batch" ? screen : null;
   const hasSegments =
     runningBatch && Object.keys(runningBatch.segmentResponses).length > 0;
+  const fallbackSegments =
+    screen.kind === "batch_fallback"
+      ? Object.keys(screen.segmentResponses).length > 0
+      : false;
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
+      {screen.kind === "batch_fallback" && fallbackSegments && (
+        <>
+          <CompactProgress
+            percentage={undefined}
+            phase={undefined}
+            segmentCount={Object.keys(screen.segmentResponses).length}
+            onStop={stopRecording}
+            recording
+          />
+          <SegmentPreview segmentResponses={screen.segmentResponses} />
+        </>
+      )}
       {runningBatch && hasSegments && (
         <>
           <CompactProgress
@@ -100,11 +117,13 @@ function CompactProgress({
   phase,
   segmentCount,
   onStop,
+  recording,
 }: {
   percentage?: number;
   phase?: "importing" | "transcribing";
   segmentCount: number;
   onStop?: () => void;
+  recording?: boolean;
 }) {
   const pct =
     typeof percentage === "number" ? Math.round(percentage * 100) : null;
@@ -113,9 +132,11 @@ function CompactProgress({
     <div className="flex items-center gap-3 border-b px-4 py-2">
       <Spinner size={14} />
       <div className="text-muted-foreground flex-1 text-xs">
-        {phase === "importing"
-          ? "Importing audio..."
-          : `Transcribing... ${pct !== null ? `${pct}%` : ""}`}
+        {recording
+          ? "Recording... transcription in progress"
+          : phase === "importing"
+            ? "Importing audio..."
+            : `Transcribing... ${pct !== null ? `${pct}%` : ""}`}
         {" · "}
         {segmentCount} segment{segmentCount > 1 ? "s" : ""} done
       </div>

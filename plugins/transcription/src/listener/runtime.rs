@@ -160,13 +160,63 @@ impl ListenerRuntime for TauriRuntime {
             let runtime = Arc::new(LiveBatchRuntime { app: app.clone() });
             let mut manager = core::ProgressiveBatchManager::new(config).with_runtime(runtime);
 
+            // Set up diarization engine if enabled
+            let mut diarization_engine = if params.diarization_enabled {
+                match hypr_pyannote_local::incremental_diarization::IncrementalDiarizationEngine::new(
+                    hypr_pyannote_local::incremental_diarization::IncrementalDiarizationConfig {
+                        sample_rate: params.sample_rate,
+                        model_path: params.diarization_model.clone(),
+                        threshold: params.diarization_threshold,
+                        recluster_interval: 5,
+                    },
+                ) {
+                    Ok(engine) => {
+                        tracing::info!(
+                            session_id = %params.session_id,
+                            "diarization engine initialized for live stream"
+                        );
+                        Some(engine)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            session_id = %params.session_id,
+                            error = %e,
+                            "failed to initialize diarization engine, continuing without"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
             let mut rx = pcm_rx;
             while let Some(frame) = rx.recv().await {
+                if let Some(ref mut eng) = diarization_engine {
+                    let i16_samples: Vec<i16> =
+                        frame.iter().map(|&s| (s * 32767.0) as i16).collect();
+                    if let Err(e) = eng.feed_pcm(&i16_samples) {
+                        tracing::warn!(error = %e, "diarization feed_pcm error");
+                    }
+                }
                 manager.on_audio_frame(&frame);
             }
 
             match manager.finish().await {
-                Ok(response) => {
+                Ok(mut response) => {
+                    // Annotate with speaker labels after final clustering
+                    if let Some(ref mut eng) = diarization_engine {
+                        eng.finalize();
+                        if let Some(ch) = response.results.channels.first_mut() {
+                            if let Some(alt) = ch.alternatives.first_mut() {
+                                for word in &mut alt.words {
+                                    let mid = (word.start + word.end) / 2.0;
+                                    word.speaker = eng.speaker_at_time(mid);
+                                }
+                            }
+                        }
+                    }
+
                     let total_words = response
                         .results
                         .channels

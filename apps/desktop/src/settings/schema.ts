@@ -187,7 +187,7 @@ export const SETTING_DEFINITIONS = {
   diarization_threshold: {
     type: "number",
     path: ["ai", "diarization_threshold"],
-    default: 0.35 as number,
+    default: 0.85 as number,
   },
   timezone: {
     type: "string",
