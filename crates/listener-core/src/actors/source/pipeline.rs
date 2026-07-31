@@ -10,7 +10,7 @@ use crate::{
     ListenerRuntime, SessionDataEvent,
     actors::{ChannelMode, ListenerMsg, RecMsg, SAMPLE_RATE},
 };
-use hypr_audio_utils::f32_to_i16_bytes;
+use hypr_audio_utils::{f32_to_i16_bytes, mix_audio_f32};
 use hypr_vad_masking::VadMask;
 
 use super::{ListenerRefreshReplay, ListenerRouting, SourceFrame};
@@ -154,7 +154,14 @@ impl Pipeline {
             }
             ListenerRouting::Dropped => {}
             ListenerRouting::ProgressiveBatch(tx) => {
-                let _ = tx.try_send(Arc::clone(&item.mic));
+                let audio = match mode {
+                    ChannelMode::MicOnly => Arc::clone(&item.mic),
+                    ChannelMode::SpeakerOnly => Arc::clone(&item.spk),
+                    ChannelMode::MicAndSpeaker => {
+                        Arc::<[f32]>::from(mix_audio_f32(&item.mic, &item.spk))
+                    }
+                };
+                let _ = tx.try_send(audio);
             }
         }
     }
@@ -670,7 +677,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn progressive_batch_dispatches_mic_audio() {
+    async fn progressive_batch_dispatches_mixed_audio() {
         let mut pipeline = test_pipeline();
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
 
@@ -685,7 +692,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(&*frame, &[0.1_f32, -0.1, 0.2, -0.2]);
+        assert_eq!(&*frame, &[0.85_f32, -0.85, 1.0, -1.0]);
     }
 
     #[tokio::test]

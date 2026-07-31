@@ -12,6 +12,7 @@ pub struct ProgressiveBatchParams {
     pub model: String,
     pub language: Option<String>,
     pub sample_rate: u32,
+    pub segment_duration_ms: Option<u32>,
     pub diarization_enabled: bool,
     pub diarization_model: Option<String>,
     pub diarization_threshold: f32,

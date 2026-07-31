@@ -37,6 +37,8 @@ pub struct CaptureParams {
     #[serde(default)]
     pub provider: Option<String>,
     #[serde(default)]
+    pub segment_duration_ms: Option<u32>,
+    #[serde(default)]
     pub diarization_enabled: bool,
     #[serde(default)]
     pub diarization_model: Option<String>,
@@ -315,6 +317,7 @@ impl From<CaptureParams> for listener::actors::SessionParams {
             participant_human_ids: value.participant_human_ids,
             self_human_id: value.self_human_id,
             provider: value.provider,
+            segment_duration_ms: value.segment_duration_ms,
             diarization_enabled: value.diarization_enabled,
             diarization_model: value.diarization_model,
             diarization_threshold: value.diarization_threshold,
@@ -479,6 +482,10 @@ mod tests {
             participant_human_ids: vec![],
             self_human_id: None,
             provider: None,
+            segment_duration_ms: None,
+            diarization_enabled: false,
+            diarization_model: None,
+            diarization_threshold: 0.35,
         }
     }
 

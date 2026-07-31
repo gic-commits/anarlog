@@ -146,7 +146,7 @@ impl ListenerRuntime for TauriRuntime {
             let config = core::ProgressiveBatchConfig {
                 session_id: params.session_id.clone(),
                 sample_rate: params.sample_rate,
-                segment_duration_ms: 30000,
+                segment_duration_ms: params.segment_duration_ms.unwrap_or(30000),
                 overlap_ms: 1000,
                 max_concurrency: 2,
                 base_url: params.base_url,
