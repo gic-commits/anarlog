@@ -99,6 +99,115 @@ fn seg_with_speaker(
     )
 }
 
+/// Split a long VAD segment into turn-aligned sub-chunks using short-term
+/// energy pauses.
+///
+/// Cut points are chosen at the midpoint of each silence valley longer than
+/// `min_pause_s` — i.e. determined by the audio's own structure rather than a
+/// fixed window. Segments (or stretches) with no detectable pause are split at
+/// `max_chunk_s` intervals as a fallback so a long run of continuous speech
+/// still yields multiple embeddings.
+///
+/// Returns chunk (start_s, end_s) pairs relative to `global_start`.
+pub fn split_into_turn_chunks(
+    samples: &[i16],
+    global_start: f64,
+    sample_rate: u32,
+    min_pause_s: f64,
+    max_chunk_s: f64,
+) -> Vec<(f64, f64)> {
+    let dur_s = samples.len() as f64 / sample_rate as f64;
+    if dur_s <= max_chunk_s + 0.01 {
+        return vec![(global_start, global_start + dur_s)];
+    }
+
+    let rms_win = (0.03 * sample_rate as f64) as usize;
+    let rms_hop = rms_win;
+    let mut profile: Vec<f64> = Vec::new();
+    let mut i = 0;
+    while i < samples.len() {
+        let end = (i + rms_win).min(samples.len());
+        let frame = &samples[i..end];
+        let sum = frame
+            .iter()
+            .map(|&s| (s as f64 / 32768.0).powi(2))
+            .sum::<f64>()
+            / frame.len() as f64;
+        profile.push(sum.sqrt());
+        i += rms_hop;
+    }
+
+    // Adaptive threshold from the noise floor (10th percentile). Capped at half
+    // the peak RMS so a constant-amplitude signal (no real dynamic range) is
+    // never classified entirely as pause.
+    let mut sorted = profile.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let noise_floor = sorted[sorted.len() / 10];
+    let median = sorted[sorted.len() / 2];
+    let peak = *sorted.last().unwrap();
+    let threshold = (noise_floor * 3.0).max(median * 0.3).min(peak * 0.5);
+
+    // Find silence valleys: consecutive RMS frames below threshold.
+    let mut pauses: Vec<(usize, usize)> = Vec::new();
+    let mut in_pause = false;
+    let mut p_start = 0usize;
+    for (idx, &r) in profile.iter().enumerate() {
+        if r < threshold {
+            if !in_pause {
+                in_pause = true;
+                p_start = idx;
+            }
+        } else if in_pause {
+            in_pause = false;
+            pauses.push((p_start, idx));
+        }
+    }
+    if in_pause {
+        pauses.push((p_start, profile.len()));
+    }
+
+    let min_pause_frames = (min_pause_s / 0.03) as usize;
+    let max_chunk_frames = (max_chunk_s / 0.03) as usize;
+
+    let mut cuts: Vec<f64> = Vec::new();
+    let mut last = 0.0f64;
+    let dur_frames = profile.len() as f64 * 0.03;
+
+    for (a, b) in pauses.iter().filter(|(a, b)| b - a >= min_pause_frames) {
+        let mid = (a + b) as f64 / 2.0 * 0.03;
+        if mid - last >= 1.0 && dur_frames - mid >= 1.0 {
+            cuts.push(mid);
+            last = mid;
+        }
+    }
+
+    // Fallback: cap any stretch without a pause cut.
+    let mut final_cuts: Vec<f64> = Vec::new();
+    let mut anchor = 0.0f64;
+    for &c in &cuts {
+        while c - anchor > max_chunk_frames as f64 * 0.03 + 0.01 {
+            anchor += max_chunk_frames as f64 * 0.03;
+            final_cuts.push(anchor);
+        }
+        final_cuts.push(c);
+        anchor = c;
+    }
+    while dur_frames - anchor > max_chunk_frames as f64 * 0.03 + 0.01 {
+        anchor += max_chunk_frames as f64 * 0.03;
+        final_cuts.push(anchor);
+    }
+
+    let mut pts = vec![0.0];
+    pts.extend(final_cuts);
+    pts.push(dur_s);
+    pts.dedup_by(|a, b| (*a - *b).abs() < 0.05);
+    pts.iter()
+        .zip(pts.iter().skip(1))
+        .map(|(&a, &b)| (global_start + a, global_start + b))
+        .filter(|(a, b)| b - a >= 0.05)
+        .collect()
+}
+
 /// Split segment samples at lowest-RMS point in [½τ, τ].
 pub fn split_segment_at_energy(
     samples: &[i16],
@@ -229,7 +338,7 @@ mod tests {
     use super::*;
 
     fn seg(start: f64, end: f64) -> Segment {
-        let sr = 16000;
+        let sr: u32 = 16000;
         let len = ((end - start) * sr as f64) as usize;
         Segment {
             start,
@@ -239,7 +348,7 @@ mod tests {
     }
 
     fn seg_with_noise(start: f64, end: f64, silence_start: f64, silence_end: f64) -> Segment {
-        let sr = 16000;
+        let sr: u32 = 16000;
         let len = ((end - start) * sr as f64) as usize;
         let mut samples = vec![100i16; len];
         let si_lo = ((silence_start - start) * sr as f64) as usize;
@@ -296,6 +405,56 @@ mod tests {
     fn test_empty_input() {
         let result = min_cut_merge(vec![], &[], 16000, MinCutMergeConfig::default());
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_turn_chunks_single_short_segment() {
+        let sr: u32 = 16000;
+        let samples = vec![100i16; sr as usize * 2];
+        let chunks = split_into_turn_chunks(&samples, 10.0, sr, 0.2, 4.0);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], (10.0, 12.0));
+    }
+
+    #[test]
+    fn test_turn_chunks_no_pause_fallback_cap() {
+        let sr: u32 = 16000;
+        let samples = vec![100i16; sr as usize * 10];
+        let chunks = split_into_turn_chunks(&samples, 0.0, sr, 0.2, 4.0);
+        // No pauses (constant 100 amplitude → no valley below threshold).
+        // 10s / 4s cap → ceil(10/4) = 3 chunks.
+        assert_eq!(chunks.len(), 3);
+        assert!(chunks.iter().all(|&(a, b)| b > a));
+        assert_eq!(chunks[0].0, 0.0);
+        assert!((chunks.last().unwrap().1 - 10.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_turn_chunks_split_at_silence_valley() {
+        let sr: u32 = 16000;
+        // 2s loud, 0.4s silence, 2s loud → split at pause midpoint (~2.2s)
+        let mut samples = vec![100i16; sr as usize * 2];
+        samples.extend(vec![0i16; (0.4 * sr as f64) as usize]);
+        samples.extend(vec![100i16; sr as usize * 2]);
+        let chunks = split_into_turn_chunks(&samples, 0.0, sr, 0.2, 4.0);
+        assert_eq!(chunks.len(), 2);
+        assert!(
+            (chunks[0].1 - 2.2).abs() < 0.2,
+            "first ends near pause midpoint ~2.2s, got {}",
+            chunks[0].1
+        );
+        assert_eq!(chunks[0].1, chunks[1].0);
+    }
+
+    #[test]
+    fn test_turn_chunks_silence_too_short_ignored() {
+        let sr: u32 = 16000;
+        // 1.5s loud, 0.1s silence (below min_pause), 1.5s loud → single chunk (≤ cap)
+        let mut samples = vec![100i16; (1.5 * sr as f64) as usize];
+        samples.extend(vec![0i16; (0.1 * sr as f64) as usize]);
+        samples.extend(vec![100i16; (1.5 * sr as f64) as usize]);
+        let chunks = split_into_turn_chunks(&samples, 0.0, sr, 0.2, 4.0);
+        assert_eq!(chunks.len(), 1);
     }
 
     #[test]

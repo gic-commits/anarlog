@@ -2,6 +2,7 @@ use pyannote_local::embedding_providers::create_provider_from_path;
 use pyannote_local::incremental_diarization::{
     IncrementalDiarizationConfig, IncrementalDiarizationEngine,
 };
+use pyannote_local::segmentation::Segmenter;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -118,4 +119,51 @@ fn sweep_threshold_for_audio() {
             unique.iter().copied().collect::<Vec<_>>(),
         );
     }
+}
+
+/// Regression: the fixed 0.85 default collapsed this session's multi-speaker
+/// audio to a single speaker. The adaptive threshold (median + 0.15·MAD)
+/// combined with the min-duration speaker filter must recover multiple
+/// speakers through the real feed_segments + finalize path.
+#[test]
+fn adaptive_threshold_recovers_multiple_speakers() {
+    let audio_path = Path::new(
+        "/Users/fuqingqiu/Library/Application Support/com.hyprnote.dev/sessions/5fdd76a7-a324-4eda-b399-415dd70503d3/audio.mp3",
+    );
+    if !audio_path.exists() {
+        eprintln!("audio not found, skipping adaptive threshold regression");
+        return;
+    }
+
+    let pcm = load_pcm_from_mp3(audio_path);
+    let mut segmenter = Segmenter::new(16000).unwrap();
+    let segments = segmenter.process(&pcm, 16000).unwrap();
+
+    let model_name = "wespeaker_zh_cnceleb_resnet34_LM.onnx";
+    let model_path = resolve_model_path(model_name).unwrap();
+
+    // Default 0.85 → adaptive path kicks in.
+    let mut engine = IncrementalDiarizationEngine::new(IncrementalDiarizationConfig {
+        sample_rate: 16000,
+        model_path: Some(model_path.to_str().unwrap().to_string()),
+        threshold: 0.85,
+        recluster_interval: usize::MAX,
+    })
+    .unwrap();
+    engine.feed_segments(&segments).unwrap();
+    engine.finalize();
+
+    let segs = engine.speaker_segments();
+    let unique: HashSet<usize> = segs.iter().map(|s| s.speaker).collect();
+    eprintln!(
+        "adaptive threshold: {} segs, {} unique speakers {:?}",
+        segs.len(),
+        unique.len(),
+        unique.iter().copied().collect::<Vec<_>>(),
+    );
+    assert!(
+        unique.len() >= 3,
+        "adaptive threshold should recover >=3 speakers, got {}",
+        unique.len()
+    );
 }

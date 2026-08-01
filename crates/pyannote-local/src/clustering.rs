@@ -91,6 +91,36 @@ pub fn cluster_embeddings(embeddings: &[Vec<f32>], threshold: f32) -> Vec<usize>
     agglomerative_cluster(&dist, embeddings.len(), threshold)
 }
 
+/// Estimate a clustering threshold from the embedding distance distribution.
+///
+/// Uses median + 0.15·MAD (robust scale) of the pairwise cosine distances.
+/// The median captures the "typical" pairwise distance; a small positive MAD
+/// bias separates speakers whose chunks are more similar than average while
+/// avoiding the collapse that a fixed 0.85 threshold causes on audio with
+/// tightly-clustered embeddings.
+pub fn estimate_threshold(embeddings: &[Vec<f32>]) -> f32 {
+    if embeddings.len() < 3 {
+        return 0.85;
+    }
+    let dist = build_distance_matrix(embeddings);
+    let n = embeddings.len();
+    let mut dists: Vec<f32> = Vec::with_capacity(n * n / 2);
+    for i in 0..n {
+        for j in i + 1..n {
+            dists.push(dist[i * n + j]);
+        }
+    }
+    if dists.is_empty() {
+        return 0.85;
+    }
+    dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let median = dists[dists.len() / 2];
+    let mut absdev: Vec<f32> = dists.iter().map(|&d| (d - median).abs()).collect();
+    absdev.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mad = absdev[absdev.len() / 2];
+    (median + 0.15 * mad).clamp(0.4, 0.9)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +149,42 @@ mod tests {
     fn test_cosine_distance_same() {
         let d = cosine_distance(&[1.0, 0.0], &[1.0, 0.0]);
         assert!(d.abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_estimate_threshold_few_embeddings_falls_back() {
+        assert_eq!(estimate_threshold(&[vec![1.0, 0.0]]), 0.85);
+        assert_eq!(estimate_threshold(&[vec![1.0, 0.0], vec![0.5, 0.5]]), 0.85);
+    }
+
+    #[test]
+    fn test_estimate_threshold_tight_distribution_low() {
+        // 6 identical-ish embeddings → tiny distances → threshold clamped to floor
+        let embs: Vec<Vec<f32>> = (0..6).map(|_| vec![1.0, 0.0, 0.0]).collect();
+        let t = estimate_threshold(&embs);
+        assert!(t >= 0.4, "clamped to floor, got {t}");
+        // With everything identical, clusters all merge
+        let c = cluster_embeddings(&embs, t);
+        let ncl = c.iter().max().map(|&x| x + 1).unwrap_or(0);
+        assert_eq!(ncl, 1);
+    }
+
+    #[test]
+    fn test_estimate_threshold_two_speaker_groups() {
+        // Two distinct speaker groups: A = 3 chunks near (1,0), B = 3 chunks near (-1,0).
+        let mut embs: Vec<Vec<f32>> = Vec::new();
+        for i in 0..3 {
+            let a = i as f32 * 0.01;
+            embs.push(vec![1.0 - a, a, 0.0]);
+            embs.push(vec![-1.0 + a, a, 0.0]);
+        }
+        let t = estimate_threshold(&embs);
+        // Median intra-group distance ~0.01; inter-group ~2.0. Threshold should
+        // land between → separate into 2 clusters.
+        assert!(t > 0.05 && t < 1.0, "unexpected threshold {t}");
+        let c = cluster_embeddings(&embs, t);
+        let ncl = c.iter().max().map(|&x| x + 1).unwrap_or(0);
+        assert_eq!(ncl, 2, "expected 2 clusters, got {ncl}");
     }
 
     #[test]

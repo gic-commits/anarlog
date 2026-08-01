@@ -367,7 +367,7 @@ finish() → engine.finalize() 最终聚类
 ### Phase C: UI（✅ 已完成）
 
 - [x] Settings 页面新增 Diarization toggle + model 选择 + threshold slider（`select.tsx` DiarizationSection）
-- [x] threshold 默认 0.85（经 `tests/find_threshold.rs` 真实音频 sweep 验证）
+- [x] threshold 默认 0.85（设置项保留；engine 在默认值时改走自适应估计，Aug 1 Night 实证发现固定 0.85 对中位距离 ~0.68 的多说话人音频会塌成 1 簇）
 - [x] Segment 渲染添加 speaker 标签 + 颜色
 - [x] CJK 后处理兼容 diarization（保留 speaker 标签）
 
@@ -379,13 +379,16 @@ finish() → engine.finalize() 最终聚类
   - `feed_segments(&[Segment])` → 复用外部 Segmenter 的 VAD 段（batch 文件模式使用，跳过内部 VAD）
   - `finalize()` → 收尾 VAD + 最终聚类 + 无效段近邻 speaker 填充
   - `speaker_at_time(t)` → 半开区间 `[start, end)` 查 speaker，静音间隙返回 None（由 `propagate_speaker_to_none` 填充）
+- [x] **方案 B 能量停顿切分**（Aug 1 Night）：`feed_one_segment` 改用 `split_into_turn_chunks`（`min_cut_merge.rs`）— 30ms RMS 找静音谷在停顿中点切子段，切分点由音频决定而非固定 2s 常数；无停顿区段回退 4s 封顶。替换原固定 `EMBEDDING_CHUNK_SECS=2.0` 窗口
+- [x] **自适应聚类阈值**（Aug 1 Night）：`clustering::estimate_threshold` = 两两距离 median + 0.15·MAD；engine 在 threshold 为默认 0.85 时自动估计，用户显式调过滑块的值优先
+- [x] **最小时长过滤**（Aug 1 Night）：`smooth_speakers` 删除累计时长 < 2s 的孤立 speaker（噪声块），归并到最近 temporal 邻居，解决短块 embedding 噪音导致的过度分段
 - [x] 文件路径集成（`integration.rs`）：Segmenter VAD 先行 → `min_cut_merge` 分组 → 每段转录后按词中位时间 `speaker_at_time(group_start + mid)` 标注 → stitch 后 `propagate_speaker_to_none` 前后向填充
-- [x] 录音流集成（`plugins/transcription/src/listener/runtime.rs`）：录音中 `feed_pcm`（f32→i16 转换）→ `finish()` 时 `finalize()` → 按词中位时间标注 speaker
+- [x] 录音流集成（`plugins/transcription/src/listener/runtime.rs`）：录音中复用 `VadGroupStream.take_vad_segments()` → `feed_segments`（与文件路径同一批 VAD 段）→ `finish()` 时补喂尾部 + `finalize()` → 按词中位时间标注 speaker
 - [ ] 待验证：真实设备端到端（speaker 标签是否随 `SegmentResult` 正确显示）
 
 ## 10. 开放问题
 
-1. **阈值自适应**: 是否可以根据 embedding 距离分布自动计算最优阈值？
+1. ~~**阈值自适应**~~: ✅ 已解决（Aug 1 Night）— `clustering::estimate_threshold`（median + 0.15·MAD），默认 0.85 时自动估计。遗留：不同音频最优阈值仍随距离尺度变化，MAD 系数 0.15 是基于 5fdd76a7（4 说话人）标定的，c5ee333b 上会偏高（7 spk vs 可能更少）
 
 2. **说话人数预设**: 是否允许用户指定 speaker count？如果已知是 2-person 对话，可固定 n_clusters=2。
 
@@ -421,3 +424,24 @@ t=0.35 → 4 clusters ✅ (GT=4)
 ```
 
 裸测代码：`crates/pyannote-local/tests/diarization_pipeline.rs`（19 tests, all ✅）
+
+### 11.3 Aug 1 Night 实证：固定 0.85 塌缩 + 自适应修复（真实录音）
+
+**问题复现**：`5fdd76a7`（149.65s，已知 4 说话人）在默认 threshold=0.85 下 diarization 输出 1 speaker。实证根因是聚类阈值远高于 embedding 距离尺度：
+
+| 指标 | 5fdd76a7 | c5ee333b |
+|------|---------:|---------:|
+| 子段 embedding 数 | 71 | 115 |
+| 两两距离 p10 / p50 / p90 | 0.416 / 0.676 / 0.838 | 0.379 / 0.468 / 0.703 |
+
+一半以上 pairwise 距离 < 0.85 → agglomerative average-linkage 全并成 1 簇。且最优阈值随音频变化（5fdd76a7 需 ~0.70，c5ee333b 需 ~0.60），任何固定阈值无法跨音频通用；"合并距离最大间隙"启发式也失败（最大间隙总在最后的 2→1 合并）。
+
+**修复**（`clustering::estimate_threshold` = median + 0.15·MAD，clamp [0.4, 0.9]）+ `smooth_speakers`（剔除累计 <2s 的孤立 speaker）：
+
+| 配置 | 5fdd76a7 结果 |
+|------|------|
+| fixed 0.85（旧默认） | **1 speaker**（bug） |
+| fixed 0.70 | 4 speakers |
+| **adaptive + 2s 过滤** | **4 speakers** ✓ spk0(片头) / spk1(主讲) / spk2(spk3(Q&A)，与人工验证 [1,2,0,3] 一致 |
+
+live（`feed_pcm`/`feed_segments`）与 file re-transcript 共用引擎核心 → 两条路径自动获得修复。

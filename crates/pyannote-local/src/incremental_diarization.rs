@@ -5,6 +5,10 @@ use crate::incremental_vad::IncrementalVad;
 use crate::segmentation::Segment;
 
 const MIN_EMBEDDING_SAMPLES: usize = 16000;
+const MIN_PAUSE_SECS: f64 = 0.2;
+const MAX_CHUNK_SECS: f64 = 4.0;
+const DEFAULT_THRESHOLD: f32 = 0.85;
+const MIN_SPEAKER_SECS: f64 = 2.0;
 
 #[derive(Debug, Clone)]
 pub struct IncrementalDiarizationConfig {
@@ -90,23 +94,7 @@ impl IncrementalDiarizationEngine {
         let new_segs = self.vad.feed(samples)?;
 
         for seg in &new_segs {
-            let embedding = if seg.samples.len() >= MIN_EMBEDDING_SAMPLES {
-                let f32_s: Vec<f32> = seg.samples.iter().map(|&s| s as f32 / 32768.0).collect();
-                self.provider.compute(&f32_s).ok().flatten()
-            } else {
-                None
-            };
-
-            let valid = embedding.is_some();
-            self.segments.push(VocSeg {
-                start: seg.start,
-                end: seg.end,
-                speaker: self.segments.len(),
-                embedding,
-                valid,
-            });
-
-            self.since_last_cluster += 1;
+            self.feed_one_segment(seg);
         }
 
         if self.since_last_cluster >= self.config.recluster_interval && !self.segments.is_empty() {
@@ -122,21 +110,7 @@ impl IncrementalDiarizationEngine {
     /// you already have VAD segments from an external segmenter (e.g. Segmenter).
     pub fn feed_segments(&mut self, segments: &[Segment]) -> Result<(), crate::Error> {
         for seg in segments {
-            let embedding = if seg.samples.len() >= MIN_EMBEDDING_SAMPLES {
-                let f32_s: Vec<f32> = seg.samples.iter().map(|&s| s as f32 / 32768.0).collect();
-                self.provider.compute(&f32_s).ok().flatten()
-            } else {
-                None
-            };
-            let valid = embedding.is_some();
-            self.segments.push(VocSeg {
-                start: seg.start,
-                end: seg.end,
-                speaker: self.segments.len(),
-                embedding,
-                valid,
-            });
-            self.since_last_cluster += 1;
+            self.feed_one_segment(seg);
         }
         if self.since_last_cluster >= self.config.recluster_interval && !self.segments.is_empty() {
             self.recluster();
@@ -145,23 +119,45 @@ impl IncrementalDiarizationEngine {
         Ok(())
     }
 
-    /// Final re-cluster after all audio has been fed.
-    pub fn finalize(&mut self) {
-        for seg in self.vad.finish() {
-            let embedding = if seg.samples.len() >= MIN_EMBEDDING_SAMPLES {
-                let f32_s: Vec<f32> = seg.samples.iter().map(|&s| s as f32 / 32768.0).collect();
-                self.provider.compute(&f32_s).ok().flatten()
-            } else {
-                None
-            };
+    /// Split a VAD segment into turn-aligned sub-chunks so each embedding
+    /// covers a single speaker turn region. Long VAD segments from continuous
+    /// group speech blend multiple speakers into one average embedding;
+    /// sub-chunking at energy pauses recovers per-turn speaker separation.
+    fn feed_one_segment(&mut self, seg: &Segment) {
+        let sample_rate = self.config.sample_rate as f64;
+        let chunks = crate::min_cut_merge::split_into_turn_chunks(
+            &seg.samples,
+            seg.start,
+            self.config.sample_rate,
+            MIN_PAUSE_SECS,
+            MAX_CHUNK_SECS,
+        );
+
+        for (start_s, end_s) in chunks {
+            let lo = ((start_s - seg.start) * sample_rate) as usize;
+            let hi = (((end_s - seg.start) * sample_rate) as usize).min(seg.samples.len());
+            if hi - lo < MIN_EMBEDDING_SAMPLES {
+                continue;
+            }
+            let sub = &seg.samples[lo..hi];
+            let f32_s: Vec<f32> = sub.iter().map(|&s| s as f32 / 32768.0).collect();
+            let embedding = self.provider.compute(&f32_s).ok().flatten();
             let valid = embedding.is_some();
             self.segments.push(VocSeg {
-                start: seg.start,
-                end: seg.end,
+                start: start_s,
+                end: end_s,
                 speaker: self.segments.len(),
                 embedding,
                 valid,
             });
+            self.since_last_cluster += 1;
+        }
+    }
+
+    /// Final re-cluster after all audio has been fed.
+    pub fn finalize(&mut self) {
+        for seg in self.vad.finish() {
+            self.feed_one_segment(&seg);
         }
         if !self.segments.is_empty() {
             self.recluster();
@@ -210,7 +206,17 @@ impl IncrementalDiarizationEngine {
             return;
         }
 
-        let cids = clustering::cluster_embeddings(&valid_embs, self.config.threshold);
+        // Default threshold 0.85 is a loose upper bound; on tightly-clustered
+        // audio it collapses every embedding into one speaker. When the config
+        // value is still the default, estimate the cutoff from the actual
+        // distance distribution; an explicitly-tuned value wins.
+        let threshold = if (self.config.threshold - DEFAULT_THRESHOLD).abs() < 1e-6 {
+            clustering::estimate_threshold(&valid_embs)
+        } else {
+            self.config.threshold
+        };
+
+        let cids = clustering::cluster_embeddings(&valid_embs, threshold);
 
         let mut vi = 0;
         for seg in &mut self.segments {
@@ -222,6 +228,12 @@ impl IncrementalDiarizationEngine {
             }
         }
 
+        // Per-chunk embeddings are noisy; a single 1-3s chunk can land in its
+        // own cluster surrounded by a dominant speaker. Smooth by majority
+        // vote over a time window, so brief misassigned chunks get absorbed
+        // into their temporal neighbors.
+        self.smooth_speakers();
+
         // Propagate speaker from nearest valid segment to short/invalid ones.
         let n = self.segments.len();
         for i in 0..n {
@@ -229,6 +241,61 @@ impl IncrementalDiarizationEngine {
                 continue;
             }
             let spk = self.nearest_valid_speaker(i).unwrap_or(0);
+            self.segments[i].speaker = spk;
+        }
+    }
+
+    /// Reassign each valid segment to the majority speaker among valid
+    /// segments whose centers fall within `SMOOTH_WINDOW_SECS` of its center.
+    fn smooth_speakers(&mut self) {
+        let n = self.segments.len();
+        if n < 3 {
+            return;
+        }
+
+        // Drop speakers whose cumulative duration is negligible — these are
+        // isolated 1-2s chunks that the noisy per-chunk embedding put in their
+        // own cluster. Real speakers (even briefly interleaved ones) retain
+        // several seconds of coverage and are preserved.
+        let mut duration_by_speaker: std::collections::HashMap<usize, f64> =
+            std::collections::HashMap::new();
+        for seg in &self.segments {
+            if seg.valid {
+                *duration_by_speaker.entry(seg.speaker).or_insert(0.0) += seg.end - seg.start;
+            }
+        }
+        let keep: std::collections::HashSet<usize> = duration_by_speaker
+            .iter()
+            .filter(|&(_, &d)| d >= MIN_SPEAKER_SECS)
+            .map(|(&s, _)| s)
+            .collect();
+
+        if keep.len() == duration_by_speaker.len() {
+            return;
+        }
+
+        // Reassign dropped speakers to their temporally nearest kept speaker.
+        let speakers: Vec<usize> = self.segments.iter().map(|s| s.speaker).collect();
+        let mut reassigned: Vec<usize> = Vec::with_capacity(n);
+        for (i, seg) in self.segments.iter().enumerate() {
+            if !seg.valid || keep.contains(&seg.speaker) {
+                reassigned.push(speakers[i]);
+                continue;
+            }
+            let center = (seg.start + seg.end) / 2.0;
+            let mut best: Option<(usize, f64)> = None;
+            for (j, other) in self.segments.iter().enumerate() {
+                if i == j || !other.valid || !keep.contains(&other.speaker) {
+                    continue;
+                }
+                let d = ((other.start + other.end) / 2.0 - center).abs();
+                if best.map_or(true, |(_, bd)| d < bd) {
+                    best = Some((other.speaker, d));
+                }
+            }
+            reassigned.push(best.map(|(s, _)| s).unwrap_or(speakers[i]));
+        }
+        for (i, spk) in reassigned.into_iter().enumerate() {
             self.segments[i].speaker = spk;
         }
     }
@@ -276,4 +343,70 @@ fn resolve_model_path(path_str: &str) -> Option<std::path::PathBuf> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn engine_with_segments(specs: &[(f64, f64, usize, bool)]) -> IncrementalDiarizationEngine {
+        let mut engine =
+            IncrementalDiarizationEngine::new(IncrementalDiarizationConfig::default()).unwrap();
+        engine.segments = specs
+            .iter()
+            .map(|&(start, end, speaker, valid)| VocSeg {
+                start,
+                end,
+                speaker,
+                embedding: valid.then(|| vec![0.0; 4]),
+                valid,
+            })
+            .collect();
+        engine
+    }
+
+    #[test]
+    fn test_smooth_keeps_dominant_speakers() {
+        // spk0: 10s total (two chunks), spk1: brief 1.5s noise chunk.
+        let mut engine = engine_with_segments(&[
+            (0.0, 4.0, 0, true),
+            (4.0, 10.0, 0, true),
+            (10.0, 11.5, 1, true),
+            (11.5, 16.0, 0, true),
+        ]);
+        engine.smooth_speakers();
+        // spk1 (1.5s < 2.0s) reassigned to spk0.
+        assert!(engine.segments.iter().all(|s| s.speaker == 0));
+    }
+
+    #[test]
+    fn test_smooth_keeps_real_interleaved_speaker() {
+        // spk0 main (12s), spk1 real secondary (6s, interleaved twice).
+        let mut engine = engine_with_segments(&[
+            (0.0, 5.0, 0, true),
+            (5.0, 8.0, 1, true),
+            (8.0, 15.0, 0, true),
+            (15.0, 18.0, 1, true),
+            (18.0, 22.0, 0, true),
+        ]);
+        engine.smooth_speakers();
+        let speakers: std::collections::HashSet<usize> =
+            engine.segments.iter().map(|s| s.speaker).collect();
+        assert_eq!(speakers.len(), 2, "both real speakers retained");
+        assert!(speakers.contains(&0) && speakers.contains(&1));
+    }
+
+    #[test]
+    fn test_smooth_noop_when_all_above_min() {
+        let mut engine = engine_with_segments(&[
+            (0.0, 4.0, 0, true),
+            (4.0, 8.0, 0, true),
+            (8.0, 12.0, 1, true),
+            (12.0, 16.0, 1, true),
+        ]);
+        let before: Vec<usize> = engine.segments.iter().map(|s| s.speaker).collect();
+        engine.smooth_speakers();
+        let after: Vec<usize> = engine.segments.iter().map(|s| s.speaker).collect();
+        assert_eq!(before, after);
+    }
 }
