@@ -662,6 +662,49 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | `cargo test -p pyannote-local --test diarization_pipeline --test find_threshold` | ✅ 21 + 1 sweep |
 | dprint fmt | ✅ |
 
+## Aug 1 (Night) — 方案 B：能量停顿切分 + 自适应 threshold + 最小时长过滤 ✅
+
+### 问题根因（实证定位）
+
+用户实测"diarization 1 unique speakers"的**真正根因是聚类 threshold=0.85 太松**，不是分块方式：
+- 71 个 2s 子段 embedding 两两余弦距离：p10=0.416 p50=0.676 p90=0.838 → 一半以上距离 < 0.85 → 全并成 1 簇。
+- 最优 threshold 随音频变化：5fdd76a7 需 ~0.70（中位距 0.687），c5ee333b 需 ~0.60（中位距 0.468）。固定阈值无法跨音频通用。
+- 两音频距离尺度差异巨大，任何固定分位数都不可行；"合并距离最大间隙/相对间隙"启发式也失败（最大间隙总在最后 2→1 合并）。
+
+### 落地改动
+
+| 组件 | 改动 |
+|------|------|
+| `min_cut_merge.rs` | 新增 `split_into_turn_chunks`（:112）：短时能量(30ms RMS)找静音谷 → 停顿中点切子段（切分点由音频决定）；阈值 = `max(noise_floor*3, median*0.3).min(peak*0.5)`；无停顿区段回退 `max_chunk_s`(4s) 封顶。替换固定 2s 窗口 |
+| `incremental_diarization.rs` | `feed_one_segment` 改用 `split_into_turn_chunks`（MIN_PAUSE_SECS=0.2, MAX_CHUNK_SECS=4.0）；`recluster` 在 threshold=默认0.85 时改调 `clustering::estimate_threshold` 自适应；新增 `smooth_speakers` 按累计时长过滤（MIN_SPEAKER_SECS=2.0，删除 <2s 的孤立 speaker 归并到最近邻居） |
+| `clustering.rs` | 新增 `estimate_threshold`（:101）：median + 0.15·MAD 的两两距离，clamp [0.4, 0.9] |
+| `tests/find_threshold.rs` | 新增 `adaptive_threshold_recovers_multiple_speakers` 回归测试（默认 0.85 → 自适应，断言 ≥3 speakers） |
+
+### 实证结果（真实音频 5fdd76a7，已知 4 说话人）
+
+| 配置 | 结果 |
+|------|------|
+| fixed 0.85（旧默认） | **1 speaker**（bug 复现） |
+| fixed 0.70 | 4 speakers |
+| **adaptive + 2s 过滤** | **4 speakers** ✓ spk0(0.6-2.7s 片头)/spk1(3.1-67.2s 主讲)/spk2(67.9-72.0+78.5-83.9+110.4-119.0 Q&A)/spk3(72.0-78.5 Q&A)，与人工验证 [1,2,0,3] 一致 |
+| c5ee333b（未知真值，264s） | adaptive 18→(2s 过滤后)7；fixed0.70 仍塌成 1 |
+
+### 验证
+
+| 命令 | 结果 |
+|------|------|
+| `cargo check -p pyannote-local -p listener2-core -p tauri-plugin-transcription -p listener-core` | ✅ |
+| `cargo test -p pyannote-local --lib` | ✅ 26/26（+3 estimate_threshold、+3 smooth_speakers） |
+| `cargo test -p pyannote-local --test diarization_pipeline --test find_threshold` | ✅ 21 + 1 sweep + 1 adaptive 回归 |
+| `cargo test -p listener2-core` | ✅ 127/127 |
+| `cargo test -p tauri-plugin-transcription` | ✅ 34/34 |
+| dprint fmt | ✅ |
+
+### 遗留
+
+- c5ee333b 的真实说话人数未确认（DB 里无 ground truth，transcript speaker 全是 provider 的 speaker_index:0）。adaptive+过滤给 7，若实际更少可再调 MIN_SPEAKER_SECS。
+- threshold 仍是用户可配置（设置滑块 0.1-0.99）；engine 仅在默认 0.85 时走自适应，显式调过滑块的值优先。
+
 ## 下一步工作排布
 
 ### Sprint 3 Phase D（录音流 diarization）— ✅ live 对齐（见 Aug 1 PM），待真机端到端验证
@@ -669,6 +712,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 录音流（`plugins/transcription/src/listener/runtime.rs`）已集成 `IncrementalDiarizationEngine`：
 - 录音期间 VAD 段（`VadGroupStream.take_vad_segments`）实时 `feed_segments`（与 file 路径同一批 VAD 段）
 - `finish()` 时补喂 flush 尾部 + `finalize()` 重聚类，按词中位时间 `speaker_at_time()` 标注 speaker
+- "1 unique speakers" bug 已修复（Aug 1 Night：自适应 threshold + 最小时长过滤，5fdd76a7 验证 4 speakers）
 - 仍待验证：真实设备端到端（speaker 标签是否随 `SegmentResult` 正确显示）
 
 ### 已有但未落库的 diarization 改动（Jul 30-31，随本次 commit 提交）
@@ -680,7 +724,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 - `integration.rs` — VAD 先行（Segmenter）→ diarization 用 `feed_segments` 复用同一批 VAD 段 → 词级 `speaker_at_time` 标注 + `propagate_speaker_to_none` 前后向填充；大量 `[vad-batch]` / `[diarization]` 诊断日志
 - 前端 `useStartListening` / `useRunBatch` — diarization 三参数贯通 + useRunBatch deps 修复
 - `batch.ts` — DEV-only speaker/hint 调试日志
-- threshold 默认 0.85（schema.ts / select.tsx / useRunBatch 三处一致）
+- threshold 默认 0.85（schema.ts / select.tsx / useRunBatch 三处一致）；engine 在默认值时走自适应估计（Aug 1 Night），显式调过滑块的值优先
 
 ### 远期优化方向
 
