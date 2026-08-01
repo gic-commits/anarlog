@@ -70,6 +70,7 @@ Sprint 2 全部 Phase A/B/C/D ✅ 已完成，当前无活跃 Gap。
 |-----|------|--------|
 | D | segment_overlap_ms / max_retries 配置化 | 🟢 低 |
 | C | 前端 progress 事件（已由增量展示替代） | 🟢 已关闭 |
+| Q | 服务端 whisper 对输入字节敏感（等价音频一个 loop/500、一个正常）；客户端 rodio 解码字节触发 500/garbage，ffmpeg 解码字节正常。已报服务端（Aug 2）；若长期不修加客户端防御（重复词/avg_logprob 检测 + 换 ffmpeg 解码重试）| 🔴 高（阻塞 1:05-1:30 段）|
 
 ---
 

@@ -706,9 +706,38 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 - c5ee333b 的真实说话人数未确认（DB 里无 ground truth，transcript speaker 全是 provider 的 speaker_index:0）。adaptive+过滤给 7，若实际更少可再调 MIN_SPEAKER_SECS。
 - threshold 仍是用户可配置（设置滑块 0.1-0.99）；engine 仅在默认 0.85 时走自适应，显式调过滑块的值优先。
 
+## Aug 2 — 服务端丢段确认修复 + 1:05-1:30 段 whisper loop/500 调查（报给服务端）
+
+### ① 服务端丢段确认修复 ✅
+
+之前"seg5-from-mp3 只转写前 8.6s"的服务端问题，服务端声明已修复。用可复现截断的 `/tmp/hypr-dump/seg5-from-mp3.raw`（796800B）重新 POST：
+- 现在**完整转写 24.9s**（97 words，覆盖到 24.9s），与 `seg5-full.raw` 结果一致。
+- 无需客户端改动。
+
+### ② 新问题：1:05-1:30 段被跳过（whisper loop / 500）⏸️ 已报服务端
+
+re-transcript 实测：1:05-1:30 段（女声中文 → 男声带东南亚口音英语切换区）仍缺失。日志 `progressive_batch-test.log` metadata：`segments_total: 7, segments_stitched: 6, abandoned_segments: 3, gap_warnings: after_segment: 3, before_segment: 4, gap_ms: 11261` → **group3（67.88-87.45s）被 abandoned**。
+
+**根因（客户端复现 + 对照实验定位）：**
+- `integration.rs` 用 `min_cut_merge` 分 7 组；group3=67.88-87.45s，group4=87.45-110.24s，两组合并（42.36s）提交 → HTTP 200 但返回 100+ 次重复"對"的 garbage。
+- 客户端 rodio 解码的 group3（626240B）单独 POST → **稳定 HTTP 500**（3/3 次，0.2s 立即失败，`{"detail":"Internal server error"}`）；拆半段后 200 但前半 garbage。
+- 同段 **ffmpeg 解码**（字节数相同 626240B）→ **完全正常**（"我覺得是有的就是...因為中國是一個非常大的國家..."）。
+- 两解码器内容等价（能量包络相关 0.9947，RMS/peak/zcr 一致，时间对齐偏移 0）但**逐字节不同**（626240B 中 ~519KB ≈83% 不同）。
+- rodio 版 whisper 陷入**重复输出 loop**（`avg_logprob=-0.078` 异常高 = 自洽循环；正常转写 `avg_logprob=-0.50`）→ worker 内部异常 → 500。
+- rodio 开头无静音填充（mp3 第 0 采样即内容），ffmpeg 开头 ~60ms 静音 —— 可能是触发差异之一。
+
+**结论**：服务端 whisper 对输入字节细微差异敏感（等价音频一个 loop/500、一个正常）。客户端重试 3 次无效（稳定复现，不是瞬态）。**已报给服务端**，证据文件见问题清单 #8。
+
+**客户端侧候选防御（若服务端短期不修）**：检测响应中重复词比例 / `avg_logprob` 异常高 → 对该组换 ffmpeg 解码重试。
+
+### 验证 / 提交
+
+- `git log`: `c495cd5ba`（min_duration_secs 清理确认）、`f82712ccb`（服务端丢段修复确认）、Aug 1 三个 commit（diarization 方案B/后端/前端）
+- 工作区干净，无未提交代码（仅临时诊断文件已删除）
+
 ## 下一步工作排布
 
-### 未解决问题清单（截至 Aug 1 Night 提交后）
+### 未解决问题清单（截至 Aug 2 提交后）
 
 | # | 问题 | 状态 | 后续动作 |
 |---|------|------|----------|
@@ -719,6 +748,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | 5 | **真机端到端**：live 录音 speaker 标签是否随 `SegmentResult` 正确显示 | 待验证 | 需真机录音测试（Sprint 3 Phase D 收尾）|
 | 6 | **内存峰值确认** <50MB（流式解码 + VAD prune）| 待实测 | 长录音（~1h）跑一遍验证 |
 | 7 | **MAD 系数 0.15 标定单一音频** | ⚠️ 需更多音频样本 | 当前只基于 5fdd76a7（4 说话人）标定；收集更多多说话人音频验证自适应阈值泛化 |
+| 8 | **服务端 whisper 对字节敏感**：1:05-1:30 段（group3=67.88-87.45s，女声中文→男声东南亚口音英语切换区）客户端 rodio 解码字节提交稳定 HTTP 500 或返回重复"對"的 whisper loop garbage；同段 ffmpeg 解码字节完全正常 | ⏸️ 已报给服务端（Aug 2）| 两个解码器内容等价（能量包络相关 0.9947，RMS/peak/zcr 一致，时间对齐 0）但逐字节不同（626240B 中 ~83% 不同）→ 服务端 whisper 对输入字节细微差异敏感。rodio 版本 whisper 陷入重复 loop（avg_logprob=-0.078 vs 正常 -0.50）→ worker 内部异常 → 500。证据文件：`/tmp/hypr-dump/client/group3.raw`(500) vs `/tmp/hypr-dump/g3-ffmpeg.raw`(200)、`client/g3a.raw`(200但garbage) vs `client/g3a-ffmpeg.raw`(200正常)。客户端重试 3 次无效（稳定复现）。**等服务端修复**；若长期不修，可加客户端防御：检测重复词比例/avg_logprob 异常高的响应 → 该组换 ffmpeg 解码重试 |
 
 ### Sprint 3 Phase D（录音流 diarization）— ✅ live 对齐 + 自适应修复完成，仅剩真机验证
 
@@ -735,6 +765,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 2. 复测 Bug 2（batch target fallback，问题清单 #3）
 3. 收集更多多说话人音频验证自适应 threshold 泛化 + 确认 c5ee333b 真实说话人数（#2/#7）
 4. 长录音内存峰值实测（#6）
+5. 服务端 whisper 字节敏感：等 speaches 修复（#8）；若长期不修，实现客户端防御（重复词/avg_logprob 检测 + 换 ffmpeg 解码重试）
 
 ### 已有但未落库的 diarization 改动（Jul 30-31，已随 Aug 1 commit 提交）
 
