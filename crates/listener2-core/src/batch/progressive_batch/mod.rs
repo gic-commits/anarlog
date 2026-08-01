@@ -7,6 +7,7 @@ pub use integration::run_progressive_batch_from_file;
 mod queue;
 mod segmenter;
 mod stitcher;
+mod vad_group;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,8 +16,9 @@ use std::time::Duration;
 pub use queue::{
     BatchQueue, QueueConfig, QueueProgress, QueuedSegment, SegmentResult, SubmitSegmentFn,
 };
-pub use segmenter::{AudioSegment, Segmenter, SegmenterConfig};
+pub use segmenter::{AudioSegment, SegmentProducer, Segmenter, SegmenterConfig};
 pub use stitcher::{CompletedSegment, Stitcher, StitcherConfig};
+pub use vad_group::{VadGroupStream, VadGroupStreamConfig};
 
 use owhisper_interface::batch;
 
@@ -61,6 +63,12 @@ pub struct ProgressiveBatchConfig {
     pub language: Option<String>,
     pub provider: BatchProvider,
     pub session_dir: PathBuf,
+    /// Segment raw audio by streaming VAD + Min-Cut/Merge (aligning the live
+    /// path with file re-transcribe) instead of fixed-duration windows.
+    pub vad_groups: bool,
+    /// Retain VAD segments from the stream so consumers (e.g. live
+    /// diarization) can drain them via `take_vad_segments`.
+    pub collect_vad_segments: bool,
 }
 
 impl Default for ProgressiveBatchConfig {
@@ -77,6 +85,8 @@ impl Default for ProgressiveBatchConfig {
             language: None,
             provider: BatchProvider::OpenAI,
             session_dir: PathBuf::new(),
+            vad_groups: false,
+            collect_vad_segments: false,
         }
     }
 }
@@ -93,7 +103,7 @@ pub enum ManagerState {
         buffer: Vec<f32>,
     },
     Active {
-        segmenter: Segmenter,
+        segmenter: Box<dyn SegmentProducer>,
         queue: BatchQueue,
         stitcher: Stitcher,
     },
@@ -118,6 +128,9 @@ pub struct ProgressiveBatchManager {
     write_wav_fn: WriteWavFn,
     submit_fn: SubmitSegmentFn,
     runtime: Option<Arc<dyn BatchRuntime>>,
+    /// VAD segments drained from the segmenter during `finish` (the live
+    /// segmenter is dropped at that point). Consumed via `take_vad_segments`.
+    vad_segments: Vec<hypr_pyannote_local::segmentation::Segment>,
 }
 
 impl ProgressiveBatchManager {
@@ -133,6 +146,7 @@ impl ProgressiveBatchManager {
             submit_fn: default_submit_fn(),
             runtime: None,
             config,
+            vad_segments: Vec::new(),
         }
     }
 
@@ -162,11 +176,7 @@ impl ProgressiveBatchManager {
         }
         Self {
             state: ManagerState::Active {
-                segmenter: Segmenter::new(SegmenterConfig {
-                    sample_rate: config.sample_rate,
-                    segment_duration_ms: config.segment_duration_ms,
-                    overlap_ms: config.overlap_ms,
-                }),
+                segmenter: Self::make_segmenter(&config),
                 queue: BatchQueue::with_submit_fn(
                     QueueConfig {
                         base_url: config.base_url.clone(),
@@ -185,6 +195,7 @@ impl ProgressiveBatchManager {
             submit_fn: default_submit_fn(),
             runtime: None,
             config,
+            vad_segments: Vec::new(),
         }
     }
 
@@ -208,11 +219,48 @@ impl ProgressiveBatchManager {
             submit_fn: submit,
             runtime: None,
             config,
+            vad_segments: Vec::new(),
         }
     }
 
     pub fn state(&self) -> &ManagerState {
         &self.state
+    }
+
+    /// VAD speech segments produced so far, drained. Used by the live path to
+    /// feed diarization with the exact segments the segmenter grouped on.
+    pub fn take_vad_segments(&mut self) -> Vec<hypr_pyannote_local::segmentation::Segment> {
+        let tail = std::mem::take(&mut self.vad_segments);
+        match &mut self.state {
+            ManagerState::Active { segmenter, .. } => tail
+                .into_iter()
+                .chain(segmenter.take_vad_segments())
+                .collect(),
+            _ => tail,
+        }
+    }
+
+    fn make_segmenter(config: &ProgressiveBatchConfig) -> Box<dyn SegmentProducer> {
+        if config.vad_groups {
+            match VadGroupStream::new(VadGroupStreamConfig {
+                sample_rate: config.sample_rate,
+                max_duration_ms: config.segment_duration_ms,
+                collect_vad_segments: config.collect_vad_segments,
+            }) {
+                Ok(s) => return Box::new(s),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "[progressive] VAD init failed; falling back to fixed-window segmentation"
+                    );
+                }
+            }
+        }
+        Box::new(Segmenter::new(SegmenterConfig {
+            sample_rate: config.sample_rate,
+            segment_duration_ms: config.segment_duration_ms,
+            overlap_ms: config.overlap_ms,
+        }))
     }
 
     pub fn progress(&self) -> QueueProgress {
@@ -325,11 +373,7 @@ impl ProgressiveBatchManager {
                 "[progressive] transitioning Accumulating→Active: buf_samples={}",
                 buf.len(),
             );
-            let mut segmenter = Segmenter::new(SegmenterConfig {
-                sample_rate: self.config.sample_rate,
-                segment_duration_ms: self.config.segment_duration_ms,
-                overlap_ms: self.config.overlap_ms,
-            });
+            let mut segmenter = Self::make_segmenter(&self.config);
             let segments = segmenter.feed(&buf);
             tracing::debug!(
                 "[progressive] transition: segmenter produced {} segments from buffer",
@@ -385,11 +429,7 @@ impl ProgressiveBatchManager {
                     "[progressive] finish: Accumulating state with buffer of {} samples",
                     buffer.len(),
                 );
-                let mut segmenter = Segmenter::new(SegmenterConfig {
-                    sample_rate: self.config.sample_rate,
-                    segment_duration_ms: self.config.segment_duration_ms,
-                    overlap_ms: self.config.overlap_ms,
-                });
+                let mut segmenter = Self::make_segmenter(&self.config);
                 let feed_segments = segmenter.feed(&buffer);
                 let flushed = segmenter.flush();
                 let all_segments: Vec<_> = feed_segments.iter().chain(flushed.iter()).collect();
@@ -404,6 +444,7 @@ impl ProgressiveBatchManager {
                 for seg in all_segments {
                     self.write_and_enqueue(seg, &mut queue);
                 }
+                self.vad_segments.extend(segmenter.take_vad_segments());
                 (queue, stitcher)
             }
             ManagerState::Active {
@@ -422,6 +463,7 @@ impl ProgressiveBatchManager {
                     }
                     self.write_and_enqueue(seg, &mut queue);
                 }
+                self.vad_segments.extend(segmenter.take_vad_segments());
                 (queue, stitcher)
             }
             ManagerState::Completed {

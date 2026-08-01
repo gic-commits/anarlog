@@ -525,8 +525,11 @@ async fn submit_file_direct(
 }
 
 /// Continue a previously interrupted/partial progressive batch.
-/// This still uses the old fixed-segment ProgressiveBatchManager for
-/// backward compatibility with existing DB records.
+///
+/// The file re-transcribe path (`run_progressive_batch_from_file`) always
+/// groups by streaming VAD + Min-Cut/Merge at 16 kHz, so Continue replays the
+/// file through the same `VadGroupStream` (resampling to 16 kHz) to reproduce
+/// identical group indices for the pre-loaded completed segments.
 pub async fn continue_from_file(
     runtime: Arc<dyn BatchRuntime>,
     params: BatchParams,
@@ -551,9 +554,9 @@ pub async fn continue_from_file(
 
     let config = ProgressiveBatchConfig {
         session_id: session_id.clone(),
-        sample_rate,
+        sample_rate: TARGET_SAMPLE_RATE,
         segment_duration_ms,
-        overlap_ms: params.overlap_ms.unwrap_or(1000),
+        overlap_ms: 0,
         max_concurrency: params.max_concurrency.unwrap_or(2) as usize,
         base_url: params.base_url,
         api_key: params.api_key,
@@ -561,6 +564,8 @@ pub async fn continue_from_file(
         language,
         provider: params.provider,
         session_dir,
+        vad_groups: true,
+        collect_vad_segments: false,
     };
 
     let mut manager =
@@ -568,6 +573,8 @@ pub async fn continue_from_file(
 
     const CHUNK_FRAMES: usize = 48000 * 10;
     let mut buf: Vec<f32> = Vec::with_capacity(CHUNK_FRAMES * channels);
+    let mut resampler = StreamingResampler::new(sample_rate, TARGET_SAMPLE_RATE);
+    let mut src_index = 0usize;
 
     for sample in source {
         buf.push(sample);
@@ -579,7 +586,10 @@ pub async fn continue_from_file(
             } else {
                 std::mem::take(&mut buf)
             };
-            manager.on_audio_frame(&mono);
+            let mut resampled = Vec::new();
+            resampler.push(&mono, src_index, &mut resampled);
+            src_index += mono.len();
+            manager.on_audio_frame(&resampled);
             buf.clear();
         }
     }
@@ -592,7 +602,9 @@ pub async fn continue_from_file(
         } else {
             buf
         };
-        manager.on_audio_frame(&mono);
+        let mut resampled = Vec::new();
+        resampler.push(&mono, src_index, &mut resampled);
+        manager.on_audio_frame(&resampled);
     }
 
     let response = manager
@@ -605,4 +617,42 @@ pub async fn continue_from_file(
         mode: BatchRunMode::Direct,
         response,
     })
+}
+
+/// Streaming linear-interpolation resampler matching the whole-file resampler
+/// in `run_progressive_batch_from_file`: output sample *i* is interpolated at
+/// source position `i * ratio`, with `pos` advanced `ratio` per output.
+struct StreamingResampler {
+    ratio: f64,
+    pos: f64,
+}
+
+impl StreamingResampler {
+    fn new(src_rate: u32, dst_rate: u32) -> Self {
+        Self {
+            ratio: src_rate as f64 / dst_rate as f64,
+            pos: 0.0,
+        }
+    }
+
+    fn push(&mut self, input: &[f32], chunk_start: usize, out: &mut Vec<f32>) {
+        if input.is_empty() {
+            return;
+        }
+        let src_start = chunk_start as f64;
+        let src_end = (chunk_start + input.len()) as f64;
+        let last = input.len() - 1;
+        while self.pos < src_end {
+            let f = (self.pos - src_start).max(0.0);
+            let lo = f.floor() as usize;
+            let hi = (lo + 1).min(last);
+            let frac = f - lo as f64;
+            out.push(if lo < input.len() {
+                input[lo] * (1.0 - frac as f32) + input[hi] * frac as f32
+            } else {
+                input[last]
+            });
+            self.pos += self.ratio;
+        }
+    }
 }

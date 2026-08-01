@@ -23,7 +23,8 @@ fn build_progressive_batch_config(
         session_id: params.session_id.clone(),
         sample_rate: params.sample_rate,
         segment_duration_ms: params.segment_duration_ms.unwrap_or(30000),
-        overlap_ms: 1000,
+        // VAD groups are non-overlapping; the stitcher must not dedup.
+        overlap_ms: 0,
         max_concurrency: 2,
         base_url: params.base_url.clone(),
         api_key: params.api_key.clone(),
@@ -31,6 +32,8 @@ fn build_progressive_batch_config(
         language: params.language.clone(),
         provider: core::BatchProvider::OpenAI,
         session_dir: std::env::temp_dir().join(format!("progressive-{}", params.session_id)),
+        vad_groups: true,
+        collect_vad_segments: params.diarization_enabled,
     }
 }
 
@@ -199,20 +202,31 @@ impl ListenerRuntime for TauriRuntime {
 
             let mut rx = pcm_rx;
             while let Some(frame) = rx.recv().await {
+                manager.on_audio_frame(&frame);
+                // Feed diarization with the same VAD segments the segmenter
+                // grouped on (via the stream's shared VAD), matching the file
+                // re-transcribe path's `feed_segments`.
                 if let Some(ref mut eng) = diarization_engine {
-                    let i16_samples: Vec<i16> =
-                        frame.iter().map(|&s| (s * 32767.0) as i16).collect();
-                    if let Err(e) = eng.feed_pcm(&i16_samples) {
-                        tracing::warn!(error = %e, "diarization feed_pcm error");
+                    let vad_segments = manager.take_vad_segments();
+                    if !vad_segments.is_empty() {
+                        if let Err(e) = eng.feed_segments(&vad_segments) {
+                            tracing::warn!(error = %e, "diarization feed_segments error");
+                        }
                     }
                 }
-                manager.on_audio_frame(&frame);
             }
 
             match manager.finish().await {
                 Ok(mut response) => {
-                    // Annotate with speaker labels after final clustering
+                    // Annotate with speaker labels after final clustering.
+                    // Drain any VAD segments flushed during finish() first.
                     if let Some(ref mut eng) = diarization_engine {
+                        let tail = manager.take_vad_segments();
+                        if !tail.is_empty() {
+                            if let Err(e) = eng.feed_segments(&tail) {
+                                tracing::warn!(error = %e, "diarization tail feed error");
+                            }
+                        }
                         eng.finalize();
                         if let Some(ch) = response.results.channels.first_mut() {
                             if let Some(alt) = ch.alternatives.first_mut() {

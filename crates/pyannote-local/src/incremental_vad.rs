@@ -16,6 +16,8 @@ pub struct IncrementalVad {
     sample_rate: usize,
     window_size: usize,
     all_samples: Vec<i16>,
+    /// Absolute sample index of `all_samples[0]` after front-pruning.
+    origin: usize,
     buffer: Vec<i16>,
     offset: usize,
     is_speaking: bool,
@@ -31,6 +33,7 @@ impl IncrementalVad {
             sample_rate,
             window_size: sample_rate * 10,
             all_samples: Vec::new(),
+            origin: 0,
             buffer: Vec::new(),
             offset: FRAME_START,
             is_speaking: false,
@@ -97,14 +100,60 @@ impl IncrementalVad {
         segments
     }
 
+    /// Total number of samples fed and still retained since construction
+    /// (absolute index of the last retained sample + 1). Indices passed to
+    /// [`Self::sample_slice`] / [`Self::prune_before`] are absolute relative
+    /// to the recording origin, not to the retained buffer.
+    pub fn all_samples_len(&self) -> usize {
+        self.origin + self.all_samples.len()
+    }
+
+    /// Slice the retained global sample buffer by absolute sample indices,
+    /// clamped to the available range.
+    pub fn sample_slice(&self, start_sample: usize, end_sample: usize) -> Vec<i16> {
+        let lo = start_sample
+            .saturating_sub(self.origin)
+            .min(self.all_samples.len());
+        let hi = end_sample
+            .saturating_sub(self.origin)
+            .min(self.all_samples.len())
+            .max(lo);
+        if lo < hi {
+            self.all_samples[lo..hi].to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Drop retained samples before `sample_idx` (absolute). Callers must only
+    /// prune samples that no completed/future VAD segment nor `sample_slice`
+    /// request will reference again (e.g. after a group has been emitted).
+    pub fn prune_before(&mut self, sample_idx: usize) {
+        if sample_idx <= self.origin {
+            return;
+        }
+        let drop = sample_idx
+            .saturating_sub(self.origin)
+            .min(self.all_samples.len());
+        if drop == 0 {
+            return;
+        }
+        self.all_samples.drain(..drop);
+        self.origin += drop;
+    }
+
     fn finish_segment(&mut self, out: &mut Vec<Segment>) {
         let sr = self.sample_rate as f64;
         let start_s = self.speech_start as f64 / sr;
         let end_s = self.offset as f64 / sr;
 
-        let lo = (start_s * sr) as usize;
-        let hi = (end_s * sr) as usize;
-        let hi = hi.min(self.all_samples.len());
+        let lo = ((start_s * sr) as usize)
+            .saturating_sub(self.origin)
+            .min(self.all_samples.len());
+        let hi = ((end_s * sr) as usize)
+            .saturating_sub(self.origin)
+            .min(self.all_samples.len())
+            .max(lo);
 
         out.push(Segment {
             start: start_s,

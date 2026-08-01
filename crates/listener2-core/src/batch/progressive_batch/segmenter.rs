@@ -25,6 +25,30 @@ pub struct AudioSegment {
     pub samples: Vec<f32>,
 }
 
+/// Abstraction over how raw audio is turned into `AudioSegment`s for the
+/// queue. Fixed-window [`Segmenter`] is the historical default; [`crate::batch::progressive_batch::vad_group::VadGroupStream`]
+/// segments by streaming VAD + Min-Cut/Merge to match the file re-transcribe path.
+pub trait SegmentProducer: Send {
+    fn feed(&mut self, samples: &[f32]) -> Vec<AudioSegment>;
+    fn flush(&mut self) -> Vec<AudioSegment>;
+    /// VAD speech segments produced since the last call, drained. Empty for
+    /// the fixed-window [`Segmenter`]; populated by `VadGroupStream` so the
+    /// live path can feed the same segments to diarization as the file path.
+    fn take_vad_segments(&mut self) -> Vec<hypr_pyannote_local::segmentation::Segment> {
+        Vec::new()
+    }
+}
+
+impl SegmentProducer for Segmenter {
+    fn feed(&mut self, samples: &[f32]) -> Vec<AudioSegment> {
+        self.feed(samples)
+    }
+
+    fn flush(&mut self) -> Vec<AudioSegment> {
+        self.flush()
+    }
+}
+
 #[derive(Debug)]
 pub struct Segmenter {
     config: SegmenterConfig,

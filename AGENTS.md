@@ -584,13 +584,91 @@ progressive-batch 新录音模式下，录音进行中的 batch 段结果（`Seg
 
 ⚠️ 命令注意：vitest 必须从 `apps/desktop` 目录运行（根目录报 `Cannot find module '~/stt/timing'`）；全量 `dprint fmt` / `vitest --run` 会挂，用 `./node_modules/.bin/dprint fmt <文件>` 与 `./node_modules/.bin/vitest run <文件>`。
 
+## Aug 1 — VadGroupStream 重构：live 分段与 file re-transcribe 对齐 ✅
+
+### 问题
+
+live（ProgressiveBatchManager）用固定时长窗口分段（`segmenter.rs`），而 file re-transcribe（`integration.rs` `run_progressive_batch_from_file`）用 VAD + Min-Cut/Merge 分组。两条路径分段不一致（bbb1eb3b 验证中 live/re 尾部 VAD 漏检即因此）。
+
+### 方案
+
+新增 `crates/listener2-core/src/batch/progressive_batch/vad_group.rs`：
+
+- `VadGroupStream` — 流式 VAD（`IncrementalVad`，pyannote segmentation.onnx）+ 增量 Min-Cut/Merge，逐段复刻 `min_cut_merge::merge_segments` 的判定规则 → 与 batch 全量处理产出完全相同的组。组样本覆盖 `[首段 speech 起点, 末段 speech 终点]`（含组内静音，与 file 路径一致）。
+- `VadSource` trait + `IncrementalVadSource` — 隔离 VAD 实现，便于用 `MockVad` 单测分组逻辑（等价性测试对照 batch `min_cut_merge`）。
+- `IncrementalVad` 新增 `all_samples_len()` / `sample_slice()`（复用其保留的全局样本缓冲，避免二次存 PCM）。
+- `min_cut_merge::split_segment_at_energy` 改 `pub`（跨 crate 复用）。
+
+### 接线
+
+| 层 | 改动 |
+|------|------|
+| `ProgressiveBatchConfig` | 新增 `vad_groups: bool`（默认 false，测试/continue 保持固定窗口） |
+| `ManagerState::Active` | `segmenter: Segmenter` → `segmenter: Box<dyn SegmentProducer>`；新增 `SegmentProducer` trait（feed/flush），`Segmenter` 与 `VadGroupStream` 各自实现 |
+| `make_segmenter()` | 按 `vad_groups` 选择；VAD 初始化失败降级回固定窗口（log warning） |
+| 插件 `runtime.rs` | `build_progressive_batch_config` → `vad_groups: true` + `overlap_ms: 0`（VAD 组无重叠，stitcher 不得去重） |
+| `continue_from_file` | 现 `vad_groups: true` + `overlap_ms: 0` + 流式重采样到 16k（`StreamingResampler`），与 file 路径 VAD 分组对齐（见 Aug 1 PM 收尾） |
+
+### 行为差异（live，静音时）
+
+- 完全静音录音 → `flush()` 兜底整段作为一个组提交（镜像 `submit_file_direct` 空 VAD 分支），不回归为报错。
+- 首段产出延迟：VAD 需 10s 窗口才出帧，组在语音结束后才 emit（与 file 路径同约束）。
+
+### 验证
+
+| 命令 | 结果 |
+|------|------|
+| `cargo check -p listener2-core -p pyannote-local -p tauri-plugin-transcription` | ✅ |
+| `cargo test -p listener2-core` | ✅ 125/125（+7 新增 vad_group 测试） |
+| `cargo test -p tauri-plugin-transcription` | ✅ 34/34 |
+| `cargo test -p pyannote-local --lib` | ✅ 14/14（min_cut_merge 全过） |
+| `cargo check -p desktop` | ⚠️ 环境无法完成：`notification-macos` build script 需联网 fetch swift-rs（github 不可达），与本次改动无关 |
+
+## Aug 1 (PM) — 遗留收尾：live diarization 对齐 + Continue 对齐 + VAD 内存 prune ✅
+
+### 遗留①：live diarization 复用 VadGroupStream 的 VAD 段流 ✅
+
+live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `IncrementalDiarizationEngine.feed_pcm`（引擎内部 VAD），改用与 file 路径相同的 `feed_segments`：
+
+| 层 | 改动 |
+|------|------|
+| `SegmentProducer` trait | 新增 `take_vad_segments()`（默认空） |
+| `VadGroupStream` | 新增 `vad_segments` 缓冲 + `collect_vad_segments` 开关（默认 false，无消费者时零内存）；feed/flush 收集 VAD 段，`take_vad_segments` 排出 |
+| `ProgressiveBatchConfig` | 新增 `collect_vad_segments: bool`（默认 false），`make_segmenter` 透传 |
+| `ProgressiveBatchManager` | 新增 `vad_segments` 字段（收 `finish()` flush 尾部）+ `take_vad_segments()`（排空 Active segmenter + 尾部） |
+| `runtime.rs` | `build_progressive_batch_config` → `collect_vad_segments: params.diarization_enabled`；帧循环先 `on_audio_frame` 再 `take_vad_segments → feed_segments`；`finish()` 后补喂尾部再 `finalize()` |
+
+结果：live speaker 标注与 file 路径使用完全同一批 VAD 段（`VadGroupStream` 内部 VAD 的段），而非引擎内部独立的 VAD 结果。
+
+### 遗留②：Continue 对齐 vad_groups ✅
+
+`continue_from_file`（`integration.rs`）现在与 file re-transcribe 完全对齐：
+- `vad_groups: true` + `overlap_ms: 0`（VAD 组无重叠，stitcher 不去重）
+- 新增 `StreamingResampler`（线性插值，输出采样 i 位置 = `i * ratio`，与全量重采样逐点一致）把源流式重采样到 16k 再喂入
+- file 路径始终 VAD 分组（`run_progressive_batch_from_file`），live 不持久化 job → 不存在固定窗口 job 需要 Continue 兼容，无需 DB 迁移持久化 segmenter kind
+
+### 遗留③：IncrementalVad 内存 prune ✅
+
+`IncrementalVad` 新增 `origin` 绝对起点偏移 + `prune_before(sample_idx)`；`VadGroupStream.emit_group` 在组发出后 prune 掉组结束前的样本。live 不再保留完整 PCM（i16，1h≈115MB），只保留最后一个已发组终点之后的样本。`all_samples_len()` / `sample_slice()` 改为 absolute 语义（origin + len）。
+
+### 验证
+
+| 命令 | 结果 |
+|------|------|
+| `cargo check -p listener2-core -p pyannote-local -p tauri-plugin-transcription` | ✅ |
+| `cargo test -p listener2-core` | ✅ 127/127（+2 vad_group take_vad_segments 测试） |
+| `cargo test -p tauri-plugin-transcription` | ✅ 34/34 |
+| `cargo test -p pyannote-local --lib` | ✅ 14/14 |
+| `cargo test -p pyannote-local --test diarization_pipeline --test find_threshold` | ✅ 21 + 1 sweep |
+| dprint fmt | ✅ |
+
 ## 下一步工作排布
 
-### Sprint 3 Phase D（录音流 diarization）— 未提交 ⚠️
+### Sprint 3 Phase D（录音流 diarization）— ✅ live 对齐（见 Aug 1 PM），待真机端到端验证
 
 录音流（`plugins/transcription/src/listener/runtime.rs`）已集成 `IncrementalDiarizationEngine`：
-- 录音期间 `feed_pcm`（i16 转换）实时喂入 VAD + embedding
-- `finish()` 时 `finalize()` 重聚类，按词中位时间 `speaker_at_time()` 标注 speaker
+- 录音期间 VAD 段（`VadGroupStream.take_vad_segments`）实时 `feed_segments`（与 file 路径同一批 VAD 段）
+- `finish()` 时补喂 flush 尾部 + `finalize()` 重聚类，按词中位时间 `speaker_at_time()` 标注 speaker
 - 仍待验证：真实设备端到端（speaker 标签是否随 `SegmentResult` 正确显示）
 
 ### 已有但未落库的 diarization 改动（Jul 30-31，随本次 commit 提交）

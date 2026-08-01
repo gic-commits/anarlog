@@ -100,7 +100,7 @@ fn seg_with_speaker(
 }
 
 /// Split segment samples at lowest-RMS point in [½τ, τ].
-fn split_segment_at_energy(
+pub fn split_segment_at_energy(
     samples: &[i16],
     global_start: f64,
     sample_rate: u32,
