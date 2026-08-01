@@ -715,7 +715,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | 1 | **服务端丢段**（seg5-from-mp3 截断，只转写前 8.6s）| ✅ 已修复（Aug 1 验证）| 服务端已解决；用之前可复现截断的 `seg5-from-mp3.raw` 重新 POST，现在完整转写 24.9s（97 words，覆盖到 24.9s），与 `seg5-full.raw` 结果一致。无需客户端改动 |
 | 2 | **c5ee333b 说话人数未确认** | ⚠️ DB 无 ground truth（transcript speaker 全是 provider 的 speaker_index:0）| adaptive+2s 过滤给 7；若实际更少，调 `MIN_SPEAKER_SECS`（现在 2.0）或 MAD 系数（现在 0.15）|
 | 3 | **Bug 2**：Re-transcription batch target 回退 whispercpp | 📝 待验证 | 依赖 Bug 3（已修 Jul 25），需复测确认不再回退 |
-| 4 | **`min_duration_secs` 冗余字段删除** | 待做 | 由 `segment_duration_ms` 替代（Jul 26 遗留）|
+| 4 | **`min_duration_secs` 冗余字段删除** | ✅ 已确认（Aug 1）| 代码里已 0 处引用（全库搜索无匹配）——Jul 25 已由 `segment_duration_ms` 替代（`integration.rs:55`：`duration_secs < segment_duration_ms/1000 → submit_file_direct`）。`min_duration_secs` 从未是配置项，原为硬编码常量 `MIN_DURATION_SECS=180`。问题清单残留记录已清理，无需改代码 |
 | 5 | **真机端到端**：live 录音 speaker 标签是否随 `SegmentResult` 正确显示 | 待验证 | 需真机录音测试（Sprint 3 Phase D 收尾）|
 | 6 | **内存峰值确认** <50MB（流式解码 + VAD prune）| 待实测 | 长录音（~1h）跑一遍验证 |
 | 7 | **MAD 系数 0.15 标定单一音频** | ⚠️ 需更多音频样本 | 当前只基于 5fdd76a7（4 说话人）标定；收集更多多说话人音频验证自适应阈值泛化 |
@@ -734,8 +734,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 1. 真机端到端验证 live 录音 diarization（问题清单 #5）
 2. 复测 Bug 2（batch target fallback，问题清单 #3）
 3. 收集更多多说话人音频验证自适应 threshold 泛化 + 确认 c5ee333b 真实说话人数（#2/#7）
-4. 删除 `min_duration_secs` 冗余字段（#4）
-5. 长录音内存峰值实测（#6）
+4. 长录音内存峰值实测（#6）
 
 ### 已有但未落库的 diarization 改动（Jul 30-31，已随 Aug 1 commit 提交）
 
