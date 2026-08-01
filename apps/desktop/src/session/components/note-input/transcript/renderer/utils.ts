@@ -46,6 +46,41 @@ export function groupWordsIntoLines(words: SegmentWord[]): SentenceLine[] {
   return lines;
 }
 
+export type SegmentBlock = {
+  words: SegmentWord[];
+  startMs: number;
+  endMs: number;
+};
+
+export function groupWordsIntoBlocks(words: SegmentWord[]): SegmentBlock[] {
+  if (words.length === 0) return [];
+
+  const blocks: SegmentBlock[] = [];
+  let current: SegmentWord[] = [];
+
+  for (const word of words) {
+    if (word.metadata?.segment_boundary && current.length > 0) {
+      blocks.push(makeBlock(current));
+      current = [];
+    }
+    current.push(word);
+  }
+
+  if (current.length > 0) {
+    blocks.push(makeBlock(current));
+  }
+
+  return blocks;
+}
+
+function makeBlock(words: SegmentWord[]): SegmentBlock {
+  return {
+    words,
+    startMs: words[0]!.start_ms,
+    endMs: words[words.length - 1]!.end_ms,
+  };
+}
+
 export function getActiveLineIndex(
   words: SegmentWord[],
   offsetMs: number,
@@ -54,29 +89,32 @@ export function getActiveLineIndex(
   if (currentMs <= 0 || words.length === 0) return null;
 
   let lineIndex = 0;
-  let lineStartMs = words[0]!.start_ms;
 
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index]!;
-    const text = word.text.trim();
-    const closesLine =
-      text.endsWith(".") ||
-      text.endsWith("?") ||
-      text.endsWith("!") ||
-      index === words.length - 1;
+  for (const block of groupWordsIntoBlocks(words)) {
+    let lineStartMs = block.startMs;
 
-    if (!closesLine) {
-      continue;
+    for (const word of block.words) {
+      const text = word.text.trim();
+      const closesLine =
+        text.endsWith(".") ||
+        text.endsWith("?") ||
+        text.endsWith("!") ||
+        word === block.words[block.words.length - 1];
+
+      if (!closesLine) {
+        continue;
+      }
+
+      const start = offsetMs + lineStartMs;
+      const end = offsetMs + word.end_ms;
+      if (currentMs >= start && currentMs <= end) {
+        return lineIndex;
+      }
+
+      lineIndex += 1;
+      const next = block.words[block.words.indexOf(word) + 1];
+      lineStartMs = next?.start_ms ?? lineStartMs;
     }
-
-    const start = offsetMs + lineStartMs;
-    const end = offsetMs + word.end_ms;
-    if (currentMs >= start && currentMs <= end) {
-      return lineIndex;
-    }
-
-    lineIndex += 1;
-    lineStartMs = words[index + 1]?.start_ms ?? lineStartMs;
   }
 
   return null;

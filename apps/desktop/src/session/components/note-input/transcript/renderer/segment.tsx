@@ -5,6 +5,7 @@ import { cn } from "@hypr/utils";
 import { SegmentHeader } from "./segment-header";
 import {
   getActiveLineIndex,
+  groupWordsIntoBlocks,
   groupWordsIntoLines,
   type HighlightSegment,
 } from "./utils";
@@ -60,9 +61,13 @@ export const SegmentRenderer = memo(
     audioExists: boolean;
     search: TranscriptSearchRenderState;
   }) => {
-    const lines = useMemo(
-      () => groupWordsIntoLines(segment.words),
+    const blocks = useMemo(
+      () => groupWordsIntoBlocks(segment.words),
       [segment.words],
+    );
+    const linesByBlock = useMemo(
+      () => blocks.map((block) => groupWordsIntoLines(block.words)),
+      [blocks],
     );
     const highlightSegmentsByWord = useMemo(() => {
       if (!search.query) {
@@ -99,49 +104,58 @@ export const SegmentRenderer = memo(
             "select-text-deep",
           ])}
         >
-          {lines.map((line, lineIdx) => {
-            const lineStartMs = offsetMs + line.startMs;
-            const lineEndMs = offsetMs + line.endMs;
-            const isCurrentLine =
-              audioExists &&
-              currentMs > 0 &&
-              currentMs >= lineStartMs &&
-              currentMs <= lineEndMs;
-
+          {blocks.map((block, blockIdx) => {
+            const lines = linesByBlock[blockIdx] ?? [];
             return (
-              <span
-                key={line.words[0]?.id ?? `line-${lineIdx}`}
-                data-line-current={isCurrentLine ? "true" : undefined}
-                className={cn([
-                  "-mx-0.5 rounded-xs px-0.5",
-                  isCurrentLine && "bg-yellow-100/50 dark:bg-yellow-900/30",
-                ])}
-              >
-                {lineIdx > 0 ? " " : null}
-                {line.words.map((word, idx) => {
+              <div key={`block-${blockIdx}`} className="mb-1.5">
+                <SegmentTimeSeparator
+                  startMs={offsetMs + block.startMs}
+                  endMs={offsetMs + block.endMs}
+                />
+                {lines.map((line, lineIdx) => {
+                  const lineStartMs = offsetMs + line.startMs;
+                  const lineEndMs = offsetMs + line.endMs;
+                  const isCurrentLine =
+                    audioExists &&
+                    currentMs > 0 &&
+                    currentMs >= lineStartMs &&
+                    currentMs <= lineEndMs;
+
                   return (
-                    <Fragment key={word.id ?? `${word.start_ms}-${idx}`}>
-                      {idx > 0 ? " " : null}
-                      {word.metadata?.segment_boundary &&
-                      word !== segment.words[0] ? (
-                        <span className="border-primary/40 mx-1 inline-block w-10 border-t-2 border-dashed" />
-                      ) : null}
-                      <WordSpan
-                        word={word}
-                        displayText={getWordDisplayText(word)}
-                        audioExists={audioExists}
-                        onClickWord={seekAndPlay}
-                        highlightSegments={
-                          highlightSegmentsByWord?.get(word) ?? undefined
-                        }
-                        isActiveMatch={
-                          Boolean(word.id) && word.id === search.activeMatchId
-                        }
-                      />
-                    </Fragment>
+                    <span
+                      key={line.words[0]?.id ?? `line-${blockIdx}-${lineIdx}`}
+                      data-line-current={isCurrentLine ? "true" : undefined}
+                      className={cn([
+                        "-mx-0.5 rounded-xs px-0.5",
+                        isCurrentLine &&
+                          "bg-yellow-100/50 dark:bg-yellow-900/30",
+                      ])}
+                    >
+                      {lineIdx > 0 ? " " : null}
+                      {line.words.map((word, idx) => {
+                        return (
+                          <Fragment key={word.id ?? `${word.start_ms}-${idx}`}>
+                            {idx > 0 ? " " : null}
+                            <WordSpan
+                              word={word}
+                              displayText={getWordDisplayText(word)}
+                              audioExists={audioExists}
+                              onClickWord={seekAndPlay}
+                              highlightSegments={
+                                highlightSegmentsByWord?.get(word) ?? undefined
+                              }
+                              isActiveMatch={
+                                Boolean(word.id) &&
+                                word.id === search.activeMatchId
+                              }
+                            />
+                          </Fragment>
+                        );
+                      })}
+                    </span>
                   );
                 })}
-              </span>
+              </div>
             );
           })}
         </div>
@@ -219,4 +233,27 @@ function segmentContainsWordId(segment: Segment, wordId: string | null) {
 
 function getWordDisplayText(word: SegmentWord) {
   return word.text.trim();
+}
+
+function SegmentTimeSeparator({
+  startMs,
+  endMs,
+}: {
+  startMs: number;
+  endMs: number;
+}) {
+  return (
+    <div className={cn(["text-muted-foreground pt-1 pb-0.5 text-xs"])}>
+      <span className="whitespace-nowrap tabular-nums">
+        [{formatSegmentTime(startMs)} – {formatSegmentTime(endMs)}]
+      </span>
+    </div>
+  );
+}
+
+function formatSegmentTime(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
 }

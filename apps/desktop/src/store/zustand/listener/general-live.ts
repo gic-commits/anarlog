@@ -275,6 +275,7 @@ const createSessionEventHandlers = <T extends LiveStore>(
       get().handleBatchSegmentResult(
         targetSessionId,
         payload.segment_index,
+        payload.global_start_ms,
         payload.response,
       );
     }

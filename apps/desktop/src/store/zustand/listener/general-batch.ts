@@ -227,6 +227,7 @@ export const runBatchSession = async <T extends BatchStore>(
           get().handleBatchSegmentResult(
             sessionId,
             payload.segment_index,
+            payload.global_start_ms,
             payload.response,
           );
           return;

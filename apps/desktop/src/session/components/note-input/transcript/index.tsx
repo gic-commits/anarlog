@@ -10,6 +10,7 @@ import { TranscriptEmptyState } from "./screens/empty";
 import { TranscriptListeningState } from "./screens/listening";
 import { useTranscriptScreen } from "./state";
 
+import type { BatchSegmentResult } from "~/store/zustand/listener/batch";
 import { useListener } from "~/stt/contexts";
 import { useUploadFile } from "~/stt/useUploadFile";
 
@@ -155,18 +156,17 @@ function CompactProgress({
 function SegmentPreview({
   segmentResponses,
 }: {
-  segmentResponses: Record<
-    number,
-    import("@hypr/plugin-transcription").BatchResponse
-  >;
+  segmentResponses: Record<number, BatchSegmentResult>;
 }) {
   const entries = useMemo(
     () =>
       Object.entries(segmentResponses)
-        .map(([index, response]) => ({
+        .map(([index, { response, globalStartMs }]) => ({
           index: Number(index),
+          globalStartMs,
           transcript:
             response.results.channels[0]?.alternatives[0]?.transcript ?? "",
+          lastWordEndMs: getLastWordEndMs(response),
         }))
         .sort((a, b) => a.index - b.index),
     [segmentResponses],
@@ -178,8 +178,15 @@ function SegmentPreview({
 
   return (
     <div className="scrollbar-thin flex-1 space-y-4 overflow-y-auto px-4 pt-3 pb-4">
-      {entries.map(({ index, transcript }) => (
+      {entries.map(({ index, globalStartMs, transcript, lastWordEndMs }) => (
         <div key={index}>
+          <p className="text-muted-foreground text-xs">
+            [{formatSegmentTime(globalStartMs)} –{" "}
+            {formatSegmentTime(
+              lastWordEndMs !== null ? globalStartMs + lastWordEndMs : null,
+            )}
+            ]
+          </p>
           <p className="text-foreground text-sm leading-relaxed whitespace-pre-wrap">
             {transcript || "(no speech detected)"}
           </p>
@@ -187,6 +194,22 @@ function SegmentPreview({
       ))}
     </div>
   );
+}
+
+function getLastWordEndMs(
+  response: import("@hypr/plugin-transcription").BatchResponse,
+): number | null {
+  const words = response.results.channels[0]?.alternatives[0]?.words;
+  const lastWord = words?.[words.length - 1];
+  return typeof lastWord?.end === "number" ? lastWord.end * 1000 : null;
+}
+
+function formatSegmentTime(ms: number | null): string {
+  if (ms === null) return "?";
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
 function FinalizingTranscriptBanner() {

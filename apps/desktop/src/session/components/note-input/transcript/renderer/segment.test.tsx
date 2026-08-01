@@ -53,7 +53,30 @@ describe("SegmentRenderer", () => {
       />,
     );
 
-    expect(view.container.textContent).toBe("First line. Second line.");
+    expect(view.container.textContent).toBe(
+      "[0:00 – 0:01]First line. Second line.",
+    );
+  });
+
+  it("renders time separators at segment boundaries", () => {
+    const segment = createSegment();
+    segment.words[2]!.metadata = { segment_boundary: true };
+    const seekAndPlay = vi.fn();
+    const view = render(
+      <SegmentRenderer
+        segment={segment}
+        offsetMs={0}
+        transcriptId="transcript-1"
+        currentMs={0}
+        seekAndPlay={seekAndPlay}
+        audioExists
+        search={EMPTY_TRANSCRIPT_SEARCH}
+      />,
+    );
+
+    expect(view.container.textContent).toBe(
+      "[0:00 – 0:00]First line.[0:01 – 0:01]Second line.",
+    );
   });
 
   it("skips playback rerenders while the active line is unchanged", () => {

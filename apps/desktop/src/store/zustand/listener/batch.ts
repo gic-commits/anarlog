@@ -38,8 +38,13 @@ export type BatchState = {
       hintsByChannel: Record<number, RuntimeSpeakerHint[]>;
     }
   >;
-  batchSegments: Record<string, Record<number, BatchResponse>>;
+  batchSegments: Record<string, Record<number, BatchSegmentResult>>;
   batchPersist: Record<string, BatchPersistCallback>;
+};
+
+export type BatchSegmentResult = {
+  response: BatchResponse;
+  globalStartMs: number;
 };
 
 export type BatchActions = {
@@ -53,6 +58,7 @@ export type BatchActions = {
   handleBatchSegmentResult: (
     sessionId: string,
     segmentIndex: number,
+    globalStartMs: number,
     response: BatchResponse,
   ) => void;
   handleBatchFailed: (
@@ -111,14 +117,22 @@ export const createBatchSlice = <T extends BatchState>(
     }));
   },
 
-  handleBatchSegmentResult: (sessionId, segmentIndex, response) => {
+  handleBatchSegmentResult: (
+    sessionId,
+    segmentIndex,
+    globalStartMs,
+    response,
+  ) => {
     set((state) => {
       const segments = state.batchSegments[sessionId] ?? {};
       return {
         ...state,
         batchSegments: {
           ...state.batchSegments,
-          [sessionId]: { ...segments, [segmentIndex]: response },
+          [sessionId]: {
+            ...segments,
+            [segmentIndex]: { response, globalStartMs },
+          },
         },
       };
     });

@@ -1,6 +1,7 @@
-import type { BatchResponse, DegradedError } from "@hypr/plugin-transcription";
+import type { DegradedError } from "@hypr/plugin-transcription";
 
 import { useAudioPlayer } from "~/audio-player";
+import type { BatchSegmentResult } from "~/store/zustand/listener/batch";
 import { getLiveCaptureUiMode } from "~/store/zustand/listener/general-shared";
 import { useListener } from "~/stt/contexts";
 import type { Segment } from "~/stt/live-segment";
@@ -15,13 +16,13 @@ export type TranscriptScreen =
       kind: "running_batch";
       percentage?: number;
       phase?: BatchPhase;
-      segmentResponses: Record<number, BatchResponse>;
+      segmentResponses: Record<number, BatchSegmentResult>;
     }
   | {
       kind: "batch_fallback";
       requestedLiveTranscription: RequestedLiveTranscription;
       error: DegradedError | null;
-      segmentResponses: Record<number, BatchResponse>;
+      segmentResponses: Record<number, BatchSegmentResult>;
     }
   | {
       kind: "listening";
