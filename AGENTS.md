@@ -134,6 +134,7 @@ Sprint 3 — 本地说话人分离（Phase A/B/C/D ✅ 基本完成，录音流�
   [x] 词级 speaker 标注 + 前后向填充（integration.rs + runtime.rs）
   [x] UI toggle / 数据流（设置页 + threshold slider）
   [x] 录音流集成 `IncrementalDiarizationEngine`（feed_pcm → finalize）— 待真机验证
+  [x] 方案 B 能量停顿切分子段 + 自适应聚类 threshold + 最小时长过滤（Aug 1 Night，5fdd76a7 验证 4 speakers）
 
 Phase 3 — UI 增强（待定）
   [ ] 如果 OpenAI provider + 自建服务器与原生 OpenAI 行为差异过大，加 toggle 开关
@@ -707,15 +708,36 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 
 ## 下一步工作排布
 
-### Sprint 3 Phase D（录音流 diarization）— ✅ live 对齐（见 Aug 1 PM），待真机端到端验证
+### 未解决问题清单（截至 Aug 1 Night 提交后）
+
+| # | 问题 | 状态 | 后续动作 |
+|---|------|------|----------|
+| 1 | **服务端丢段**（seg5-from-mp3 截断，只转写前 8.6s）| ✅ 已修复（Aug 1 验证）| 服务端已解决；用之前可复现截断的 `seg5-from-mp3.raw` 重新 POST，现在完整转写 24.9s（97 words，覆盖到 24.9s），与 `seg5-full.raw` 结果一致。无需客户端改动 |
+| 2 | **c5ee333b 说话人数未确认** | ⚠️ DB 无 ground truth（transcript speaker 全是 provider 的 speaker_index:0）| adaptive+2s 过滤给 7；若实际更少，调 `MIN_SPEAKER_SECS`（现在 2.0）或 MAD 系数（现在 0.15）|
+| 3 | **Bug 2**：Re-transcription batch target 回退 whispercpp | 📝 待验证 | 依赖 Bug 3（已修 Jul 25），需复测确认不再回退 |
+| 4 | **`min_duration_secs` 冗余字段删除** | 待做 | 由 `segment_duration_ms` 替代（Jul 26 遗留）|
+| 5 | **真机端到端**：live 录音 speaker 标签是否随 `SegmentResult` 正确显示 | 待验证 | 需真机录音测试（Sprint 3 Phase D 收尾）|
+| 6 | **内存峰值确认** <50MB（流式解码 + VAD prune）| 待实测 | 长录音（~1h）跑一遍验证 |
+| 7 | **MAD 系数 0.15 标定单一音频** | ⚠️ 需更多音频样本 | 当前只基于 5fdd76a7（4 说话人）标定；收集更多多说话人音频验证自适应阈值泛化 |
+
+### Sprint 3 Phase D（录音流 diarization）— ✅ live 对齐 + 自适应修复完成，仅剩真机验证
 
 录音流（`plugins/transcription/src/listener/runtime.rs`）已集成 `IncrementalDiarizationEngine`：
 - 录音期间 VAD 段（`VadGroupStream.take_vad_segments`）实时 `feed_segments`（与 file 路径同一批 VAD 段）
 - `finish()` 时补喂 flush 尾部 + `finalize()` 重聚类，按词中位时间 `speaker_at_time()` 标注 speaker
-- "1 unique speakers" bug 已修复（Aug 1 Night：自适应 threshold + 最小时长过滤，5fdd76a7 验证 4 speakers）
-- 仍待验证：真实设备端到端（speaker 标签是否随 `SegmentResult` 正确显示）
+- "1 unique speakers" bug 已修复（Aug 1 Night：能量停顿切分 + 自适应 threshold + 最小时长过滤，5fdd76a7 验证 4 speakers）
+- **live 与 file re-transcript 共用引擎核心 → 双路径自动获得修复，无需额外改动**
+- 待验证：真实设备端到端（speaker 标签是否随 `SegmentResult` 正确显示）
 
-### 已有但未落库的 diarization 改动（Jul 30-31，随本次 commit 提交）
+### 近期待办（按优先级）
+
+1. 真机端到端验证 live 录音 diarization（问题清单 #5）
+2. 复测 Bug 2（batch target fallback，问题清单 #3）
+3. 收集更多多说话人音频验证自适应 threshold 泛化 + 确认 c5ee333b 真实说话人数（#2/#7）
+4. 删除 `min_duration_secs` 冗余字段（#4）
+5. 长录音内存峰值实测（#6）
+
+### 已有但未落库的 diarization 改动（Jul 30-31，已随 Aug 1 commit 提交）
 
 - `crates/pyannote-local/src/incremental_vad.rs`（新）— 有状态流式 VAD（同 segmentation.onnx 模型，跨 feed 保持状态）
 - `crates/pyannote-local/src/incremental_diarization.rs`（新）— 流式引擎：feed_pcm / feed_segments / finalize / speaker_at_time / recluster
