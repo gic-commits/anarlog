@@ -236,6 +236,7 @@ impl ListenerRuntime for TauriRuntime {
                                 }
                             }
                         }
+                        core::propagate_speaker_to_none(&mut response);
                     }
 
                     let total_words = response

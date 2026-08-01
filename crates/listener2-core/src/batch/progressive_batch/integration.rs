@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use hypr_audio_utils::Source;
 use hypr_pyannote_local::incremental_diarization::{
@@ -228,13 +229,6 @@ pub async fn run_progressive_batch_from_file(
             .flat_map(|&s| s.to_le_bytes())
             .collect::<Vec<u8>>();
 
-        let file_part = reqwest::multipart::Part::bytes(audio_bytes)
-            .file_name("audio.raw")
-            .mime_str("audio/pcm")
-            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-                message: format!("failed to create multipart: {e}"),
-            })?;
-
         let listen_params = owhisper_interface::ListenParams {
             model: params.model.clone(),
             languages: params.languages.clone(),
@@ -248,42 +242,94 @@ pub async fn run_progressive_batch_from_file(
                 }
             })?;
 
-        let form = owhisper_client::OpenAIAdapter::build_batch_multipart(
-            file_part,
-            &listen_params,
-            true,
-            false,
-        )
-        .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-            message: format!("failed to build form: {e}"),
-        })?;
-
         let client = owhisper_client::create_client();
-        let resp = client
-            .post(url)
-            .multipart(form)
-            .header("Authorization", format!("Bearer {}", params.api_key))
-            .send()
-            .await
+        const MAX_RETRIES: u32 = 3;
+        let mut resp = None;
+        let mut last_error: Option<String> = None;
+        for attempt in 0..=MAX_RETRIES {
+            let file_part = reqwest::multipart::Part::bytes(audio_bytes.clone())
+                .file_name("audio.raw")
+                .mime_str("audio/pcm")
+                .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+                    message: format!("failed to create multipart: {e}"),
+                })?;
+
+            let form = owhisper_client::OpenAIAdapter::build_batch_multipart(
+                file_part,
+                &listen_params,
+                true,
+                false,
+            )
             .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-                message: format!("HTTP request failed: {e}"),
+                message: format!("failed to build form: {e}"),
             })?;
 
-        let content_length = resp.content_length().unwrap_or(0);
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            tracing::warn!(
-                "[vad-batch] group {} failed ({}): {}  (content_length={})",
-                group_idx,
-                status,
-                body,
-                content_length,
-            );
-            stitcher.add_abandoned(group_idx);
-            continue;
+            let send = client
+                .post(url.clone())
+                .multipart(form)
+                .header("Authorization", format!("Bearer {}", params.api_key))
+                .send()
+                .await;
+            match send {
+                Ok(r) if r.status().is_success() => {
+                    resp = Some(r);
+                    break;
+                }
+                Ok(r) => {
+                    let status = r.status();
+                    let body = r.text().await.unwrap_or_default();
+                    last_error = Some(format!("HTTP {}: {}", status, body));
+                    if attempt + 1 <= MAX_RETRIES && status.is_server_error() {
+                        let delay = Duration::from_secs(1 << attempt);
+                        tracing::warn!(
+                            "[vad-batch] group {} transient failure ({status}, attempt {}/{MAX_RETRIES}), retrying in {}s: {}",
+                            group_idx,
+                            attempt,
+                            delay.as_secs(),
+                            body,
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    tracing::warn!(
+                        "[vad-batch] group {} failed ({}): {}",
+                        group_idx,
+                        status,
+                        body,
+                    );
+                    break;
+                }
+                Err(e) => {
+                    last_error = Some(format!("HTTP request failed: {e}"));
+                    if attempt + 1 <= MAX_RETRIES {
+                        let delay = Duration::from_secs(1 << attempt);
+                        tracing::warn!(
+                            "[vad-batch] group {} transport error (attempt {}/{MAX_RETRIES}), retrying in {}s: {e}",
+                            group_idx,
+                            attempt,
+                            delay.as_secs(),
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    break;
+                }
+            }
         }
 
+        let resp = match resp {
+            Some(r) => r,
+            None => {
+                stitcher.add_abandoned(group_idx);
+                tracing::warn!(
+                    "[vad-batch] group {} abandoned after {} retries: {:?}",
+                    group_idx,
+                    MAX_RETRIES,
+                    last_error,
+                );
+                continue;
+            }
+        };
         let body = resp
             .text()
             .await
@@ -392,7 +438,7 @@ pub async fn run_progressive_batch_from_file(
 
 /// Propagate a valid speaker value to words with `speaker: None`.
 /// Uses nearest valid speaker, scanning forward then backward.
-fn propagate_speaker_to_none(response: &mut owhisper_interface::batch::Response) {
+pub fn propagate_speaker_to_none(response: &mut owhisper_interface::batch::Response) {
     for channel in &mut response.results.channels {
         for alt in &mut channel.alternatives {
             let n = alt.words.len();

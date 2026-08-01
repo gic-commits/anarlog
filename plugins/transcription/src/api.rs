@@ -289,6 +289,7 @@ pub enum TranscriptionEvent {
     SegmentResult {
         session_id: String,
         segment_index: usize,
+        global_start_ms: i64,
         response: owhisper_interface::batch::Response,
     },
     #[serde(rename = "stopped")]
@@ -714,11 +715,12 @@ impl From<listener2::BatchEvent> for TranscriptionEvent {
             listener2::BatchEvent::BatchSegmentResult {
                 session_id,
                 segment_index,
+                global_start_ms,
                 response,
-                ..
             } => Self::SegmentResult {
                 session_id,
                 segment_index,
+                global_start_ms,
                 response,
             },
             listener2::BatchEvent::BatchFailed {
@@ -736,11 +738,13 @@ impl From<listener2::BatchEvent> for TranscriptionEvent {
             listener2::BatchEvent::DiarizationSegmentResult {
                 session_id,
                 segment_index,
+                global_start_ms,
                 response,
-                ..
+                speaker: _,
             } => Self::SegmentResult {
                 session_id,
                 segment_index,
+                global_start_ms,
                 response,
             },
         }

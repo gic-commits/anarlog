@@ -48,51 +48,70 @@ impl IncrementalVad {
         let mut segments = Vec::new();
 
         while self.buffer.len() >= self.window_size {
-            let window = &self.buffer[..self.window_size];
-
-            // Phase 1: run inference, collect speech flags
-            let speech_flags = {
-                let array = hypr_onnx::ndarray::Array1::from_iter(window.iter().map(|&x| x as f32))
-                    .insert_axis(Axis(0))
-                    .insert_axis(Axis(1))
-                    .into_dyn();
-
-                let inputs = ort::inputs![TensorRef::from_array_view(array.view())?];
-                let run_output = self.session.run(inputs)?;
-                let output_tensor = run_output.values().next().unwrap();
-                let outputs = output_tensor.try_extract_array::<f32>()?;
-
-                let mut flags = Vec::new();
-                for row in outputs.outer_iter() {
-                    for sub_row in row.axis_iter(Axis(0)) {
-                        let max_index = find_max_index(sub_row)?;
-                        flags.push(max_index != 0);
-                    }
-                }
-                flags
-            }; // `run_output` dropped here → mutable borrow released
-
-            // Phase 2: update state (no outstanding borrow on self.session)
-            for is_speech in &speech_flags {
-                if *is_speech {
-                    if !self.is_speaking {
-                        self.speech_start = self.offset;
-                        self.is_speaking = true;
-                    }
-                } else if self.is_speaking {
-                    self.finish_segment(&mut segments);
-                }
-                self.offset += FRAME_SIZE;
-            }
-
-            self.buffer.drain(..self.window_size);
+            self.process_window(&mut segments)?;
         }
 
         Ok(segments)
     }
 
+    /// Run inference over the first full window in `buffer`, update speaking
+    /// state, emit any segments whose trailing silence was observed, then
+    /// drain the consumed window.
+    fn process_window(&mut self, out: &mut Vec<Segment>) -> Result<(), crate::Error> {
+        let window = &self.buffer[..self.window_size];
+
+        // Phase 1: run inference, collect speech flags
+        let speech_flags = {
+            let array = hypr_onnx::ndarray::Array1::from_iter(window.iter().map(|&x| x as f32))
+                .insert_axis(Axis(0))
+                .insert_axis(Axis(1))
+                .into_dyn();
+
+            let inputs = ort::inputs![TensorRef::from_array_view(array.view())?];
+            let run_output = self.session.run(inputs)?;
+            let output_tensor = run_output.values().next().unwrap();
+            let outputs = output_tensor.try_extract_array::<f32>()?;
+
+            let mut flags = Vec::new();
+            for row in outputs.outer_iter() {
+                for sub_row in row.axis_iter(Axis(0)) {
+                    let max_index = find_max_index(sub_row)?;
+                    flags.push(max_index != 0);
+                }
+            }
+            flags
+        }; // `run_output` dropped here → mutable borrow released
+
+        // Phase 2: update state (no outstanding borrow on self.session)
+        for is_speech in &speech_flags {
+            if *is_speech {
+                if !self.is_speaking {
+                    self.speech_start = self.offset;
+                    self.is_speaking = true;
+                }
+            } else if self.is_speaking {
+                self.finish_segment(out);
+            }
+            self.offset += FRAME_SIZE;
+        }
+
+        self.buffer.drain(..self.window_size);
+        Ok(())
+    }
+
     pub fn finish(&mut self) -> Vec<Segment> {
         let mut segments = Vec::new();
+        // The trailing buffer is shorter than a full window. `feed` only ever
+        // processes complete windows, so speech in the tail would otherwise be
+        // dropped. Pad with silence to a full window and run one last pass so
+        // tail speech produces a segment (mirrors `Segmenter::pad_samples`).
+        if !self.buffer.is_empty() && self.buffer.len() < self.window_size {
+            self.buffer
+                .extend(vec![0i16; self.window_size - self.buffer.len()]);
+            if let Err(e) = self.process_window(&mut segments) {
+                eprintln!("[incremental_vad] trailing window inference failed: {e}");
+            }
+        }
         if self.is_speaking {
             self.finish_segment(&mut segments);
         }
@@ -175,4 +194,61 @@ fn find_max_index(row: ArrayBase<ViewRepr<&f32>, IxDyn>) -> Result<usize, crate:
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(i, _)| i)
         .ok_or(crate::Error::EmptyRowError)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wav_bytes_to_i16_s16le(bytes: &[u8]) -> Vec<i16> {
+        let data = if bytes.len() > 44 {
+            &bytes[44..]
+        } else {
+            bytes
+        };
+        data.chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect()
+    }
+
+    #[test]
+    fn finish_processes_trailing_partial_window() {
+        // Use a 16kHz mono WAV slice (~29.1s), just under 3 full 10s windows,
+        // so the tail audio sits in a partial buffer after the last window.
+        let audio = wav_bytes_to_i16_s16le(hypr_data::english_1::AUDIO);
+        let sr: u32 = 16000;
+        let total = sr as usize * 29;
+        assert!(audio.len() >= total, "test audio too short");
+        let audio = &audio[..total];
+
+        let mut vad = IncrementalVad::new(sr).unwrap();
+
+        // Feed in small chunks; only full 10s windows get processed here.
+        let mut emitted = Vec::new();
+        for chunk in audio.chunks(1600) {
+            emitted.extend(vad.feed(chunk).unwrap());
+        }
+        assert!(
+            emitted.iter().all(|s| s.end <= 20.0),
+            "feed must only complete segments within processed windows"
+        );
+
+        // Before the fix, finish() dropped the residual buffer and the tail
+        // speech produced no segment. Now it must emit a segment whose end
+        // reaches the end of the fed audio (speech present in the tail).
+        let flushed = vad.finish();
+        let audio_dur = audio.len() as f64 / sr as f64;
+        let last_end = flushed.iter().map(|s| s.end).last().unwrap_or(0.0);
+        assert!(
+            last_end >= audio_dur - 1.5,
+            "tail segment end {last_end:.2}s should cover audio end {audio_dur:.2}s; flushed={:?}",
+            flushed.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn finish_with_empty_buffer_is_noop() {
+        let mut vad = IncrementalVad::new(16000).unwrap();
+        assert!(vad.finish().is_empty());
+    }
 }

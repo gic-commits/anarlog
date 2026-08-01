@@ -3,6 +3,7 @@
 mod integration;
 
 pub use integration::continue_from_file;
+pub use integration::propagate_speaker_to_none;
 pub use integration::run_progressive_batch_from_file;
 mod queue;
 mod segmenter;
