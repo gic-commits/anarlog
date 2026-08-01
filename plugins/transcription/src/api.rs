@@ -504,6 +504,17 @@ mod tests {
     }
 
     #[test]
+    fn capture_params_preserves_segment_duration_ms_into_session_params() {
+        let mut params = capture_params("https://api.deepgram.com/v1", "nova-3-general");
+        params.segment_duration_ms = Some(60000);
+
+        let session_params: hypr_transcription_core::listener::actors::SessionParams =
+            params.into();
+
+        assert_eq!(session_params.segment_duration_ms, Some(60000));
+    }
+
+    #[test]
     fn defaults_soniox_capture_to_live_mode_without_languages() {
         let params = capture_params("https://api.soniox.com", "stt-rt-v5");
 

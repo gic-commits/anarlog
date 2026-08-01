@@ -16,6 +16,24 @@ pub struct TauriRuntime {
     pub session_state_cache: SessionStateCache,
 }
 
+fn build_progressive_batch_config(
+    params: &hypr_transcription_core::listener::ProgressiveBatchParams,
+) -> core::ProgressiveBatchConfig {
+    core::ProgressiveBatchConfig {
+        session_id: params.session_id.clone(),
+        sample_rate: params.sample_rate,
+        segment_duration_ms: params.segment_duration_ms.unwrap_or(30000),
+        overlap_ms: 1000,
+        max_concurrency: 2,
+        base_url: params.base_url.clone(),
+        api_key: params.api_key.clone(),
+        model: Some(params.model.clone()),
+        language: params.language.clone(),
+        provider: core::BatchProvider::OpenAI,
+        session_dir: std::env::temp_dir().join(format!("progressive-{}", params.session_id)),
+    }
+}
+
 impl hypr_storage::StorageRuntime for TauriRuntime {
     fn global_base(&self) -> Result<std::path::PathBuf, hypr_storage::Error> {
         self.app
@@ -143,20 +161,7 @@ impl ListenerRuntime for TauriRuntime {
         let app = self.app.clone();
 
         tauri::async_runtime::spawn(async move {
-            let config = core::ProgressiveBatchConfig {
-                session_id: params.session_id.clone(),
-                sample_rate: params.sample_rate,
-                segment_duration_ms: params.segment_duration_ms.unwrap_or(30000),
-                overlap_ms: 1000,
-                max_concurrency: 2,
-                base_url: params.base_url,
-                api_key: params.api_key,
-                model: Some(params.model),
-                language: params.language,
-                provider: core::BatchProvider::OpenAI,
-                session_dir: std::env::temp_dir()
-                    .join(format!("progressive-{}", params.session_id)),
-            };
+            let config = build_progressive_batch_config(&params);
 
             let runtime = Arc::new(LiveBatchRuntime { app: app.clone() });
             let mut manager =
@@ -275,4 +280,39 @@ async fn current_root_state() -> RootState {
 
     let actor: ActorRef<RootMsg> = cell.into();
     call_t!(actor, RootMsg::GetState, 100).unwrap_or(RootState::Inactive)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_progressive_batch_config;
+    use hypr_transcription_core::listener::ProgressiveBatchParams;
+
+    fn params() -> ProgressiveBatchParams {
+        ProgressiveBatchParams {
+            session_id: "s1".to_string(),
+            base_url: "http://localhost:8080/v1".to_string(),
+            api_key: "test-key".to_string(),
+            model: "faster-whisper-small".to_string(),
+            language: None,
+            sample_rate: 16000,
+            segment_duration_ms: None,
+            diarization_enabled: false,
+            diarization_model: None,
+            diarization_threshold: 0.35,
+        }
+    }
+
+    #[test]
+    fn config_defaults_segment_duration_to_30000() {
+        let cfg = build_progressive_batch_config(&params());
+        assert_eq!(cfg.segment_duration_ms, 30000);
+    }
+
+    #[test]
+    fn config_honors_configured_segment_duration() {
+        let mut p = params();
+        p.segment_duration_ms = Some(60000);
+        let cfg = build_progressive_batch_config(&p);
+        assert_eq!(cfg.segment_duration_ms, 60000);
+    }
 }
