@@ -839,6 +839,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | 11 | **混音削波**（`audio-utils/lib.rs` `mix_sample_f32`）| ✅ 已修复（Aug 2 PM），待真机验证 | 根因：MicAndSpeaker 模式 `(mic+spk).clamp(-1,1)` 双通道同时有声时削波。**溯源：`cb8913b7b`（Aug 1）才把 progressive 从"只发 mic"改成"混音 mic+spk"**，削波随之引入（此前只发 AEC mic，无混音）。修复：`(mic+spk)*0.5` 衰减相加 |
 | 12 | **live 停止后无完成提醒**（前端通知问题）| ⚠️ 待查（Aug 2 PM）| 真机测试：点停止后，后端 `waitForLiveBatchResult completed` 正常完成，但 UI 无"处理完成"提示。后端事件已发，前端通知逻辑可能缺失或未订阅。需查前端 stop 后完成事件 → 通知的链路 |
 | 13 | **服务端长段 whisper 偶发不稳定**（~33-40s 段 500/截断）| 🔴 已报服务端（Aug 2 PM）| 与 c5ee333b group5/6（33s 段稳定 500）同类问题复发：c563d8c6 group0（37.2s）live 提交时偶发 500/只转前 28s，但同段样本重新 POST 稳定 200 且完整。服务端称已修复过（without_timestamps/clip 边界/clip 重叠），但长段偶发不稳定仍存在。已发简报 |
+| 14 | **外部扬声器人声录音质量差**（AEC 无参考信号）| 📝 已知限制，搁置（Aug 2 PM）| 场景：手机/语音电话独立外放（不经过 Mac 音频系统），人声经空气进入麦克风 → CATap far-end 无参考 → 自研 ONNX AEC 遇训练分布外输入可能误伤真人声 → 录音偏差。真人讲话（无外放）质量正常，证明非链路 bug。**任何 AEC（苹果硬件/我们软件）都依赖 far-end 参考，外部扬声器是固有限制**。**候选修复**：far-end 能量低时跳过 AEC（最简单）。**待用户在公司找真实语音电话实测后再定是否解决** |
 
 ### Sprint 3 Phase D（录音流 diarization）— ✅ live 对齐 + 自适应修复完成，仅剩真机验证
 
@@ -855,7 +856,8 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 2. **服务端长段 whisper 不稳定**：等 speaches 反馈（#13）
 3. **#12 无完成提醒**：查前端 stop 后完成事件 → 通知链路
 4. 长录音内存峰值实测（#6）
-5. Sprint 4：扩展适配 Groq STT（用户已排期）
+5. **外部扬声器人声**：等用户在公司找真实语音电话实测（#14）
+6. Sprint 4：扩展适配 Groq STT（用户已排期）
 
 ### 已有但未落库的 diarization 改动（Jul 30-31，已随 Aug 1 commit 提交）
 
