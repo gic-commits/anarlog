@@ -167,8 +167,14 @@ impl ListenerRuntime for TauriRuntime {
             let config = build_progressive_batch_config(&params);
 
             let runtime = Arc::new(LiveBatchRuntime { app: app.clone() });
+            let segments_dir = config.session_dir.join("progressive-batch");
             let mut manager =
                 core::ProgressiveBatchManager::new(config).with_runtime(runtime.clone());
+            tracing::info!(
+                session_id = %params.session_id,
+                segments_dir = %segments_dir.display(),
+                "[live] progressive manager ready, seg wavs will be written under segments_dir"
+            );
 
             // Set up diarization engine if enabled
             let mut diarization_engine = if params.diarization_enabled {

@@ -186,6 +186,7 @@ impl ProgressiveBatchManager {
                         model: config.model.clone(),
                         language: config.language.clone(),
                         provider: config.provider,
+                        segment_duration_ms: config.segment_duration_ms,
                     },
                     default_submit_fn(),
                 ),
@@ -501,8 +502,12 @@ impl ProgressiveBatchManager {
         let remaining = (qp.pending + qp.inflight) as u64;
         let max_concur = self.config.max_concurrency as u64;
         let waves = remaining.div_ceil(max_concur).max(1);
-        let drain_timeout =
-            Duration::from_millis(waves * self.config.segment_duration_ms as u64 * 2);
+        // Give each remaining segment enough server-side processing budget.
+        // A 40s audio clip can take 60-90s of whisper inference on the server;
+        // the old `waves * segment_duration * 2` under-budgeted this and the
+        // tail groups submitted after stop were dropped at drain timeout.
+        let segment_budget_ms = self.config.segment_duration_ms as u64 * 3;
+        let drain_timeout = Duration::from_millis((remaining * segment_budget_ms).max(120_000));
         tracing::info!(
             "[progressive] finish: drain timeout={}ms (remaining={} waves={} concurrency={})",
             drain_timeout.as_millis(),
@@ -579,6 +584,7 @@ impl ProgressiveBatchManager {
             model: self.config.model.clone(),
             language: self.config.language.clone(),
             provider: self.config.provider.clone(),
+            segment_duration_ms: self.config.segment_duration_ms,
         }
     }
 

@@ -85,31 +85,54 @@ pub struct VadGroupStream {
     max_dur_s: f64,
     pending: Vec<Segment>,
     pending_dur: f64,
+    /// End time (seconds) of the last segment in `pending`, or 0 if empty.
+    /// Used to detect a long silence after the pending speech so we can emit
+    /// the group during recording instead of leaving it until stop/flush.
+    pending_last_end_s: f64,
     next_index: usize,
     emitted_any: bool,
     fed_samples: usize,
     collect_vad_segments: bool,
     vad_segments: Vec<Segment>,
+    /// Trailing-silence threshold (seconds) at which the pending group is
+    /// emitted during recording. Reflects a natural pause between spoken
+    /// turns (~2-5s), so it only weakly tracks segment length: short segments
+    /// emit at 2s idle to stay timely, long segments at 5s to avoid over-splitting.
+    emit_idle_secs: f64,
 }
 
 impl VadGroupStream {
+    /// Idle threshold for segments up to 60s.
+    const EMIT_IDLE_SECS_SHORT: f64 = 2.0;
+    /// Idle threshold for segments longer than 60s.
+    const EMIT_IDLE_SECS_LONG: f64 = 5.0;
+    /// Segment length (ms) above which the longer idle threshold applies.
+    const LONG_SEGMENT_MS: u32 = 60_000;
+
     pub fn new(config: VadGroupStreamConfig) -> Result<Self, String> {
         let vad = IncrementalVadSource::new(config.sample_rate)?;
         Ok(Self::with_vad(config, Box::new(vad)))
     }
 
     fn with_vad(config: VadGroupStreamConfig, vad: Box<dyn VadSource>) -> Self {
+        let emit_idle_secs = if config.max_duration_ms <= Self::LONG_SEGMENT_MS {
+            Self::EMIT_IDLE_SECS_SHORT
+        } else {
+            Self::EMIT_IDLE_SECS_LONG
+        };
         Self {
             vad,
             sample_rate: config.sample_rate,
             max_dur_s: config.max_duration_ms as f64 / 1000.0,
             pending: Vec::new(),
             pending_dur: 0.0,
+            pending_last_end_s: 0.0,
             next_index: 0,
             emitted_any: false,
             fed_samples: 0,
             collect_vad_segments: config.collect_vad_segments,
             vad_segments: Vec::new(),
+            emit_idle_secs,
         }
     }
 
@@ -127,21 +150,25 @@ impl VadGroupStream {
     /// Mirrors `merge_segments` from `min_cut_merge.rs` decision-for-decision.
     fn merge_atom(&mut self, atom: Segment, out: &mut Vec<AudioSegment>) {
         let seg_dur = atom.end - atom.start;
+        let atom_end = atom.end;
         let would_exceed = self.pending_dur + seg_dur > self.max_dur_s;
 
         if !would_exceed {
             self.pending.push(atom);
             self.pending_dur += seg_dur;
+            self.pending_last_end_s = atom_end;
         } else if self.pending_dur >= self.max_dur_s * 0.8 {
             self.emit_group(out);
             self.pending.push(atom);
             self.pending_dur = seg_dur;
+            self.pending_last_end_s = atom_end;
         } else {
             if !self.pending.is_empty() {
                 self.emit_group(out);
             }
             self.pending.push(atom);
             self.pending_dur = seg_dur;
+            self.pending_last_end_s = atom_end;
         }
     }
 
@@ -154,6 +181,18 @@ impl VadGroupStream {
         let start_sample = (first.start * self.sample_rate as f64) as usize;
         let end_sample = ((last.end * self.sample_rate as f64) as usize).min(self.vad.all_len());
         let samples_i16 = self.vad.sample_slice(start_sample, end_sample);
+        tracing::info!(
+            "[vad-group] emit group idx={} global=[{:.1}s, {:.1}s] first_start={:.1}s last_end={:.1}s samples={} ({}ms audio) fed_total={:.1}s pending_dur={:.1}s",
+            self.next_index,
+            first.start,
+            last.end,
+            first.start,
+            last.end,
+            samples_i16.len(),
+            samples_i16.len() as f64 / self.sample_rate as f64 * 1000.0,
+            self.fed_samples as f64 / self.sample_rate as f64,
+            self.pending_dur,
+        );
         out.push(AudioSegment {
             index: self.next_index,
             global_start_ms: (first.start * 1000.0) as i64,
@@ -164,6 +203,7 @@ impl VadGroupStream {
         self.emitted_any = true;
         self.pending.clear();
         self.pending_dur = 0.0;
+        self.pending_last_end_s = 0.0;
         // The next group's first speech starts at or after `end_sample`, so
         // samples before it are no longer needed. Pruning keeps the retained
         // buffer bounded instead of growing to the full recording length.
@@ -185,15 +225,27 @@ impl SegmentProducer for VadGroupStream {
                 return Vec::new();
             }
         };
-        if segments.is_empty() {
-            return Vec::new();
-        }
         if self.collect_vad_segments {
             self.vad_segments.extend(segments.iter().cloned());
         }
         let mut out = Vec::new();
         for seg in segments {
             self.push_vad_segment(seg, &mut out);
+        }
+        // Time-based emit: if the pending group has been idle (no new speech)
+        // for a while, emit it during recording rather than leaving it to
+        // stop/flush. This keeps sparse tail speech from piling up into a
+        // single late group that a short drain window might drop.
+        if !self.pending.is_empty() {
+            let now_s = self.fed_samples as f64 / self.sample_rate as f64;
+            let idle = now_s - self.pending_last_end_s;
+            if idle >= self.emit_idle_secs && self.pending_dur >= self.max_dur_s * 0.5 {
+                tracing::info!(
+                    "[vad-group] idle-triggered emit: idle={idle:.1}s pending_dur={:.1}s",
+                    self.pending_dur,
+                );
+                self.emit_group(&mut out);
+            }
         }
         out
     }
@@ -381,22 +433,24 @@ mod tests {
     #[test]
     fn test_incremental_feed_matches_single_feed() {
         let sr = 16000;
+        // Gaps between speech are < EMIT_IDLE_SECS_SHORT (2s) so the idle
+        // time-based emit does not fire; grouping must match a single feed.
         let segs_a = vec![
             MockVad::seg(0.0, 8.0, sr),
-            MockVad::seg(10.0, 18.0, sr),
-            MockVad::seg(20.0, 32.0, sr),
+            MockVad::seg(9.0, 17.0, sr),
+            MockVad::seg(18.0, 30.0, sr),
         ];
         let segs_b = segs_a.clone();
 
         // Feed all at once.
         let mut s1 = stream(30000, MockVad::new(segs_a));
-        let mut one_shot = s1.feed(&vec![0.0f32; (sr * 32) as usize]);
+        let mut one_shot = s1.feed(&vec![0.0f32; (sr * 30) as usize]);
         one_shot.extend(s1.flush());
 
         // Feed incrementally.
         let mut s2 = stream(30000, MockVad::new(segs_b));
         let mut incremental = Vec::new();
-        for _ in 0..32 {
+        for _ in 0..30 {
             incremental.extend(s2.feed(&vec![0.0f32; sr as usize]));
         }
         incremental.extend(s2.flush());
@@ -410,6 +464,37 @@ mod tests {
             .map(|g| (g.global_start_ms, g.global_end_ms))
             .collect();
         assert_eq!(bounds1, bounds2);
+    }
+
+    #[test]
+    fn test_idle_emit_during_incremental_feed() {
+        let sr = 16000;
+        // Long gap after the second turn (>= 2s idle) should trigger an early
+        // emit once pending_dur reaches half the segment length, so the turn is
+        // submitted during recording instead of waiting for stop/flush.
+        let segs = vec![
+            MockVad::seg(0.0, 8.0, sr),
+            MockVad::seg(9.0, 17.0, sr),
+            MockVad::seg(20.0, 32.0, sr),
+        ];
+        let mut s = stream(30000, MockVad::new(segs));
+        let mut out = Vec::new();
+        // Feed up to ~20s (past the 3s idle after the second turn at 17s).
+        for _ in 0..21 {
+            out.extend(s.feed(&vec![0.0f32; sr as usize]));
+        }
+        out.extend(s.flush());
+
+        // Second turn [9,17] (pending_dur 16s >= 15s) hits idle>=2s at ~20s and
+        // is emitted as its own group before the final turn.
+        let groups: Vec<(i64, i64)> = out
+            .iter()
+            .map(|g| (g.global_start_ms, g.global_end_ms))
+            .collect();
+        assert!(
+            groups.iter().any(|&(s0, e0)| s0 <= 9000 && e0 >= 17000),
+            "expected an early group covering the second turn, got {groups:?}"
+        );
     }
 
     #[test]

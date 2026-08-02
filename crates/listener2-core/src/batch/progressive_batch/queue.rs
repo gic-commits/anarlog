@@ -18,6 +18,8 @@ pub struct QueueConfig {
     pub model: Option<String>,
     pub language: Option<String>,
     pub provider: BatchProvider,
+    /// Configured segment duration (ms); used to scale the drain grace window.
+    pub segment_duration_ms: u32,
 }
 
 impl Default for QueueConfig {
@@ -29,6 +31,7 @@ impl Default for QueueConfig {
             model: None,
             language: None,
             provider: BatchProvider::OpenAI,
+            segment_duration_ms: 30_000,
         }
     }
 }
@@ -271,8 +274,71 @@ impl BatchQueue {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             let polled = self.poll_completed();
+            results.extend(polled);
 
             if std::time::Instant::now() >= deadline {
+                // Timeout reached. Give remaining segments one more dispatch
+                // round and a grace window before giving up — the old behaviour
+                // immediately marked them Failed, dropping tail groups that
+                // were submitted after stop but hadn't finished yet.
+                let remaining: Vec<usize> = self
+                    .segments
+                    .iter()
+                    .filter(|s| {
+                        matches!(
+                            s.status,
+                            SegmentStatus::Pending | SegmentStatus::InFlight { .. }
+                        )
+                    })
+                    .map(|s| s.index)
+                    .collect();
+                if !remaining.is_empty() {
+                    self.try_dispatch_from_pending();
+                    // Grace window = segment length * 1.25, at least 60s. Server
+                    // whisper on a 40s clip can take 60-90s; shorter segments
+                    // still get a 60s floor, longer ones scale with length.
+                    let grace_dur = Duration::from_secs(
+                        (self.config.segment_duration_ms as u64 * 5 / 4).max(60),
+                    );
+                    let grace = std::time::Instant::now() + grace_dur;
+                    // Poll the queue during the grace window instead of blocking
+                    // on `result_rx.recv()`, so a submit that will never resolve
+                    // doesn't stall the whole drain. Also bail early if several
+                    // consecutive polls yield nothing new (submission stalled).
+                    let mut idle_polls = 0u32;
+                    let mut last_count = results.len();
+                    loop {
+                        let polled = self.poll_completed();
+                        results.extend(polled);
+                        if std::time::Instant::now() >= grace {
+                            break;
+                        }
+                        let has_inflight = self
+                            .segments
+                            .iter()
+                            .any(|s| matches!(s.status, SegmentStatus::InFlight { .. }));
+                        let has_pending = self
+                            .segments
+                            .iter()
+                            .any(|s| matches!(s.status, SegmentStatus::Pending));
+                        if !has_inflight && !has_pending {
+                            break;
+                        }
+                        if results.len() == last_count {
+                            idle_polls += 1;
+                            if idle_polls >= 10 {
+                                break;
+                            }
+                        } else {
+                            idle_polls = 0;
+                        }
+                        last_count = results.len();
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                    // Drain any results that landed during the grace poll.
+                    results.extend(self.poll_completed());
+                }
+
                 for entry in &mut self.segments {
                     if matches!(
                         entry.status,
@@ -289,7 +355,6 @@ impl BatchQueue {
                         });
                     }
                 }
-                results.extend(polled);
                 break;
             }
 
@@ -302,10 +367,8 @@ impl BatchQueue {
                 .iter()
                 .any(|s| matches!(s.status, SegmentStatus::Pending));
             if !has_inflight && !has_pending {
-                results.extend(polled);
                 break;
             }
-            results.extend(polled);
 
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             match tokio::time::timeout(remaining, self.result_rx.recv()).await {
