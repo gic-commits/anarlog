@@ -736,20 +736,74 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 - `git log`: `0e9afc728`（Aug 2 调查记录）、`c495cd5ba`（min_duration_secs 清理确认）、`f82712ccb`（丢段修复确认）、Aug 1 三个 commit（diarization 方案B/后端/前端）
 - 工作区干净，无未提交代码（临时诊断文件已删除）
 
+## Aug 2 (PM) — UI 全流程测试 + diarization 参数网格搜索（threshold 0.5 定为默认）✅
+
+### UI 全流程测试（5fdd76a7 + c5ee333b）
+
+| 验证点 | 结果 |
+|--------|------|
+| **#3** Bug 2：STT mode=batch re-transcribe → `progressiveBatch=false` | ✅ 日志确认，无 whispercpp 回退 |
+| **#3** 右键菜单：batch 模式不分裂三项 | ✅ |
+| **#3** 右键菜单：progressive 模式分裂为 Re-trans(Total)/Re-trans(Progressive) | ✅ 符合预期 |
+| Continue 菜单 | ✅ 无中断时不显示（预期）；**注意**：从未构造出未完成状态，且 abandoned 段（stitcher 部分失败）也不触发 Continue → 用户无补救入口，记录为远期关注点 |
+| **#5** progressive 端到端 speaker 标签（5fdd76a7）| ✅ 9 unique speakers（真实 6-9），518/518 词有标签 |
+| 服务端 whisper 字节敏感（5fdd76a7 group3）| ✅ 今天一次成功（昨天 3 次 500）|
+| **服务端 whisper 500**（c5ee333b group5/6）| ✅ 已修复（服务端定位 3 根因：without_timestamps/clip 超长/clip 重叠；重新 POST 全部稳定 200，客户端无需改动）|
+
+### diarization 参数网格搜索（4 个已知 ground truth 音频）
+
+**新增 ground truth**：4a1092c6=3 人、fa087f41=6 人（用户确认）。
+
+| 音频 | 真实 | 关键参数组合结果 |
+|------|------|------|
+| c5ee333b | 1 | span≥5 或 total≥10 → 1 ✅；span=4 → 2-3 ❌ |
+| 5fdd76a7 | 6-9 | fixed 0.5 → 7-8 ✅；adaptive(0.85) → 3-4 ❌ |
+| 4a1092c6 | 3 | span≤4 → 3 ✅；span≥5 → 2 ❌ |
+| fa087f41 | 6 | total≤8 → 6 ✅；total=10 → 4 ❌ |
+
+**核心发现**：
+1. **threshold 是关键变量**：fixed 0.5 全面优于 adaptive（adaptive 对 5fdd76a7 只给 3-4）
+2. **embedding 区分度不足是根本**：c5ee333b 假 speaker（maxcontig=4.5s）与 4a1092c6 真实短说话人（maxcontig=4.6s）的连续跨度**几乎相同**，纯 span/时长阈值无法区分（单说话人的块间距离 0.468 与多说话人 0.676 高度重叠）
+3. 无参数让 4 个音频全对，最均衡为 **T8S5G2**（min_total=8, span=5, gap=2）
+
+### 落地改动（threshold=0.5 定为默认）
+
+| 文件 | 改动 |
+|------|------|
+| `schema.ts` / `select.tsx` / `useRunBatch.ts` | diarization_threshold 默认 0.85 → **0.5** |
+| `api.rs` / `batch/mod.rs` | Rust `default_diarization_threshold()` 0.35 → 0.5 |
+| `incremental_diarization.rs` | `smooth_speakers` 改用**连续跨度 + 累计时长双条件**（min_total=8, min_contiguous_span=5, span_gap=2）；config 新增 3 字段；`recluster` 只在调用方传旧 0.85 时走 adaptive，0.5 直接用 |
+| `find_threshold.rs` | 回归测试改 threshold 0.5；**修复 `load_pcm_from_mp3` 缺 mono downmix**（此前立体声导致测试结果错误）|
+
+**结论**：当前最优解 = threshold 0.5 + T8S5G2（4 个音频 3/4 全对，仅 4a1092c6 少报 1）。这是基于有限样本的线性调参，**受样本限制，非通用最优** → 降为远期优化。
+
+### 验证
+
+| 命令 | 结果 |
+|------|------|
+| `cargo test -p pyannote-local --lib` | ✅ 27/27（+2 smooth 测试：保留真实 interleaved + 过滤分散噪音）|
+| `cargo test -p pyannote-local --test diarization_pipeline --test find_threshold` | ✅ 21 + 1 |
+| `cargo test -p listener2-core` | ✅ 127/127 |
+| `cargo test -p tauri-plugin-transcription` | ✅ 34/34 |
+| `cargo check -p listener2-core -p tauri-plugin-transcription -p listener-core` | ✅ |
+| `pnpm -F @hypr/desktop typecheck` | ✅ |
+| dprint fmt | ✅ |
+
 ## 下一步工作排布
 
-### 未解决问题清单（截至 Aug 2 提交后）
+### 未解决问题清单（截至 Aug 2 PM 提交后）
 
 | # | 问题 | 状态 | 后续动作 |
 |---|------|------|----------|
 | 1 | **服务端丢段**（seg5-from-mp3 截断，只转写前 8.6s）| ✅ 已修复（Aug 1 验证）| 服务端已解决；用之前可复现截断的 `seg5-from-mp3.raw` 重新 POST，现在完整转写 24.9s（97 words，覆盖到 24.9s），与 `seg5-full.raw` 结果一致。无需客户端改动 |
-| 2 | **c5ee333b 说话人数未确认** | ⚠️ DB 无 ground truth（transcript speaker 全是 provider 的 speaker_index:0）| adaptive+2s 过滤给 7；若实际更少，调 `MIN_SPEAKER_SECS`（现在 2.0）或 MAD 系数（现在 0.15）|
-| 3 | **Bug 2**：Re-transcription batch target 回退 whispercpp | 📝 待验证 | 依赖 Bug 3（已修 Jul 25），需复测确认不再回退 |
-| 4 | **`min_duration_secs` 冗余字段删除** | ✅ 已确认（Aug 1）| 代码里已 0 处引用（全库搜索无匹配）——Jul 25 已由 `segment_duration_ms` 替代（`integration.rs:55`：`duration_secs < segment_duration_ms/1000 → submit_file_direct`）。`min_duration_secs` 从未是配置项，原为硬编码常量 `MIN_DURATION_SECS=180`。问题清单残留记录已清理，无需改代码 |
-| 5 | **真机端到端**：live 录音 speaker 标签是否随 `SegmentResult` 正确显示 | 待验证 | 需真机录音测试（Sprint 3 Phase D 收尾）|
+| 2 | **c5ee333b 说话人数** | ✅ 已确认（Aug 2 PM）| 用户确认真实 = **1 人**；threshold 0.5 + T8S5G2 下算法给出 1 ✅。已闭环 |
+| 3 | **Bug 2**：Re-transcription batch target 回退 whispercpp | ✅ 已确认修复（Aug 2 PM）| UI 测试验证：STT mode=batch → `progressiveBatch=false`（日志确认），无 whispercpp 回退；右键菜单 batch 不分裂、progressive 分裂两项均符合预期 |
+| 4 | **`min_duration_secs` 冗余字段删除** | ✅ 已确认（Aug 1）| 代码里已 0 处引用（全库搜索无匹配）——Jul 25 已由 `segment_duration_ms` 替代。已闭环 |
+| 5 | **真机端到端**：live 录音 speaker 标签是否随 `SegmentResult` 正确显示 | ⚠️ 基本验证，真机待测 | progressive re-transcribe 端到端验证 5fdd76a7=9 speakers ✅；但**真机 live 录音**（非 re-transcribe）仍未实测 |
 | 6 | **内存峰值确认** <50MB（流式解码 + VAD prune）| 待实测 | 长录音（~1h）跑一遍验证 |
-| 7 | **MAD 系数 0.15 标定单一音频** | ⚠️ 需更多音频样本 | 当前只基于 5fdd76a7（4 说话人）标定；收集更多多说话人音频验证自适应阈值泛化 |
-| 8 | **服务端 whisper 对字节敏感**：1:05-1:30 段（group3=67.88-87.45s，女声中文→男声东南亚口音英语切换区）客户端 rodio 解码字节提交稳定 HTTP 500 或返回重复"對"的 whisper loop garbage；同段 ffmpeg 解码字节完全正常 | ✅ 已修复（Aug 2 验证）| 服务端已修复。用客户端 rodio 解码路径重新生成 group3 字节（626240B）POST：之前稳定 500，现在 **HTTP 200 且转写正常**（"对对对,你知道中国是在发展的吗?我觉得是有的就是..."，62 words 覆盖到 19.44s，avg_logprob=-0.473 正常值非 loop）。3/3 次稳定 200。7 组全部 200 且内容完整。无需客户端改动 |
+| 7 | **diarization embedding 区分度不足**（原 MAD 系数标定）| 🔴 已确认根因，降为**远期优化** | wespeaker 短块 embedding 区分度不足：单说话人块间距离(0.468)与多说话人(0.676)高度重叠；c5 假 speaker(maxcontig 4.5s)与 4a1092c6 真实短说话人(4.6s)连续跨度几乎相同，纯阈值无法区分。当前最优解 threshold 0.5 + T8S5G2（4 音频 3/4 全对），受样本限制非通用最优。远期：继续调低 threshold + 其他参数组合 / 换更鲁棒 embedding 模型 |
+| 8 | **服务端 whisper 500**（c5ee333b group5/6，33s 段稳定 500，73s 内容丢失）| ✅ 已修复（Aug 2 PM 验证）| 服务端定位 3 个根因并修复：① 丢段=`without_timestamps` 默认 True 与 word 时间戳冲突→改 False；② 500=clip 边界超音频长度（rodio 无前导静音触发）→clamp；③ 500=相邻 clip 重叠（>30s 段触发，解释"整段 500/拆半段正常"）→合并重叠 clip。验证：group5/group6/g5-ffmpeg 重新 POST 全部稳定 200 且转写正常。**客户端无需改动** |
+| 9 | **abandoned 段无补救入口**（远期关注点）| 📝 记录 | stitcher 部分失败（abandoned）不触发 Continue → 用户无法补救已丢失内容。从未构造出完整未完成状态，当前模拟不出。远期：abandoned 后提供重试/补转入口 |
 
 ### Sprint 3 Phase D（录音流 diarization）— ✅ live 对齐 + 自适应修复完成，仅剩真机验证
 
@@ -763,9 +817,8 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 ### 近期待办（按优先级）
 
 1. 真机端到端验证 live 录音 diarization（问题清单 #5）
-2. 复测 Bug 2（batch target fallback，问题清单 #3）
-3. 收集更多多说话人音频验证自适应 threshold 泛化 + 确认 c5ee333b 真实说话人数（#2/#7）
-4. 长录音内存峰值实测（#6）
+2. 长录音内存峰值实测（#6）
+3. Sprint 4：扩展适配 Groq STT（用户已排期）
 
 ### 已有但未落库的 diarization 改动（Jul 30-31，已随 Aug 1 commit 提交）
 
