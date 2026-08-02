@@ -822,6 +822,24 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 
 ## 下一步工作排布
 
+### Sprint 4：Groq STT 适配（已启动）
+
+设计文档：`docs/groq-stt-adapter.md`
+
+**Groq 关键信息**：
+- OpenAI 兼容端点 `https://api.groq.com/openai/v1/audio/transcriptions`，**无 streaming**（只有 batch transcriptions/translations）
+- 模型：`whisper-large-v3`（多语言，189× 实时）、`whisper-large-v3-turbo`（多语言，216× 实时，性价比高）
+- 参数与 OpenAI 兼容：file/url、model、language、prompt、response_format（json/verbose_json/text）、temperature、timestamp_granularities（word/segment）
+- **限制**：单文件 25MB(free)/100MB(dev)；ASH=7200s/h、ASD=28800s/day、RPM=20/min、RPD=2000/day（触发 429 + retry-after）；组织级锁定；无 diarization（本地引擎可用）
+
+**适配方案**（`batch + 客户端分段`）：
+- `Provider`/`AdapterKind`/`BatchProvider` 新增 `Groq`，识别 `api.groq.com`
+- 复用 `OpenAIAdapter::build_batch_multipart` + `parse_batch_response`（完全 OpenAI 兼容）
+- 长音频走**现有 progressive batch 客户端分段**（现有 30s-10m 段 = 0.96-19.2MB，天然满足 25MB）
+- **429 限速处理**（关键）：现有 queue retry 未区分 429/retry-after，需增强（RPM=20 下 N=2 并发 + 30s 段 ≈ 4 段/min 天然安全）
+
+**待确认**：Groq 需要真实 API key 才能验证；本地 diarization 是否与 Groq 返回兼容需实测。
+
 ### 未解决问题清单（截至 Aug 2 PM 提交后）
 
 | # | 问题 | 状态 | 后续动作 |
@@ -857,7 +875,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 3. **#12 无完成提醒**：查前端 stop 后完成事件 → 通知链路
 4. 长录音内存峰值实测（#6）
 5. **外部扬声器人声**：等用户在公司找真实语音电话实测（#14）
-6. Sprint 4：扩展适配 Groq STT（用户已排期）
+6. **Sprint 4：Groq STT 适配**（已启动，见 `docs/groq-stt-adapter.md`）——Provider/AdapterKind 识别 + 429 限速处理 + 前端配置
 
 ### 已有但未落库的 diarization 改动（Jul 30-31，已随 Aug 1 commit 提交）
 
