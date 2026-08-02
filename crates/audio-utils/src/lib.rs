@@ -142,7 +142,11 @@ pub fn interleave(channels: &[Vec<f32>]) -> Vec<f32> {
 }
 
 pub fn mix_sample_f32(mic: f32, speaker: f32) -> f32 {
-    (mic + speaker).clamp(-1.0, 1.0)
+    // Attenuate before summing to avoid clipping when both channels are
+    // active simultaneously (mic + speaker both near full scale). A plain
+    // `(mic + speaker).clamp(-1, 1)` hard-clips and sounds distorted /
+    // volume-pumping on MicAndSpeaker captures.
+    ((mic + speaker) * 0.5).clamp(-1.0, 1.0)
 }
 
 pub fn mix_audio_f32(mic: &[f32], speaker: &[f32]) -> Vec<f32> {

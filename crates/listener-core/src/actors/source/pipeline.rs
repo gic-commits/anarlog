@@ -42,11 +42,19 @@ pub(in crate::actors) struct Pipeline {
     audio_buffer: AudioBuffer,
     replay_history: ReplayHistory,
     backlog_quota: f32,
+    /// Frames dropped since the last report because the progressive-batch PCM
+    /// channel was full. Accumulated and reported periodically (audio frames
+    /// are high-frequency, so a per-frame warn would flood the logs).
+    pcm_dropped_frames: u32,
+    /// Logs a summary every N dropped frames rather than once per drop.
+    pcm_drop_report_cycle: u32,
 }
 
 impl Pipeline {
     const BACKLOG_QUOTA_INCREMENT: f32 = 0.25;
     const MAX_BACKLOG_QUOTA: f32 = 2.0;
+    /// Report progressive-batch PCM drops in batches of this many frames.
+    const PCM_DROP_REPORT_CYCLE: u32 = 50;
 
     pub(super) fn new(runtime: Arc<dyn ListenerRuntime>, session_id: String) -> Self {
         Self {
@@ -55,6 +63,8 @@ impl Pipeline {
             replay_history: ReplayHistory::new(SAMPLE_RATE as usize * REPLAY_HISTORY_SECS),
             backlog_quota: 0.0,
             vad_mask: VadMask::default(),
+            pcm_dropped_frames: 0,
+            pcm_drop_report_cycle: Self::PCM_DROP_REPORT_CYCLE,
         }
     }
 
@@ -64,6 +74,8 @@ impl Pipeline {
         self.replay_history.clear();
         self.backlog_quota = 0.0;
         self.vad_mask = VadMask::default();
+        self.pcm_dropped_frames = 0;
+        self.pcm_drop_report_cycle = Self::PCM_DROP_REPORT_CYCLE;
     }
 
     pub(super) fn dispatch_frame(
@@ -161,7 +173,21 @@ impl Pipeline {
                         Arc::<[f32]>::from(mix_audio_f32(&item.mic, &item.spk))
                     }
                 };
-                let _ = tx.try_send(audio);
+                if tx.try_send(audio).is_err() {
+                    // The progressive-batch PCM channel is full (consumer = VAD
+                    // + submission lags an occasional capture spike). Dropping
+                    // frames here silently made live audio sound choppy and
+                    // caused VAD to miss speech. Frames are high-frequency, so
+                    // accumulate and report periodically instead of per frame.
+                    self.pcm_dropped_frames += 1;
+                    if self.pcm_dropped_frames >= self.pcm_drop_report_cycle {
+                        tracing::warn!(
+                            dropped_frames = self.pcm_dropped_frames,
+                            "[source] progressive-batch PCM channel full, dropped frames"
+                        );
+                        self.pcm_dropped_frames = 0;
+                    }
+                }
             }
         }
     }
@@ -692,7 +718,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(&*frame, &[0.85_f32, -0.85, 1.0, -1.0]);
+        // mix_sample_f32 attenuates before summing ((mic+spk)*0.5) to avoid
+        // clipping: aec_mic [0.1,-0.1,0.2,-0.2] + spk [0.75,-0.75,1.0,-1.0]
+        // → [0.425,-0.425,0.6,-0.6].
+        assert_eq!(&*frame, &[0.425_f32, -0.425, 0.6, -0.6]);
     }
 
     #[tokio::test]

@@ -65,7 +65,10 @@ impl Actor for SessionActor {
                 ctx.params.transcription_mode == crate::TranscriptionMode::ProgressiveBatch;
 
             let (progressive_batch_pcm_tx, progressive_batch_pcm_rx) = if is_progressive {
-                let (tx, rx) = tokio::sync::mpsc::channel(256);
+                // 1024 frames ≈ 2 minutes of 120ms chunks. VAD inference is fast
+                // (~1.3ms avg) but has occasional spikes (max ~117ms) that can
+                // briefly fill a small channel and cause dropped PCM frames.
+                let (tx, rx) = tokio::sync::mpsc::channel(1024);
                 (Some(tx), Some(rx))
             } else {
                 (None, None)
