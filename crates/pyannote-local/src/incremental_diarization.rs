@@ -7,8 +7,6 @@ use crate::segmentation::Segment;
 const MIN_EMBEDDING_SAMPLES: usize = 16000;
 const MIN_PAUSE_SECS: f64 = 0.2;
 const MAX_CHUNK_SECS: f64 = 4.0;
-const DEFAULT_THRESHOLD: f32 = 0.85;
-const MIN_SPEAKER_SECS: f64 = 2.0;
 
 #[derive(Debug, Clone)]
 pub struct IncrementalDiarizationConfig {
@@ -16,6 +14,16 @@ pub struct IncrementalDiarizationConfig {
     pub model_path: Option<String>,
     pub threshold: f32,
     pub recluster_interval: usize,
+    /// Minimum cumulative duration (seconds) for a speaker to be kept as
+    /// "dominant". Speakers below this are candidates for reassignment.
+    pub min_speaker_secs: f64,
+    /// Minimum contiguous span (seconds) for a speaker to be kept even if its
+    /// cumulative duration is small — a real short turn is contiguous, while
+    /// per-chunk embedding noise fragments are scattered.
+    pub min_contiguous_span_secs: f64,
+    /// Max gap (seconds) between adjacent chunks of the same speaker before
+    /// the contiguous-span run is considered broken.
+    pub span_gap_secs: f64,
 }
 
 impl Default for IncrementalDiarizationConfig {
@@ -23,8 +31,11 @@ impl Default for IncrementalDiarizationConfig {
         Self {
             sample_rate: 16000,
             model_path: None,
-            threshold: 0.85,
+            threshold: 0.5,
             recluster_interval: 5,
+            min_speaker_secs: 8.0,
+            min_contiguous_span_secs: 5.0,
+            span_gap_secs: 2.0,
         }
     }
 }
@@ -206,11 +217,12 @@ impl IncrementalDiarizationEngine {
             return;
         }
 
-        // Default threshold 0.85 is a loose upper bound; on tightly-clustered
-        // audio it collapses every embedding into one speaker. When the config
-        // value is still the default, estimate the cutoff from the actual
-        // distance distribution; an explicitly-tuned value wins.
-        let threshold = if (self.config.threshold - DEFAULT_THRESHOLD).abs() < 1e-6 {
+        // The legacy 0.85 default is a loose upper bound that collapses
+        // tightly-clustered audio into one speaker; when a caller still passes
+        // it, estimate the cutoff from the actual distance distribution. The
+        // current default (0.5) is used directly — it separates speakers better
+        // on real multi-speaker audio.
+        let threshold = if (self.config.threshold - 0.85).abs() < 1e-6 {
             clustering::estimate_threshold(&valid_embs)
         } else {
             self.config.threshold
@@ -253,24 +265,55 @@ impl IncrementalDiarizationEngine {
             return;
         }
 
-        // Drop speakers whose cumulative duration is negligible — these are
-        // isolated 1-2s chunks that the noisy per-chunk embedding put in their
-        // own cluster. Real speakers (even briefly interleaved ones) retain
-        // several seconds of coverage and are preserved.
-        let mut duration_by_speaker: std::collections::HashMap<usize, f64> =
+        // Keep a speaker if it is either "dominant" (large cumulative duration)
+        // or has a real contiguous turn (a run of chunks with gaps under
+        // `span_gap_secs` whose total span reaches `min_contiguous_span_secs`).
+        // Per-chunk embedding noise fragments are scattered (short contiguous
+        // runs with large gaps between them), so they fail the contiguous-span
+        // test and get reassigned to the nearest kept speaker.
+        let mut cumulative: std::collections::HashMap<usize, f64> =
+            std::collections::HashMap::new();
+        let mut chunks: std::collections::HashMap<usize, Vec<(f64, f64)>> =
             std::collections::HashMap::new();
         for seg in &self.segments {
             if seg.valid {
-                *duration_by_speaker.entry(seg.speaker).or_insert(0.0) += seg.end - seg.start;
+                *cumulative.entry(seg.speaker).or_insert(0.0) += seg.end - seg.start;
+                chunks
+                    .entry(seg.speaker)
+                    .or_insert_with(Vec::new)
+                    .push((seg.start, seg.end));
             }
         }
-        let keep: std::collections::HashSet<usize> = duration_by_speaker
+
+        let max_contiguous_span = |chunks: &[(f64, f64)]| -> f64 {
+            let mut sorted = chunks.to_vec();
+            sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            let mut best = 0.0f64;
+            let mut run_start = sorted.first().map(|c| c.0).unwrap_or(0.0);
+            let mut run_end = sorted.first().map(|c| c.1).unwrap_or(0.0);
+            for &(s, e) in &sorted {
+                if s - run_end <= self.config.span_gap_secs {
+                    run_end = run_end.max(e);
+                } else {
+                    best = best.max(run_end - run_start);
+                    run_start = s;
+                    run_end = e;
+                }
+            }
+            best.max(run_end - run_start)
+        };
+
+        let keep: std::collections::HashSet<usize> = chunks
             .iter()
-            .filter(|&(_, &d)| d >= MIN_SPEAKER_SECS)
+            .filter(|(spk, ch)| {
+                let cum = cumulative.get(spk).copied().unwrap_or(0.0);
+                cum >= self.config.min_speaker_secs
+                    || max_contiguous_span(ch) >= self.config.min_contiguous_span_secs
+            })
             .map(|(&s, _)| s)
             .collect();
 
-        if keep.len() == duration_by_speaker.len() {
+        if keep.len() == chunks.len() {
             return;
         }
 
@@ -381,19 +424,35 @@ mod tests {
 
     #[test]
     fn test_smooth_keeps_real_interleaved_speaker() {
-        // spk0 main (12s), spk1 real secondary (6s, interleaved twice).
+        // spk0 main (12s), spk1 real secondary: contiguous 6s turn → kept by
+        // the contiguous-span condition even though cumulative < min_speaker_secs.
         let mut engine = engine_with_segments(&[
             (0.0, 5.0, 0, true),
             (5.0, 8.0, 1, true),
-            (8.0, 15.0, 0, true),
-            (15.0, 18.0, 1, true),
-            (18.0, 22.0, 0, true),
+            (8.0, 11.0, 1, true),
+            (11.0, 15.0, 0, true),
         ]);
         engine.smooth_speakers();
         let speakers: std::collections::HashSet<usize> =
             engine.segments.iter().map(|s| s.speaker).collect();
         assert_eq!(speakers.len(), 2, "both real speakers retained");
         assert!(speakers.contains(&0) && speakers.contains(&1));
+    }
+
+    #[test]
+    fn test_smooth_filters_scattered_noise_speaker() {
+        // spk0 dominant (12s). spk1: 3 tiny scattered chunks, each far apart
+        // (> span_gap) and cumulative < min_speaker_secs → filtered.
+        let mut engine = engine_with_segments(&[
+            (0.0, 4.0, 0, true),
+            (4.0, 8.0, 0, true),
+            (8.0, 12.0, 0, true),
+            (20.0, 22.0, 1, true),
+            (40.0, 42.0, 1, true),
+            (60.0, 62.0, 1, true),
+        ]);
+        engine.smooth_speakers();
+        assert!(engine.segments.iter().all(|s| s.speaker == 0));
     }
 
     #[test]

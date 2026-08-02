@@ -178,6 +178,7 @@ impl ListenerRuntime for TauriRuntime {
                         model_path: params.diarization_model.clone(),
                         threshold: params.diarization_threshold,
                         recluster_interval: 5,
+                        ..Default::default()
                     },
                 ) {
                     Ok(engine) => {

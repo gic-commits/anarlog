@@ -449,7 +449,7 @@ export const useRunBatch = (sessionId: string) => {
             : (diarizationEnabled ?? false),
         diarization_model:
           diarizationEnabled && diarizationModel ? diarizationModel : undefined,
-        diarization_threshold: diarizationThreshold ?? 0.85,
+        diarization_threshold: diarizationThreshold ?? 0.5,
       };
 
       try {

@@ -255,7 +255,7 @@ pub struct TranscriptionParams {
 }
 
 fn default_diarization_threshold() -> f32 {
-    0.35
+    0.5
 }
 
 fn default_cjk_enabled() -> bool {

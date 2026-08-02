@@ -1061,7 +1061,7 @@ function DiarizationSection() {
 
   const enabled = diarization_enabled ?? false;
   const model = diarization_model ?? "wespeaker_zh_cnceleb_resnet34_LM.onnx";
-  const threshold = diarization_threshold ?? 0.85;
+  const threshold = diarization_threshold ?? 0.5;
 
   const MODELS: { value: string; label: string }[] = [
     {

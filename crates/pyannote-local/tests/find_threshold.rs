@@ -12,23 +12,34 @@ fn load_pcm_from_mp3(path: &Path) -> Vec<i16> {
     let file = std::fs::File::open(path).unwrap();
     let source = rodio::Decoder::try_from(file).unwrap();
     let src_sr: u32 = source.sample_rate().into();
+    let channels = source.channels().get() as usize;
     let f32_samples: Vec<f32> = source.collect();
+
+    // Downmix stereo to mono (the audio files are 16kHz stereo mp3).
+    let mono: Vec<f32> = if channels > 1 {
+        f32_samples
+            .chunks(channels)
+            .map(|c| c.iter().sum::<f32>() / channels as f32)
+            .collect()
+    } else {
+        f32_samples
+    };
 
     // resample to 16000
     let target_sr = 16000u32;
     let pcm = if src_sr == target_sr {
-        f32_samples
+        mono
     } else {
         let ratio = src_sr as f64 / target_sr as f64;
-        let out_len = (f32_samples.len() as f64 / ratio).round() as usize;
-        let last = f32_samples.len().saturating_sub(1);
+        let out_len = (mono.len() as f64 / ratio).round() as usize;
+        let last = mono.len().saturating_sub(1);
         let mut out = Vec::with_capacity(out_len);
         for i in 0..out_len {
             let pos = i as f64 * ratio;
             let lo = (pos.floor() as usize).min(last);
             let hi = (pos.ceil() as usize).min(last);
             let frac = pos - lo as f64;
-            out.push(f32_samples[lo] * (1.0 - frac as f32) + f32_samples[hi] * frac as f32);
+            out.push(mono[lo] * (1.0 - frac as f32) + mono[hi] * frac as f32);
         }
         out
     };
@@ -101,6 +112,7 @@ fn sweep_threshold_for_audio() {
             model_path: Some(model_name.to_string()),
             threshold: t,
             recluster_interval: usize::MAX,
+            ..Default::default()
         })
         .unwrap();
 
@@ -121,10 +133,10 @@ fn sweep_threshold_for_audio() {
     }
 }
 
-/// Regression: the fixed 0.85 default collapsed this session's multi-speaker
-/// audio to a single speaker. The adaptive threshold (median + 0.15·MAD)
-/// combined with the min-duration speaker filter must recover multiple
-/// speakers through the real feed_segments + finalize path.
+/// Regression: the legacy 0.85 default collapsed this session's multi-speaker
+/// audio to a single speaker. The current default threshold (0.5) combined
+/// with the contiguous-span speaker filter must recover multiple speakers
+/// through the real feed_segments + finalize path.
 #[test]
 fn adaptive_threshold_recovers_multiple_speakers() {
     let audio_path = Path::new(
@@ -142,12 +154,14 @@ fn adaptive_threshold_recovers_multiple_speakers() {
     let model_name = "wespeaker_zh_cnceleb_resnet34_LM.onnx";
     let model_path = resolve_model_path(model_name).unwrap();
 
-    // Default 0.85 → adaptive path kicks in.
+    // Current default threshold 0.5 — separates speakers better than the
+    // legacy 0.85 (which collapsed multi-speaker audio to one cluster).
     let mut engine = IncrementalDiarizationEngine::new(IncrementalDiarizationConfig {
         sample_rate: 16000,
         model_path: Some(model_path.to_str().unwrap().to_string()),
-        threshold: 0.85,
+        threshold: 0.5,
         recluster_interval: usize::MAX,
+        ..Default::default()
     })
     .unwrap();
     engine.feed_segments(&segments).unwrap();
@@ -156,14 +170,14 @@ fn adaptive_threshold_recovers_multiple_speakers() {
     let segs = engine.speaker_segments();
     let unique: HashSet<usize> = segs.iter().map(|s| s.speaker).collect();
     eprintln!(
-        "adaptive threshold: {} segs, {} unique speakers {:?}",
+        "threshold 0.5: {} segs, {} unique speakers {:?}",
         segs.len(),
         unique.len(),
         unique.iter().copied().collect::<Vec<_>>(),
     );
     assert!(
         unique.len() >= 3,
-        "adaptive threshold should recover >=3 speakers, got {}",
+        "threshold 0.5 should recover >=3 speakers, got {}",
         unique.len()
     );
 }

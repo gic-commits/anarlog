@@ -120,6 +120,7 @@ pub async fn run_progressive_batch_from_file(
             model_path: params.diarization_model.clone(),
             threshold: params.diarization_threshold,
             recluster_interval: usize::MAX,
+            ..Default::default()
         })
         .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
             message: format!("diarization init failed: {e}"),
