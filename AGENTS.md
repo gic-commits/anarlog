@@ -750,6 +750,22 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | 服务端 whisper 字节敏感（5fdd76a7 group3）| ✅ 今天一次成功（昨天 3 次 500）|
 | **服务端 whisper 500**（c5ee333b group5/6）| ✅ 已修复（服务端定位 3 根因：without_timestamps/clip 超长/clip 重叠；重新 POST 全部稳定 200，客户端无需改动）|
 
+### 真机 live 录音测试（session 2495e5a7，4 人对话 146.9s）
+
+**验证点**：progressive live 录音 diarization 端到端。
+
+| 验证点 | 结果 |
+|--------|------|
+| diarization 引擎启动 | ✅ `diarization engine initialized for live stream` |
+| 结果完成 | ✅ `progressive_batch session finished`，303 words，3 unique speakers [1,2,5]（实际 4，少 1 = #7 已知限制）|
+| **丢段** | ❌ 3 个 gap_warnings（段间 10.8s/10.5s/19s，共 ~40s 空洞）→ 女声段疑似丢失 |
+| **声音忽大忽小** | ❌ MicAndSpeaker 混音 + 丢帧叠加 |
+| **无完成提醒** | ⚠️ 后端 `waitForLiveBatchResult completed` 但 UI 无提示（前端通知问题，待查）|
+
+**根因定位**：#10 PCM 丢帧（`pipeline.rs` try_send 静默丢弃）+ #11 混音削波（`mix_sample_f32` clamp）。实测 VAD 平均 1.28ms（预算 120ms），丢帧为偶发尖峰（max 117ms）。**溯源：#11 由 `cb8913b7b`（Aug 1）引入**（此前 progressive 只发 AEC mic，无混音）。
+
+**修复（已提交 `5902cbb51`）**：channel 256→1024 + try_send 失败计数日志（#10）；`(mic+spk)*0.5` 衰减混音（#11）。**待真机验证**：观察 `dropped_frames` 日志、声音是否正常、女声段是否还丢。
+
 ### diarization 参数网格搜索（4 个已知 ground truth 音频）
 
 **新增 ground truth**：4a1092c6=3 人、fa087f41=6 人（用户确认）。
@@ -799,13 +815,14 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | 2 | **c5ee333b 说话人数** | ✅ 已确认（Aug 2 PM）| 用户确认真实 = **1 人**；threshold 0.5 + T8S5G2 下算法给出 1 ✅。已闭环 |
 | 3 | **Bug 2**：Re-transcription batch target 回退 whispercpp | ✅ 已确认修复（Aug 2 PM）| UI 测试验证：STT mode=batch → `progressiveBatch=false`（日志确认），无 whispercpp 回退；右键菜单 batch 不分裂、progressive 分裂两项均符合预期 |
 | 4 | **`min_duration_secs` 冗余字段删除** | ✅ 已确认（Aug 1）| 代码里已 0 处引用（全库搜索无匹配）——Jul 25 已由 `segment_duration_ms` 替代。已闭环 |
-| 5 | **真机端到端**：live 录音 speaker 标签 + 音频管道 | ⚠️ 已实测（Aug 2 PM），暴露音频管道缺陷 | 真机录 4 人对话 146.9s：diarization 引擎正常启动、3 unique speakers（实际 4，少 1）。但暴露 **2 个音频管道缺陷**（见 #10/#11）：丢段（3 个 gap 共 40s，女声段丢失）+ 声音忽大忽小 |
+| 5 | **真机端到端**：live 录音 speaker 标签 + 音频管道 | ⚠️ 已实测（Aug 2 PM），音频管道已修待复验 | 真机录 4 人对话 146.9s：diarization 引擎正常、3 unique speakers（实际 4，少 1）。暴露 **2 个音频管道缺陷**（#10 PCM 丢帧 → 3 个 gap 共 40s 丢段；#11 混音削波 → 声音忽大忽小）。已修复（`5902cbb51`），待真机复验 |
 | 6 | **内存峰值确认** <50MB（流式解码 + VAD prune）| 待实测 | 长录音（~1h）跑一遍验证 |
-| 7 | **diarization embedding 区分度不足**（原 MAD 系数标定）| 🔴 已确认根因，降为**远期优化** | wespeaker 短块 embedding 区分度不足：单说话人块间距离(0.468)与多说话人(0.676)高度重叠；c5 假 speaker(maxcontig 4.5s)与 4a1092c6 真实短说话人(4.6s)连续跨度几乎相同，纯阈值无法区分。当前最优解 threshold 0.5 + T8S5G2（4 音频 3/4 全对），受样本限制非通用最优。远期：继续调低 threshold + 其他参数组合 / 换更鲁棒 embedding 模型 |
+| 7 | **diarization embedding 区分度不足**（原 MAD 系数标定）| 🔴 已确认根因，降为**远期优化** | wespeaker 短块 embedding 区分度不足：单说话人块间距离(0.468)与多说话人(0.676)高度重叠；c5 假 speaker(maxcontig 4.5s)与 4a1092c6 真实短说话人(4.6s)连续跨度几乎相同，纯阈值无法区分。**实测确认（Aug 2 PM）**：c5ee333b=1✅、5fdd76a7=7✅、fa087f41=7✅、4a1092c6=2❌（真实 3，少报 1 短说话人）。当前最优解 threshold 0.5 + T8S5G2（4 音频 3/4 全对），受样本限制非通用最优。远期：继续调低 threshold + 其他参数组合 / 换更鲁棒 embedding 模型 |
 | 8 | **服务端 whisper 500**（c5ee333b group5/6，33s 段稳定 500，73s 内容丢失）| ✅ 已修复（Aug 2 PM 验证）| 服务端定位 3 个根因并修复：① 丢段=`without_timestamps` 默认 True 与 word 时间戳冲突→改 False；② 500=clip 边界超音频长度（rodio 无前导静音触发）→clamp；③ 500=相邻 clip 重叠（>30s 段触发，解释"整段 500/拆半段正常"）→合并重叠 clip。验证：group5/group6/g5-ffmpeg 重新 POST 全部稳定 200 且转写正常。**客户端无需改动** |
 | 9 | **abandoned 段无补救入口**（远期关注点）| 📝 记录 | stitcher 部分失败（abandoned）不触发 Continue → 用户无法补救已丢失内容。从未构造出完整未完成状态，当前模拟不出。远期：abandoned 后提供重试/补转入口 |
-| 10 | **live PCM 静默丢帧**（`pipeline.rs:164` `let _ = tx.try_send(audio)`）| 🔴 已定位（Aug 2 PM），待修 | PCM channel（容量 256）满时 `try_send` 失败且**静默丢弃**（无日志）→ 音频不连续 → VAD 判静音 → 丢段 + 声音忽大忽小。这是 Jul 22 `samples_dropped` 问题的 progressive 路径复现。修复方向：`send().await` 阻塞保帧 / `try_send` 失败打日志可观测 / 或两者 |
-| 11 | **混音削波**（`audio-utils/lib.rs:144` `mix_sample_f32=(mic+spk).clamp(-1,1)`）| 🔴 已定位（Aug 2 PM），待修 | MicAndSpeaker 模式两通道相加 clamp，同时有声时削波失真 → 声音怪异/忽大忽小。修复方向：衰减再相加 `(mic+spk)*0.5` 或依赖 AEC |
+| 10 | **live PCM 静默丢帧**（`pipeline.rs` `try_send`）| ✅ 已修复（Aug 2 PM），待真机验证 | 根因：PCM channel（256）满时 `try_send` 失败**静默丢弃**。实测 VAD 平均 1.28ms（预算 120ms），丢帧是**偶发尖峰**（max 117ms）非持续瓶颈。修复：channel 256→**1024**（≈2min 缓冲）+ try_send 失败**计数 + 每 50 帧汇总日志**。若 1024 仍丢（日志见 `dropped_frames`），升级为"PCM 落盘 + 增量读"架构 |
+| 11 | **混音削波**（`audio-utils/lib.rs` `mix_sample_f32`）| ✅ 已修复（Aug 2 PM），待真机验证 | 根因：MicAndSpeaker 模式 `(mic+spk).clamp(-1,1)` 双通道同时有声时削波。**溯源：`cb8913b7b`（Aug 1）才把 progressive 从"只发 mic"改成"混音 mic+spk"**，削波随之引入（此前只发 AEC mic，无混音）。修复：`(mic+spk)*0.5` 衰减相加 |
+| 12 | **live 停止后无完成提醒**（前端通知问题）| ⚠️ 待查（Aug 2 PM）| 真机测试：点停止后，后端 `waitForLiveBatchResult completed` 正常完成，但 UI 无"处理完成"提示。后端事件已发，前端通知逻辑可能缺失或未订阅。需查前端 stop 后完成事件 → 通知的链路 |
 
 ### Sprint 3 Phase D（录音流 diarization）— ✅ live 对齐 + 自适应修复完成，仅剩真机验证
 
@@ -818,7 +835,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 
 ### 近期待办（按优先级）
 
-1. **修复 live 音频管道**（#10 PCM 丢帧 + #11 混音削波）— 影响所有 live 录音质量，优先级高
+1. **真机验证 live 音频管道修复**（#10 PCM 丢帧 + #11 混音削波）— 观察 `dropped_frames` 日志 + 声音是否正常 + 女声段是否还丢
 2. 长录音内存峰值实测（#6）
 3. Sprint 4：扩展适配 Groq STT（用户已排期）
 
