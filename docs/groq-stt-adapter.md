@@ -89,3 +89,33 @@ Groq 的 RPM=20/min，触发返回 429 + `retry-after` 头。
 - 确认 verbose_json + word/segment 时间戳解析
 - 确认本地 diarization 生效
 - 429 触发时重试生效（可用故意超限验证）
+
+## 摸底验证结果（Aug 3）
+
+### 访问方式
+- **Groq 限制区域访问**：中国区域直连返回 403 Forbidden。需走系统代理（macOS 网络设置，端口 7890 等）。curl 需 `-x http://127.0.0.1:7890` 或设置 `HTTPS_PROXY` 环境变量。
+- Speaches 自建服务器无需代理。
+
+### 请求报文（完全一致）
+Groq 与 Speaches 都是 OpenAI 兼容 `/v1/audio/transcriptions`，multipart 字段完全一致（file/model/language/response_format/timestamp_granularities）。**请求构造可直接复用现有 `OpenAIAdapter::build_batch_multipart`**。
+
+### 响应报文对比（同一 20s 音频）
+
+| 维度 | Groq | Speaches | 兼容性 |
+|------|------|----------|--------|
+| 顶层字段 | `task, language, duration, text, words, segments, x_groq` | `duration, language, text, segments, usage, words` | Groq 多 `task`/`x_groq`，缺 `usage` |
+| `language` | **`Chinese`**（全名）| `zh`（ISO 码）| ⚠️ 展示差异，功能无影响 |
+| words | `word/start/end` | `word/start/end` | ✅ 一致 |
+| segments | 标准字段 | 标准字段 | ✅ 一致 |
+| `usage` | `None` | 有值 | ✅ 解析无碍（Option）|
+| `logprobs` | 无 | 用 null（已处理）| ✅ |
+
+### 关键结论
+1. **`convert_response` 完全兼容 Groq**：Groq words 无 confidence/speaker 字段，但转换器自动填充默认值（confidence=1.0, speaker=None），本地 diarization 补 speaker
+2. **`language` 返回全名**（`Chinese`）而非 ISO 码——只进 metadata 展示，不影响功能
+3. **`x_groq` 扩展字段**：serde 默认忽略未知字段，无影响
+4. **能力**：无 live/streaming（只有 batch）、无原生 diarization（本地可用）、RPM=20/min
+
+### 待验证
+- 429 限速（需真实触发）
+- 分段长音频端到端（progressive 分段提交）
