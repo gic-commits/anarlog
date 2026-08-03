@@ -4,6 +4,8 @@
 
 通过 OpenAI provider 配置接入自建 Speaches 服务器（`wss://speaches.example.com`），实现 WebSocket Realtime API 实时转录。
 
+> speaches 为特殊优化后的 fork（原上游已停维护）：https://github.com/gic-commits/speaches 。生产地址由部署环境注入，不在仓库内硬编码。
+
 ## 验证方式
 
 - Speaches 服务端日志：`GET /v1/logs?lines=500`（UTC 时间）

@@ -66,6 +66,8 @@ Naming rules:
 
 Speaches 确认支持的能力：Realtime API (WebSocket)、SSE streaming transcription、OpenAI API 完全兼容。
 
+> speaches 为特殊优化后的 fork（原上游已停维护）：https://github.com/gic-commits/speaches 。实时转录依赖其 Realtime WebSocket 端点，生产地址由部署环境注入，不在仓库内硬编码。
+
 ### 已完成的关键里程碑（禁止改乱）
 
 1. **动态模型列表** - `apps/desktop/src/settings/ai/shared/list-stt.ts` 调用 Rust `fetch_stt_models` 命令，从 `/v1/models` 拉取并过滤 STT 模型，在 `select.tsx` 中用 `useQuery` 展示。用户选择的模型名会保持原样发送。
