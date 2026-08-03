@@ -115,7 +115,7 @@ pub(super) async fn spawn_rx_task(
         Mistral => MistralAdapter,
         Hyprnote => HyprnoteAdapter,
         OpenAI => OpenAIAdapter,
-    }, batch_only: [AquaVoice, Pyannote])?;
+    }, batch_only: [AquaVoice, Pyannote, Groq])?;
 
     Ok((result.0, result.1, result.2, adapter_kind.to_string()))
 }

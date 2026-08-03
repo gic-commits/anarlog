@@ -79,6 +79,9 @@ pub enum BatchProvider {
     Soniqo,
     AquaVoice,
     Cartesia,
+    #[serde(rename = "groq")]
+    #[strum(serialize = "groq")]
+    Groq,
 }
 
 impl BatchProvider {
@@ -97,6 +100,7 @@ impl BatchProvider {
             Self::Hyprnote => Some(AdapterKind::Hyprnote),
             Self::AquaVoice => Some(AdapterKind::AquaVoice),
             Self::Cartesia => Some(AdapterKind::Cartesia),
+            Self::Groq => Some(AdapterKind::Groq),
             Self::Am | Self::WhisperLocal | Self::Soniqo | Self::DashScope => None,
         }
     }
@@ -293,6 +297,18 @@ async fn run_batch_inner(
     let listen_params = build_listen_params(&params, metadata.channels, metadata.sample_rate);
 
     if params.progressive_batch {
+        return run_progressive_batch_from_file(
+            runtime.clone(),
+            params,
+            metadata.sample_rate,
+            metadata.channels,
+        )
+        .await;
+    }
+
+    // Groq only exposes batch endpoints (no streaming); always segment the
+    // file client-side so long recordings stay under the 25MB/100MB limit.
+    if matches!(params.provider, BatchProvider::Groq) {
         return run_progressive_batch_from_file(
             runtime.clone(),
             params,

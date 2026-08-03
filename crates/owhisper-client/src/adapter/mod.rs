@@ -426,6 +426,8 @@ pub enum AdapterKind {
     Pyannote,
     #[strum(serialize = "hyprnote")]
     Hyprnote,
+    #[strum(serialize = "groq")]
+    Groq,
 }
 
 impl AdapterKind {
@@ -458,7 +460,7 @@ impl AdapterKind {
 
     pub fn has_live_mode(&self) -> bool {
         match self {
-            Self::AquaVoice | Self::Argmax | Self::Pyannote => false,
+            Self::AquaVoice | Self::Argmax | Self::Pyannote | Self::Groq => false,
             Self::OpenAI
             | Self::Soniox
             | Self::Cartesia
@@ -495,6 +497,7 @@ impl AdapterKind {
             Self::Argmax => ArgmaxAdapter::language_support_live(languages, model),
             Self::Mistral => MistralAdapter::language_support_live(languages),
             Self::Pyannote => LanguageSupport::NotSupported,
+            Self::Groq => LanguageSupport::NotSupported,
             Self::Hyprnote => HyprnoteAdapter::language_support_live(languages, model),
         }
     }
@@ -521,6 +524,7 @@ impl AdapterKind {
             Self::Argmax => ArgmaxAdapter::language_support_batch(languages, model),
             Self::Mistral => MistralAdapter::language_support_batch(languages),
             Self::Pyannote => PyannoteAdapter::language_support_batch(languages, model),
+            Self::Groq => OpenAIAdapter::language_support_batch(languages),
             Self::Hyprnote => HyprnoteAdapter::language_support_batch(languages, model),
         }
     }
@@ -578,6 +582,7 @@ impl From<crate::providers::Provider> for AdapterKind {
             Provider::DashScope => Self::DashScope,
             Provider::Mistral => Self::Mistral,
             Provider::Pyannote => Self::Pyannote,
+            Provider::Groq => Self::Groq,
         }
     }
 }

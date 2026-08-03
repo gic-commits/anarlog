@@ -344,7 +344,10 @@ pub async fn run_progressive_batch_from_file(
         );
 
         let mut segment_response: owhisper_interface::batch::Response =
-            if matches!(params.provider, crate::batch::BatchProvider::OpenAI) {
+            if matches!(
+                params.provider,
+                crate::batch::BatchProvider::OpenAI | crate::batch::BatchProvider::Groq
+            ) {
                 owhisper_client::OpenAIAdapter::parse_batch_response(&body).map_err(|e| {
                     crate::BatchFailure::ProgressiveBatchFailed {
                         message: format!("failed to parse response: {e}"),
@@ -543,7 +546,10 @@ async fn submit_file_direct(
         })?;
 
     let response: owhisper_interface::batch::Response =
-        if matches!(params.provider, crate::batch::BatchProvider::OpenAI) {
+        if matches!(
+            params.provider,
+            crate::batch::BatchProvider::OpenAI | crate::batch::BatchProvider::Groq
+        ) {
             owhisper_client::OpenAIAdapter::parse_batch_response(&body).map_err(|e| {
                 crate::BatchFailure::ProgressiveBatchFailed {
                     message: format!("failed to parse response: {e}"),
