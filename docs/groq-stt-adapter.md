@@ -119,3 +119,27 @@ Groq 与 Speaches 都是 OpenAI 兼容 `/v1/audio/transcriptions`，multipart �
 ### 待验证
 - 429 限速（需真实触发）
 - 分段长音频端到端（progressive 分段提交）
+
+## 扩展文档摸底（Aug 3）
+
+### OpenAI 兼容性细节
+- 音频转录**不支持 `vtt`/`srt` response_format**（我们用 `verbose_json`，OK）
+- 不支持 `logprobs`/`logit_bias`/`top_logprobs`（chat 字段，我们不传）
+- **`verbose_json` + word/segment granularities 完全支持** ✅
+- `language` 输入用 ISO-639-1，响应返回全名（`Chinese`）
+
+### Batch API（远期优化候选）
+- 支持音频转录/翻译的**异步批量**（JSONL 到 `/v1/files` + `/v1/batches` 创建，completion_window 24h-7d）
+- **50% 成本折扣 + 不影响标准 RPM 限速**
+- **音频必须用 `url` 参数**（非 file 上传）→ 需公网/本地托管音频
+- JSONL 上限 5 万行 / 200MB
+- **结论**：对本地录音不友好（需 URL 托管）；同步分段转录（file 上传）为首选，Batch API 记录为远期优化（若 RPM 成瓶颈）
+
+### Rate Limits
+限速维度：RPM/RPD/TPM/TPD/ASH/ASD；具体数值按账号在 console 显示。音频关键约束 RPM≈20/min（文档提及，需实测确认当前账号值）。
+
+### TTS（次要）
+Groq 有 TTS（`/v1/audio/speech`，Orpheus），**仅英语/阿拉伯语，无中文**——对当前中文场景价值有限，记录不实现。
+
+### 模型
+- whisper-large-v3 / v3-turbo：99+ 语言、实时优化（推理快，非 streaming API）
