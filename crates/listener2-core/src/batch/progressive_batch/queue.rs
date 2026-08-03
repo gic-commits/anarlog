@@ -9,6 +9,21 @@ use tokio::sync::mpsc;
 use crate::batch::BatchProvider;
 
 const MAX_RETRIES: u32 = 3;
+/// Extra retries granted for rate-limited (429) responses — the quota is
+/// momentary and the caller is told when to retry via `retry-after`.
+const MAX_RETRY_429: u32 = 6;
+/// Fallback wait when a 429 response has no `retry-after` header.
+const RETRY_AFTER_FALLBACK_SECS: u64 = 10;
+
+/// Submission error classified so the retry loop can back off appropriately
+/// for rate limiting (429) vs transient/other failures.
+#[derive(Debug)]
+pub(crate) enum SubmitError {
+    /// HTTP 429 — the quota reset is given by the `retry-after` header, if present.
+    RateLimited(Option<u64>),
+    /// Any other failure.
+    Other(String),
+}
 
 #[derive(Debug, Clone)]
 pub struct QueueConfig {
@@ -126,10 +141,15 @@ fn resample_linear(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
 pub(crate) fn default_submit_fn() -> SubmitSegmentFn {
     Arc::new(|segment, config| {
         async move {
-            let mut last_error = String::new();
-            for attempt in 0..MAX_RETRIES {
-                let result = submit_segment_http(&config, &segment).await;
-                match result {
+            let mut last_error = "submission failed".to_string();
+            let mut attempts = 0u32;
+            let mut rate_limited_streak = 0u32;            let max_attempts = if matches!(config.provider, BatchProvider::Groq) {
+                MAX_RETRY_429
+            } else {
+                MAX_RETRIES
+            };
+            loop {
+                match submit_segment_http(&config, &segment).await {
                     Ok(response) => {
                         return SegmentResult::Completed {
                             index: segment.index,
@@ -137,17 +157,36 @@ pub(crate) fn default_submit_fn() -> SubmitSegmentFn {
                             response,
                         };
                     }
-                    Err(error) => {
+                    Err(SubmitError::RateLimited(retry_after)) => {
+                        attempts += 1;
+                        rate_limited_streak += 1;
+                        last_error = "HTTP 429 (rate limited)".to_string();
                         tracing::warn!(
-                            "[progressive] submit retry idx={} attempt={}/{MAX_RETRIES} error={error}",
+                            "[progressive] submit retry idx={} attempt={attempts}/{max_attempts} rate_limited retry_after={:?}",
                             segment.index,
-                            attempt + 1,
+                            retry_after,
                         );
-                        last_error = error;
-                        if attempt + 1 < MAX_RETRIES {
-                            let delay = Duration::from_secs(1 << attempt);
-                            tokio::time::sleep(delay).await;
+                        if attempts >= max_attempts {
+                            break;
                         }
+                        // Back off per rate-limit quota, honoring retry-after when given.
+                        let delay_secs = retry_after
+                            .unwrap_or(RETRY_AFTER_FALLBACK_SECS * 2u64.pow(rate_limited_streak.saturating_sub(1).min(3)));
+                        tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+                    }
+                    Err(SubmitError::Other(error)) => {
+                        attempts += 1;
+                        rate_limited_streak = 0;
+                        last_error = error.clone();
+                        tracing::warn!(
+                            "[progressive] submit retry idx={} attempt={attempts}/{max_attempts} error={error}",
+                            segment.index,
+                        );
+                        if attempts >= max_attempts {
+                            break;
+                        }
+                        let delay = Duration::from_secs(1 << attempts.saturating_sub(1).min(4));
+                        tokio::time::sleep(delay).await;
                     }
                 }
             }
@@ -473,14 +512,14 @@ const TARGET_SAMPLE_RATE: u32 = 16000;
 async fn submit_segment_http(
     config: &QueueConfig,
     segment: &QueuedSegment,
-) -> Result<batch::Response, String> {
+) -> Result<batch::Response, SubmitError> {
     let resampled = resample_linear(&segment.samples, segment.sample_rate, TARGET_SAMPLE_RATE);
     let pcm_bytes = convert_to_s16le(&resampled);
 
     let file_part = reqwest::multipart::Part::bytes(pcm_bytes)
         .file_name("audio.raw")
         .mime_str("audio/pcm")
-        .map_err(|e| format!("failed to create multipart: {e}"))?;
+        .map_err(|e| SubmitError::Other(format!("failed to create multipart: {e}")))?;
 
     let listen_params = owhisper_interface::ListenParams {
         model: config.model.clone(),
@@ -495,7 +534,7 @@ async fn submit_segment_http(
     };
 
     let url = owhisper_client::OpenAIAdapter::transcription_url(&config.base_url)
-        .map_err(|e| format!("failed to build transcription URL: {e}"))?;
+        .map_err(|e| SubmitError::Other(format!("failed to build transcription URL: {e}")))?;
 
     let form = owhisper_client::OpenAIAdapter::build_batch_multipart(
         file_part,
@@ -503,7 +542,7 @@ async fn submit_segment_http(
         true,
         false,
     )
-    .map_err(|e| format!("failed to build request: {e}"))?;
+    .map_err(|e| SubmitError::Other(format!("failed to build request: {e}")))?;
 
     tracing::debug!(
         "[progressive] submit_segment_http idx={} url={} model={:?} lang={:?}",
@@ -520,7 +559,7 @@ async fn submit_segment_http(
         .header("Authorization", format!("Bearer {}", config.api_key))
         .send()
         .await
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
+        .map_err(|e| SubmitError::Other(format!("HTTP request failed: {e}")))?;
 
     tracing::debug!(
         "[progressive] submit_segment_http idx={} status={}",
@@ -528,22 +567,35 @@ async fn submit_segment_http(
         resp.status(),
     );
 
+    if resp.status().as_u16() == 429 {
+        let retry_after = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        return Err(SubmitError::RateLimited(retry_after));
+    }
+
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("HTTP {}: {}", status, body));
+        return Err(SubmitError::Other(format!("HTTP {}: {}", status, body)));
     }
 
     let body = resp
         .text()
         .await
-        .map_err(|e| format!("failed to read response body: {e}"))?;
+        .map_err(|e| SubmitError::Other(format!("failed to read response body: {e}")))?;
 
-    let response: batch::Response = if config.provider == BatchProvider::OpenAI {
+    let response: batch::Response = if matches!(
+        config.provider,
+        BatchProvider::OpenAI | BatchProvider::Groq
+    ) {
         owhisper_client::OpenAIAdapter::parse_batch_response(&body)
-            .map_err(|e| format!("failed to parse response: {e}"))?
+            .map_err(|e| SubmitError::Other(format!("failed to parse response: {e}")))?
     } else {
-        serde_json::from_str(&body).map_err(|e| format!("failed to parse response: {e}"))?
+        serde_json::from_str(&body)
+            .map_err(|e| SubmitError::Other(format!("failed to parse response: {e}")))?
     };
 
     Ok(response)
