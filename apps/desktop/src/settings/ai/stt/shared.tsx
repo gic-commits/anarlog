@@ -127,6 +127,14 @@ export const displayModelId = (model: string) => {
     return "Faster Whisper Large V3 Turbo";
   }
 
+  if (model === "whisper-large-v3-turbo") {
+    return "Whisper Large V3 Turbo";
+  }
+
+  if (model === "whisper-large-v3") {
+    return "Whisper Large V3";
+  }
+
   return model;
 };
 
@@ -217,6 +225,31 @@ const _PROVIDERS = [
       "whisper-1",
     ],
     requirements: [{ kind: "requires_config", fields: ["api_key"] }],
+  },
+  {
+    disabled: false,
+    id: "groq",
+    displayName: "Groq",
+    badge: "Batch only",
+    icon: (
+      <Icon
+        icon="simple-icons:groq"
+        className="text-foreground size-4"
+      />
+    ),
+    baseUrl: "https://api.groq.com/openai/v1",
+    models: ["whisper-large-v3-turbo", "whisper-large-v3"],
+    requirements: [{ kind: "requires_config", fields: ["api_key"] }],
+    links: {
+      models: {
+        label: "Groq speech-to-text docs",
+        url: "https://console.groq.com/docs/speech-to-text",
+      },
+      setup: {
+        label: "API keys",
+        url: "https://console.groq.com/keys",
+      },
+    },
   },
   {
     disabled: false,
