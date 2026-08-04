@@ -343,23 +343,22 @@ pub async fn run_progressive_batch_from_file(
             body.len(),
         );
 
-        let mut segment_response: owhisper_interface::batch::Response =
-            if matches!(
-                params.provider,
-                crate::batch::BatchProvider::OpenAI | crate::batch::BatchProvider::Groq
-            ) {
-                owhisper_client::OpenAIAdapter::parse_batch_response(&body).map_err(|e| {
-                    crate::BatchFailure::ProgressiveBatchFailed {
-                        message: format!("failed to parse response: {e}"),
-                    }
-                })?
-            } else {
-                serde_json::from_str(&body).map_err(|e| {
-                    crate::BatchFailure::ProgressiveBatchFailed {
-                        message: format!("failed to parse response: {e}"),
-                    }
-                })?
-            };
+        let mut segment_response: owhisper_interface::batch::Response = if matches!(
+            params.provider,
+            crate::batch::BatchProvider::OpenAI | crate::batch::BatchProvider::Groq
+        ) {
+            owhisper_client::OpenAIAdapter::parse_batch_response(&body).map_err(|e| {
+                crate::BatchFailure::ProgressiveBatchFailed {
+                    message: format!("failed to parse response: {e}"),
+                }
+            })?
+        } else {
+            serde_json::from_str(&body).map_err(|e| {
+                crate::BatchFailure::ProgressiveBatchFailed {
+                    message: format!("failed to parse response: {e}"),
+                }
+            })?
+        };
 
         // Annotate speaker labels from the diarization engine
         if let Some(ref engine) = diarization_engine {
@@ -545,23 +544,20 @@ async fn submit_file_direct(
             message: format!("failed to read response body: {e}"),
         })?;
 
-    let response: owhisper_interface::batch::Response =
-        if matches!(
-            params.provider,
-            crate::batch::BatchProvider::OpenAI | crate::batch::BatchProvider::Groq
-        ) {
-            owhisper_client::OpenAIAdapter::parse_batch_response(&body).map_err(|e| {
-                crate::BatchFailure::ProgressiveBatchFailed {
-                    message: format!("failed to parse response: {e}"),
-                }
-            })?
-        } else {
-            serde_json::from_str(&body).map_err(|e| {
-                crate::BatchFailure::ProgressiveBatchFailed {
-                    message: format!("failed to parse response: {e}"),
-                }
-            })?
-        };
+    let response: owhisper_interface::batch::Response = if matches!(
+        params.provider,
+        crate::batch::BatchProvider::OpenAI | crate::batch::BatchProvider::Groq
+    ) {
+        owhisper_client::OpenAIAdapter::parse_batch_response(&body).map_err(|e| {
+            crate::BatchFailure::ProgressiveBatchFailed {
+                message: format!("failed to parse response: {e}"),
+            }
+        })?
+    } else {
+        serde_json::from_str(&body).map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
+            message: format!("failed to parse response: {e}"),
+        })?
+    };
 
     runtime.emit(BatchEvent::BatchSegmentResult {
         session_id: session_id.to_string(),

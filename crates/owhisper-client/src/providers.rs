@@ -345,7 +345,9 @@ impl Provider {
         match self {
             Self::AquaVoice => 16000,
             Self::OpenAI => 24000,
-            Self::ElevenLabs | Self::DashScope | Self::Mistral | Self::Pyannote | Self::Groq => 16000,
+            Self::ElevenLabs | Self::DashScope | Self::Mistral | Self::Pyannote | Self::Groq => {
+                16000
+            }
             _ => 16000,
         }
     }

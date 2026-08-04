@@ -587,16 +587,14 @@ async fn submit_segment_http(
         .await
         .map_err(|e| SubmitError::Other(format!("failed to read response body: {e}")))?;
 
-    let response: batch::Response = if matches!(
-        config.provider,
-        BatchProvider::OpenAI | BatchProvider::Groq
-    ) {
-        owhisper_client::OpenAIAdapter::parse_batch_response(&body)
-            .map_err(|e| SubmitError::Other(format!("failed to parse response: {e}")))?
-    } else {
-        serde_json::from_str(&body)
-            .map_err(|e| SubmitError::Other(format!("failed to parse response: {e}")))?
-    };
+    let response: batch::Response =
+        if matches!(config.provider, BatchProvider::OpenAI | BatchProvider::Groq) {
+            owhisper_client::OpenAIAdapter::parse_batch_response(&body)
+                .map_err(|e| SubmitError::Other(format!("failed to parse response: {e}")))?
+        } else {
+            serde_json::from_str(&body)
+                .map_err(|e| SubmitError::Other(format!("failed to parse response: {e}")))?
+        };
 
     Ok(response)
 }

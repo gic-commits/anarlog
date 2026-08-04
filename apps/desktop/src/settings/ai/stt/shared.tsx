@@ -231,12 +231,7 @@ const _PROVIDERS = [
     id: "groq",
     displayName: "Groq",
     badge: "Batch only",
-    icon: (
-      <Icon
-        icon="simple-icons:groq"
-        className="text-foreground size-4"
-      />
-    ),
+    icon: <Icon icon="simple-icons:groq" className="text-foreground size-4" />,
     baseUrl: "https://api.groq.com/openai/v1",
     models: ["whisper-large-v3-turbo", "whisper-large-v3"],
     requirements: [{ kind: "requires_config", fields: ["api_key"] }],
