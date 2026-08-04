@@ -363,7 +363,13 @@ export function SelectProviderAndModel() {
         )}
       </div>
 
-      {visibleProvider === "openai" && isConfigured && <SttModeSection />}
+      {visibleProvider === "openai" && isConfigured && (
+        <SttModeSection provider="openai" />
+      )}
+
+      {visibleProvider === "groq" && isConfigured && (
+        <SttModeSection provider="groq" />
+      )}
 
       {isConfigured && <CjkToggleSection />}
 
@@ -897,7 +903,7 @@ function ModelSelectedValue({ model }: { model: ModelEntry }) {
   );
 }
 
-function SttModeSection() {
+function SttModeSection({ provider }: { provider: string }) {
   const { stt_mode, stt_segment_duration, cjk_server_side } = useConfigValues([
     "stt_mode",
     "stt_segment_duration",
@@ -912,20 +918,29 @@ function SttModeSection() {
   const mode = stt_mode ?? "batch";
   const segmentDuration = stt_segment_duration ?? 30000;
   const serverSide = cjk_server_side ?? false;
+  // Batch-only providers (Groq etc.) have no live mode.
+  const supportsLive = provider !== "groq";
+  // If a stored mode is not valid for this provider, fall back to batch.
+  const effectiveMode = !supportsLive && mode === "live" ? "batch" : mode;
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <span className="text-muted-foreground text-xs">
         <Trans>Mode</Trans>
       </span>
-      <Select value={mode} onValueChange={(v) => setSettings({ stt_mode: v })}>
+      <Select
+        value={effectiveMode}
+        onValueChange={(v) => setSettings({ stt_mode: v })}
+      >
         <SelectTrigger className="bg-card h-7 w-28 text-xs shadow-none">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="live">
-            <Trans>Live</Trans>
-          </SelectItem>
+          {supportsLive ? (
+            <SelectItem value="live">
+              <Trans>Live</Trans>
+            </SelectItem>
+          ) : null}
           <SelectItem value="batch">
             <Trans>Batch</Trans>
           </SelectItem>
