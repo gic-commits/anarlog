@@ -16,6 +16,7 @@ pub struct ProgressiveBatchParams {
     pub diarization_enabled: bool,
     pub diarization_model: Option<String>,
     pub diarization_threshold: f32,
+    pub provider: Option<String>,
 }
 
 pub trait ListenerRuntime: hypr_storage::StorageRuntime {

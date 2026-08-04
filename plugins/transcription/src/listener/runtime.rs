@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use hypr_transcription_core::listener::ListenerRuntime;
 use hypr_transcription_core::listener2 as core;
+use hypr_transcription_core::listener2::BatchProvider;
 use hypr_transcription_core::listener2::BatchRuntime;
 use ractor::{ActorRef, call_t, registry};
 use tauri_plugin_settings::SettingsPluginExt;
@@ -30,7 +31,11 @@ fn build_progressive_batch_config(
         api_key: params.api_key.clone(),
         model: Some(params.model.clone()),
         language: params.language.clone(),
-        provider: core::BatchProvider::OpenAI,
+        provider: params
+            .provider
+            .as_deref()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(BatchProvider::OpenAI),
         session_dir: std::env::temp_dir().join(format!("progressive-{}", params.session_id)),
         vad_groups: true,
         collect_vad_segments: params.diarization_enabled,
@@ -308,6 +313,7 @@ async fn current_root_state() -> RootState {
 mod tests {
     use super::build_progressive_batch_config;
     use hypr_transcription_core::listener::ProgressiveBatchParams;
+    use hypr_transcription_core::listener2::BatchProvider;
 
     fn params() -> ProgressiveBatchParams {
         ProgressiveBatchParams {
@@ -321,6 +327,7 @@ mod tests {
             diarization_enabled: false,
             diarization_model: None,
             diarization_threshold: 0.35,
+            provider: None,
         }
     }
 
@@ -336,5 +343,21 @@ mod tests {
         p.segment_duration_ms = Some(60000);
         let cfg = build_progressive_batch_config(&p);
         assert_eq!(cfg.segment_duration_ms, 60000);
+    }
+
+    #[test]
+    fn config_resolves_groq_provider() {
+        let mut p = params();
+        p.provider = Some("groq".to_string());
+        let cfg = build_progressive_batch_config(&p);
+        assert_eq!(cfg.provider, BatchProvider::Groq);
+    }
+
+    #[test]
+    fn config_falls_back_to_openai_for_unknown_provider() {
+        let mut p = params();
+        p.provider = Some("not-a-provider".to_string());
+        let cfg = build_progressive_batch_config(&p);
+        assert_eq!(cfg.provider, BatchProvider::OpenAI);
     }
 }

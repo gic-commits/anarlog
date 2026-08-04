@@ -110,6 +110,7 @@ impl SessionContext {
             diarization_enabled: self.params.diarization_enabled,
             diarization_model: self.params.diarization_model.clone(),
             diarization_threshold: self.params.diarization_threshold,
+            provider: self.params.provider.clone(),
         }
     }
 }
