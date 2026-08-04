@@ -169,7 +169,7 @@ fn resample_linear(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
 pub(crate) fn default_submit_fn() -> SubmitSegmentFn {
     Arc::new(|segment, config| {
         async move {
-            let mut last_error = "submission failed".to_string();
+            let mut last_error;
             let mut attempts = 0u32;
             let mut rate_limited_streak = 0u32;            let max_attempts = if matches!(config.provider, BatchProvider::Groq) {
                 MAX_RETRY_429

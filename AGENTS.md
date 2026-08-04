@@ -824,7 +824,9 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 
 ## 下一步工作排布
 
-### Sprint 4：Groq STT 适配（✅ 已实现，待手工验证）
+### Sprint 4：Groq STT 适配（✅ 已实现 + 手工验证通过）
+
+**WAV 容器修复**（`156e113d7`，Aug 4）：Groq 拒绝 `audio/pcm` 裸上传（只接受 flac/mp3/mp4/mpeg/mpga/m4a/ogg/opus/wav/webm）。新增 `wrap_pcm_as_wav()`（44 字节 WAV header）→ Groq 分段提交包成 `audio.wav`，覆盖 live 流（queue.rs）+ file re-transcribe（integration.rs）两路径。实测 Rust 生成的 WAV POST Groq 返回 200。
 
 设计文档：`docs/groq-stt-adapter.md`（含摸底验证 + 扩展文档结论）
 
@@ -867,7 +869,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | 12 | **live 停止后无完成提醒**（前端通知问题）| ⚠️ 待查（Aug 2 PM）| 真机测试：点停止后，后端 `waitForLiveBatchResult completed` 正常完成，但 UI 无"处理完成"提示。后端事件已发，前端通知逻辑可能缺失或未订阅。需查前端 stop 后完成事件 → 通知的链路 |
 | 13 | **服务端长段 whisper 偶发不稳定**（~33-40s 段 500/截断）| 🔴 已报服务端（Aug 2 PM）| 与 c5ee333b group5/6（33s 段稳定 500）同类问题复发：c563d8c6 group0（37.2s）live 提交时偶发 500/只转前 28s，但同段样本重新 POST 稳定 200 且完整。服务端称已修复过（without_timestamps/clip 边界/clip 重叠），但长段偶发不稳定仍存在。已发简报 |
 | 14 | **外部扬声器人声录音质量差**（AEC 无参考信号）| 📝 已知限制，搁置（Aug 2 PM）| 场景：手机/语音电话独立外放（不经过 Mac 音频系统），人声经空气进入麦克风 → CATap far-end 无参考 → 自研 ONNX AEC 遇训练分布外输入可能误伤真人声 → 录音偏差。真人讲话（无外放）质量正常，证明非链路 bug。**任何 AEC（苹果硬件/我们软件）都依赖 far-end 参考，外部扬声器是固有限制**。**候选修复**：far-end 能量低时跳过 AEC（最简单）。**待用户在公司找真实语音电话实测后再定是否解决** |
-| 15 | **Groq STT 手工验证**（Sprint 4 收尾）| ⚠️ 待手工测试（Aug 3）| 后端已实现并通过自动化测试。待完整 app 中配置 Groq provider → re-transcribe 真实音频，确认：① 客户端分段提交 ② 本地 diarization ③ 429 兜底。注：测试需走系统代理（区域限制）|
+| 15 | **Groq STT 手工验证**（Sprint 4 收尾）| ✅ 已闭环（Aug 4）| 完整 app re-transcribe 两个真实音频：① 客户端分段提交 ✅（8/8 + 4/4 全部 200，无 abandoned；WAV 容器修复 `156e113d7` 生效）② 本地 diarization ✅（c5ee333b=1 speaker、2495e7a5=3 speakers [1,11,9]，315/315 词有 speaker 标签）③ 429 兜底 ✅（自动测试覆盖）。缺口：**live 录音模式走 Groq 尚未验证**（见下）|
 
 ### Sprint 3 Phase D（录音流 diarization）— ✅ live 对齐 + 自适应修复完成，仅剩真机验证
 
@@ -885,7 +887,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 3. **#12 无完成提醒**：查前端 stop 后完成事件 → 通知链路
 4. 长录音内存峰值实测（#6）
 5. **外部扬声器人声**：等用户在公司找真实语音电话实测（#14）
-6. **Sprint 4：Groq STT 手工验证**（#15）——完整 app 配置 Groq → re-transcribe 真实音频（需走系统代理）
+6. **Groq + live 录音验证**（Sprint 4 收尾）——配置 Groq provider 后新录音，确认 progressive live 流走 Groq（WAV 容器在 queue.rs 路径生效 + 录音中 segmentResult 增量显示）（需走系统代理）
 
 ### 已有但未落库的 diarization 改动（Jul 30-31，已随 Aug 1 commit 提交）
 
