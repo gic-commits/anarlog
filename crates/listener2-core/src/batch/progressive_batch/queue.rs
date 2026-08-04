@@ -118,6 +118,34 @@ fn convert_to_s16le(samples: &[f32]) -> Vec<u8> {
     bytes
 }
 
+/// Wrap raw s16le PCM in a minimal 44-byte WAV header. Groq rejects raw
+/// `audio/pcm` uploads (only flac/mp3/mp4/.../wav/webm are accepted), so
+/// segment submissions must carry a real WAV container.
+pub(crate) fn wrap_pcm_as_wav(pcm_bytes: &[u8], sample_rate: u32) -> Vec<u8> {
+    let channels: u16 = 1;
+    let bits_per_sample: u16 = 16;
+    let byte_rate = sample_rate * channels as u32 * (bits_per_sample as u32 / 8);
+    let block_align = channels * bits_per_sample / 8;
+    let data_len = pcm_bytes.len() as u32;
+
+    let mut wav = Vec::with_capacity(44 + pcm_bytes.len());
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // fmt chunk size
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&channels.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&byte_rate.to_le_bytes());
+    wav.extend_from_slice(&block_align.to_le_bytes());
+    wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    wav.extend_from_slice(pcm_bytes);
+    wav
+}
+
 fn resample_linear(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     if from_rate == to_rate {
         return samples.to_vec();
@@ -516,9 +544,22 @@ async fn submit_segment_http(
     let resampled = resample_linear(&segment.samples, segment.sample_rate, TARGET_SAMPLE_RATE);
     let pcm_bytes = convert_to_s16le(&resampled);
 
-    let file_part = reqwest::multipart::Part::bytes(pcm_bytes)
-        .file_name("audio.raw")
-        .mime_str("audio/pcm")
+    // Groq rejects raw audio/pcm uploads; wrap the PCM in a WAV container.
+    let is_groq = matches!(config.provider, BatchProvider::Groq);
+    let upload_bytes = if is_groq {
+        wrap_pcm_as_wav(&pcm_bytes, TARGET_SAMPLE_RATE)
+    } else {
+        pcm_bytes
+    };
+    let (file_name, mime) = if is_groq {
+        ("audio.wav", "audio/wav")
+    } else {
+        ("audio.raw", "audio/pcm")
+    };
+
+    let file_part = reqwest::multipart::Part::bytes(upload_bytes)
+        .file_name(file_name)
+        .mime_str(mime)
         .map_err(|e| SubmitError::Other(format!("failed to create multipart: {e}")))?;
 
     let listen_params = owhisper_interface::ListenParams {
@@ -958,5 +999,34 @@ mod tests {
             queue.segments[0].status,
             SegmentStatus::Failed { .. }
         ));
+    }
+
+    #[test]
+    fn wrap_pcm_as_wav_emits_valid_header() {
+        let pcm = [
+            0i16.to_le_bytes(),
+            100i16.to_le_bytes(),
+            300i16.to_le_bytes(),
+        ]
+        .concat();
+        let wav = wrap_pcm_as_wav(&pcm, 16000);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[12..16], b"fmt ");
+        assert_eq!(&wav[36..40], b"data");
+        // fmt chunk: PCM=1, channels=1, sample_rate=16000, bits=16
+        assert_eq!(u16::from_le_bytes([wav[20], wav[21]]), 1);
+        assert_eq!(u16::from_le_bytes([wav[22], wav[23]]), 1);
+        assert_eq!(
+            u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]),
+            16000
+        );
+        assert_eq!(u16::from_le_bytes([wav[34], wav[35]]), 16);
+        // data chunk length == pcm len, payload preserved
+        assert_eq!(
+            u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]),
+            pcm.len() as u32
+        );
+        assert_eq!(&wav[44..], &pcm[..]);
     }
 }

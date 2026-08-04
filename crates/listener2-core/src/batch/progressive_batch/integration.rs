@@ -247,10 +247,24 @@ pub async fn run_progressive_batch_from_file(
         const MAX_RETRIES: u32 = 3;
         let mut resp = None;
         let mut last_error: Option<String> = None;
+        let is_groq = matches!(params.provider, crate::batch::BatchProvider::Groq);
+        let upload_bytes = if is_groq {
+            crate::batch::progressive_batch::queue::wrap_pcm_as_wav(
+                &audio_bytes,
+                TARGET_SAMPLE_RATE,
+            )
+        } else {
+            audio_bytes.clone()
+        };
+        let (file_name, mime) = if is_groq {
+            ("audio.wav", "audio/wav")
+        } else {
+            ("audio.raw", "audio/pcm")
+        };
         for attempt in 0..=MAX_RETRIES {
-            let file_part = reqwest::multipart::Part::bytes(audio_bytes.clone())
-                .file_name("audio.raw")
-                .mime_str("audio/pcm")
+            let file_part = reqwest::multipart::Part::bytes(upload_bytes.clone())
+                .file_name(file_name)
+                .mime_str(mime)
                 .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
                     message: format!("failed to create multipart: {e}"),
                 })?;
