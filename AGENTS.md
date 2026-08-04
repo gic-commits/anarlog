@@ -824,23 +824,30 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 
 ## 下一步工作排布
 
-### Sprint 4：Groq STT 适配（已启动）
+### Sprint 4：Groq STT 适配（✅ 已实现，待手工验证）
 
-设计文档：`docs/groq-stt-adapter.md`
+设计文档：`docs/groq-stt-adapter.md`（含摸底验证 + 扩展文档结论）
 
 **Groq 关键信息**：
 - OpenAI 兼容端点 `https://api.groq.com/openai/v1/audio/transcriptions`，**无 streaming**（只有 batch transcriptions/translations）
 - 模型：`whisper-large-v3`（多语言，189× 实时）、`whisper-large-v3-turbo`（多语言，216× 实时，性价比高）
-- 参数与 OpenAI 兼容：file/url、model、language、prompt、response_format（json/verbose_json/text）、temperature、timestamp_granularities（word/segment）
+- **区域限制**：中国区域直连 403，需走代理（开发/测试环境问题，产品运行时用户网络自定）
 - **限制**：单文件 25MB(free)/100MB(dev)；ASH=7200s/h、ASD=28800s/day、RPM=20/min、RPD=2000/day（触发 429 + retry-after）；组织级锁定；无 diarization（本地引擎可用）
 
-**适配方案**（`batch + 客户端分段`）：
+**已实现**（commit `de736b355` / `4a12e6574` / `67444a400`）：
 - `Provider`/`AdapterKind`/`BatchProvider` 新增 `Groq`，识别 `api.groq.com`
 - 复用 `OpenAIAdapter::build_batch_multipart` + `parse_batch_response`（完全 OpenAI 兼容）
-- 长音频走**现有 progressive batch 客户端分段**（现有 30s-10m 段 = 0.96-19.2MB，天然满足 25MB）
-- **429 限速处理**（关键）：现有 queue retry 未区分 429/retry-after，需增强（RPM=20 下 N=2 并发 + 30s 段 ≈ 4 段/min 天然安全）
+- **run_batch 路由**：Groq 总是走 `run_progressive_batch_from_file`（客户端分段，绕过 25MB 限制）
+- **429 限速**：`SubmitError::RateLimited`（读 retry-after 头）+ 429 专用重试（Groq 6 次）
+- **前端**：STT provider 预设（groq 卡片 + 模型显示 + docs/keys 链接），bindings.gen.ts 重新生成
+- 能力：无 live（batch_only）、本地 diarization 可用
 
-**待确认**：Groq 需要真实 API key 才能验证；本地 diarization 是否与 Groq 返回兼容需实测。
+**验证**（Aug 3）：
+- listener2-core 128/128、owhisper-client 291 passed、前端 typecheck ✅
+- 端到端：Groq 并发 4 段全 200 无 429，中文转录正常（verbose_json + word 时间戳）
+- 响应兼容：Groq words 无 confidence/speaker，转换器补默认值，本地 diarization 正常
+
+**待手工验证**：完整 app 中配置 Groq provider → re-transcribe 真实音频，确认分段 + 本地 diarization + 429 兜底。
 
 ### 未解决问题清单（截至 Aug 2 PM 提交后）
 
@@ -860,6 +867,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | 12 | **live 停止后无完成提醒**（前端通知问题）| ⚠️ 待查（Aug 2 PM）| 真机测试：点停止后，后端 `waitForLiveBatchResult completed` 正常完成，但 UI 无"处理完成"提示。后端事件已发，前端通知逻辑可能缺失或未订阅。需查前端 stop 后完成事件 → 通知的链路 |
 | 13 | **服务端长段 whisper 偶发不稳定**（~33-40s 段 500/截断）| 🔴 已报服务端（Aug 2 PM）| 与 c5ee333b group5/6（33s 段稳定 500）同类问题复发：c563d8c6 group0（37.2s）live 提交时偶发 500/只转前 28s，但同段样本重新 POST 稳定 200 且完整。服务端称已修复过（without_timestamps/clip 边界/clip 重叠），但长段偶发不稳定仍存在。已发简报 |
 | 14 | **外部扬声器人声录音质量差**（AEC 无参考信号）| 📝 已知限制，搁置（Aug 2 PM）| 场景：手机/语音电话独立外放（不经过 Mac 音频系统），人声经空气进入麦克风 → CATap far-end 无参考 → 自研 ONNX AEC 遇训练分布外输入可能误伤真人声 → 录音偏差。真人讲话（无外放）质量正常，证明非链路 bug。**任何 AEC（苹果硬件/我们软件）都依赖 far-end 参考，外部扬声器是固有限制**。**候选修复**：far-end 能量低时跳过 AEC（最简单）。**待用户在公司找真实语音电话实测后再定是否解决** |
+| 15 | **Groq STT 手工验证**（Sprint 4 收尾）| ⚠️ 待手工测试（Aug 3）| 后端已实现并通过自动化测试。待完整 app 中配置 Groq provider → re-transcribe 真实音频，确认：① 客户端分段提交 ② 本地 diarization ③ 429 兜底。注：测试需走系统代理（区域限制）|
 
 ### Sprint 3 Phase D（录音流 diarization）— ✅ live 对齐 + 自适应修复完成，仅剩真机验证
 
@@ -877,7 +885,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 3. **#12 无完成提醒**：查前端 stop 后完成事件 → 通知链路
 4. 长录音内存峰值实测（#6）
 5. **外部扬声器人声**：等用户在公司找真实语音电话实测（#14）
-6. **Sprint 4：Groq STT 适配**（已启动，见 `docs/groq-stt-adapter.md`）——Provider/AdapterKind 识别 + 429 限速处理 + 前端配置
+6. **Sprint 4：Groq STT 手工验证**（#15）——完整 app 配置 Groq → re-transcribe 真实音频（需走系统代理）
 
 ### 已有但未落库的 diarization 改动（Jul 30-31，已随 Aug 1 commit 提交）
 
