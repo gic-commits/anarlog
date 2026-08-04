@@ -849,7 +849,10 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 - 端到端：Groq 并发 4 段全 200 无 429，中文转录正常（verbose_json + word 时间戳）
 - 响应兼容：Groq words 无 confidence/speaker，转换器补默认值，本地 diarization 正常
 
-**待手工验证**：完整 app 中配置 Groq provider → re-transcribe 真实音频，确认分段 + 本地 diarization + 429 兜底。
+**手工验证（Aug 4，全部通过）**：
+- **re-transcribe**：两个真实音频（c5ee333b 263s / 2495e7a5 147s），8/8 + 4/4 段全部 200，零 abandoned；本地 diarization 正常（c5ee333b=1 speaker、2495e7a5=3 speakers [1,11,9]，315/315 词有 speaker 标签）
+- **live 录音**：单人录音（session e5829425，153s），VAD 7 组 idle-emit 全部成功提交，无 400/retry，stitch 7/7 → 458 words，diarization 1 speaker ✅
+- **修复**：live 路径 provider 硬编码 `BatchProvider::OpenAI`（`runtime.rs:33`）导致 Groq 被当 OpenAI 提交 `audio.raw` → 400。已贯通 provider 到 `ProgressiveBatchParams`（`a8bd99c02`）
 
 ### 未解决问题清单（截至 Aug 2 PM 提交后）
 
@@ -869,7 +872,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | 12 | **live 停止后无完成提醒**（前端通知问题）| ⚠️ 待查（Aug 2 PM）| 真机测试：点停止后，后端 `waitForLiveBatchResult completed` 正常完成，但 UI 无"处理完成"提示。后端事件已发，前端通知逻辑可能缺失或未订阅。需查前端 stop 后完成事件 → 通知的链路 |
 | 13 | **服务端长段 whisper 偶发不稳定**（~33-40s 段 500/截断）| 🔴 已报服务端（Aug 2 PM）| 与 c5ee333b group5/6（33s 段稳定 500）同类问题复发：c563d8c6 group0（37.2s）live 提交时偶发 500/只转前 28s，但同段样本重新 POST 稳定 200 且完整。服务端称已修复过（without_timestamps/clip 边界/clip 重叠），但长段偶发不稳定仍存在。已发简报 |
 | 14 | **外部扬声器人声录音质量差**（AEC 无参考信号）| 📝 已知限制，搁置（Aug 2 PM）| 场景：手机/语音电话独立外放（不经过 Mac 音频系统），人声经空气进入麦克风 → CATap far-end 无参考 → 自研 ONNX AEC 遇训练分布外输入可能误伤真人声 → 录音偏差。真人讲话（无外放）质量正常，证明非链路 bug。**任何 AEC（苹果硬件/我们软件）都依赖 far-end 参考，外部扬声器是固有限制**。**候选修复**：far-end 能量低时跳过 AEC（最简单）。**待用户在公司找真实语音电话实测后再定是否解决** |
-| 15 | **Groq STT 手工验证**（Sprint 4 收尾）| ✅ 已闭环（Aug 4）| 完整 app re-transcribe 两个真实音频：① 客户端分段提交 ✅（8/8 + 4/4 全部 200，无 abandoned；WAV 容器修复 `156e113d7` 生效）② 本地 diarization ✅（c5ee333b=1 speaker、2495e7a5=3 speakers [1,11,9]，315/315 词有 speaker 标签）③ 429 兜底 ✅（自动测试覆盖）。缺口：**live 录音模式走 Groq 尚未验证**（见下）|
+| 15 | **Groq STT 手工验证**（Sprint 4 收尾）| ✅ 已闭环（Aug 4）| 完整 app re-transcribe 两个真实音频：① 客户端分段提交 ✅（8/8 + 4/4 全部 200，无 abandoned；WAV 容器修复 `156e113d7` 生效）② 本地 diarization ✅（c5ee333b=1 speaker、2495e7a5=3 speakers [1,11,9]，315/315 词有 speaker 标签）③ 429 兜底 ✅（自动测试覆盖）。**live 录音模式走 Groq 也已验证**（Aug 4：单人 153s 录音，VAD 7 组全成功、458 words、1 speaker）。期间修复 live 路径 provider 硬编码（`a8bd99c02`）|
 
 ### Sprint 3 Phase D（录音流 diarization）— ✅ live 对齐 + 自适应修复完成，仅剩真机验证
 
@@ -887,7 +890,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 3. **#12 无完成提醒**：查前端 stop 后完成事件 → 通知链路
 4. 长录音内存峰值实测（#6）
 5. **外部扬声器人声**：等用户在公司找真实语音电话实测（#14）
-6. **Groq + live 录音验证**（Sprint 4 收尾）——配置 Groq provider 后新录音，确认 progressive live 流走 Groq（WAV 容器在 queue.rs 路径生效 + 录音中 segmentResult 增量显示）（需走系统代理）
+6. ~~**Groq + live 录音验证**~~ ✅ 已完成（Aug 4）：单人 153s 录音全成功（见 Sprint 4 手工验证）
 
 ### 已有但未落库的 diarization 改动（Jul 30-31，已随 Aug 1 commit 提交）
 
