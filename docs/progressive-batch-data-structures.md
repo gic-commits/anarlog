@@ -195,6 +195,8 @@ export const progressiveBatchSegments = sqliteTable(
 - **段状态持久化。** 每次 `poll_completed` 收到完成结果时，plugin 层写一行 `progressive_batch_segments`。
 - **Job 状态持久化。** Manager 进入 `Completed`/`Failed` 状态时，plugin 层更新 `progressive_batch_jobs`。
 - **中断检测。** 会话异常结束时（crash/退出），job status 标记为 `interrupted`。应用启动时扫描所有 `status=running` 的 job，自动转为 `interrupted`。
+- **live 路径也持久化（Aug 8）。** `LiveBatchRuntime` 携带 `BatchParams` 并 spawn `persist_batch_event`，与 file 路径一致——live 结束若 coverage_incomplete，job 标 `partial`，前端 Continue 菜单出现（统一走 file 的 Continue 逻辑）。
+- **coverage_incomplete → partial。** `persist_batch_event` 在 `coverage_incomplete` 或 `abandoned_segments` 时标记 job `partial`（不只 `abandoned`），保证丢帧场景有 Continue 入口。
 
 ---
 
@@ -485,7 +487,11 @@ pub struct TaggedWord {
 
 pub struct StitcherConfig {
     pub overlap_ms: u64,       // 1000
+    pub segment_duration_ms: u64, // 段长（用于 gap 检测的 expected end）
     pub total_segments: usize,  // 预期段数
+    /// 已知源音频总时长（ms）。设置时 `stitch()` 检查转录是否过早停止
+    /// （coverage_incomplete），用于检测 live 丢帧导致的覆盖缺口。
+    pub audio_duration_ms: Option<u64>,
 }
 
 /// 按索引收集段响应，全部到齐后合并
@@ -604,6 +610,12 @@ pub struct ProgressiveBatchConfig {
     pub language: Option<String>,
     pub provider: BatchProvider,
     pub session_dir: PathBuf,
+    /// 流式 VAD + Min-Cut/Merge 分段（与 file 路径对齐）而非固定时长窗口
+    pub vad_groups: bool,
+    /// 保留流式 VAD 段供外部消费（live diarization）
+    pub collect_vad_segments: bool,
+    /// 已知源音频总时长（ms），透传给 Stitcher 用于 coverage 检查
+    pub audio_duration_ms: Option<u64>,
 }
 
 /// Manager 状态机
@@ -654,6 +666,10 @@ impl ProgressiveBatchManager {
 
     /// 注入 Runtime（用于 emit BatchSegmentResult 事件）
     pub fn with_runtime(self, runtime: Arc<dyn BatchRuntime>) -> Self;
+
+    /// 设置已知源音频总时长（ms）。live 路径 stop 后 audio.mp3 落盘才知
+    /// 真实时长，在 finish 前调用使 Stitcher 能标记 coverage_incomplete。
+    pub fn set_audio_duration(&mut self, duration_ms: Option<u64>);
 
     /// 录音中：送入 PCM 帧
     pub fn on_audio_frame(&mut self, samples: &[f32]);

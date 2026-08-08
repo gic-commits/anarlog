@@ -379,6 +379,19 @@ OpenAI (Speaches)
 - [x] 录音流集成 `IncrementalDiarizationEngine`（feed_pcm → finalize）— 待真机验证
 - [ ] WebSocket 控制面设计评审（如需要）
 
+### Sprint 4（Aug 8 收尾 ✅）
+
+- [x] **live 丢帧根因修复**：diarization 解耦后台 task（`d09623d7d`）——丢帧根因是 embedding/聚类阻塞 `rx.recv()`，非 VAD/分组
+- [x] **保底措施**：coverage_incomplete 检测（`68a7eb545`）+ B 自动补齐（对齐完整组序列，`928987564`）+ live job 持久化 partial + Continue 兜底（`279236455`）
+- [x] **file re-transcribe 流式化**（`9a8df481c`）：manager 驱动，长音频逐段返回、不 idle timeout，与 live 路径并轨
+- [x] **transcript 虚拟化**（`2a40318a3`）+ 进度条→文字定位（`c1f4e0acf`）
+
+### Sprint 4 验证结果（Aug 8 真机）
+
+- 84min 音频 re-transcribe：104 段逐段返回，12889 词完整 stitch，9 分 22 秒处理完
+- VAD 分组正确性验证：`VadGroupStream` 在 run 精确喂法下产出 104 组、无 gap（最大 11.7s）
+- 残余 3 处 50-70s 内容缺失 → **Groq whisper word 时间戳漂移**（#13 延伸，数据来源问题，非客户端 bug）
+
 ---
 
 ## 10. 实现与设计的关键差异
@@ -415,6 +428,15 @@ OpenAI (Speaches)
 | 录音流回显                       | 录音期间不显示分段结果                             | `general-live.ts` 订阅 `transcriptionEvent`，`segmentResult` → `handleBatchSegmentResult`（守卫 `liveTranscriptionActive !== false`，不影响 live / 传统 batch） | ✅ Jul 31 已实现              |
 | diarization 分组                 | 引擎内部 VAD 产出段                                | 复用外部 Segmenter VAD 段（`feed_segments`），与 `min_cut_merge` 分组一致 | ✅ 已实现                     |
 | diarization_threshold 默认       | 0.35                                              | 0.85（`tests/find_threshold.rs` 真实音频 sweep 验证）                  | ✅ schema/select/useRunBatch 三处一致 |
+| diarization_threshold 默认（Aug 2 调优） | 0.85 | **0.5**（4 音频网格搜索 T8S5G2 最优；0.85 太松导致单说话人合并）| ✅ schema/select/useRunBatch/api.rs/batch/mod.rs 五处一致 |
+| **live 丢帧根因**                | 无                                                | diarization（embedding+聚类）在 `rx.recv()` 消费循环内同步 → 阻塞 → source `try_send` 丢帧 → 覆盖不全；**解耦到独立后台 task**（`runtime.rs` unbounded channel + join）| ✅ `d09623d7d`，模拟 213 组 vs 真实 84 组 → 修复后一致 |
+| **coverage_incomplete 检测**     | 无                                                | `StitcherConfig.audio_duration_ms` + `coverage_incomplete`/`missing_tail_ms` metadata；live stop 后读 audio.mp3 时长注入 | ✅ `68a7eb545` |
+| **B 自动补齐**                   | 无                                                | coverage_incomplete 时 `compute_full_audio_groups`（完整组序列）+ `align_completed_segments_to_full_audio`（live 段对齐到完整组 index）+ `continue_from_file` 只补缺失 | ✅ `279236455`/`928987564` |
+| **live job 持久化 + Continue**   | 无（live 不持久化）                                | live 也走 `persist_batch_event`；coverage_incomplete 时 job 标 `partial` → 前端 Continue 菜单出现（统一 file 逻辑）| ✅ `279236455` |
+| **file re-transcribe 流式化**    | 全量 VAD + diarization 后逐组提交                 | `run_progressive_batch_from_file` 改用 `ProgressiveBatchManager`（VadGroupStream 边解码边出组边提交 + diarization 流式喂）；长音频逐段返回、不 idle timeout | ✅ `9a8df481c`（-379/+130 行）|
+| **transcript 虚拟化**            | 无                                                | `@tanstack/react-virtual`：>200 segments 只挂载可视区（top + measureElement）；超长 transcript 不冻结 | ✅ `2a40318a3` |
+| **进度条→文字定位**              | 仅播放时跟随                                     | 用户点击/拖拽波形（`interaction` 事件 → TimeStore.interactionCount）→ 定位到对应 segment 并滚动；非播放 seek 也定位 | ✅ `c1f4e0acf` |
+| **Groq STT**                     | 无                                                | Provider/AdapterKind/BatchProvider::Groq + WAV 容器 + 429 退避 + 客户端分段 + 前端预设；batch-only | ✅ Sprint 4（Aug 3-4）|
 
 ---
 

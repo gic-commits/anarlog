@@ -63,6 +63,10 @@ Sprint 2 全部 Phase A/B/C/D ✅ 已完成，当前无活跃 Gap。
 | N | `finish()` 对 partial 结果太苛刻 | Jul 27 |
 | O | v2 持久化表未创建 + Manager 不恢复 | Jul 27 |
 | P | UI 右键菜单未区分转写模式 | Jul 27 |
+| R | Groq 拒绝 `audio/pcm` 裸上传（WAV 容器修复 `156e113d7`）| Aug 4 |
+| S | live 路径 provider 硬编码 OpenAI → Groq 被当 OpenAI 提交 raw（`a8bd99c02`）| Aug 4 |
+| T | **live 丢帧根因**：diarization（embedding+聚类）在 `rx.recv()` 循环内同步执行 → 秒级阻塞 → 1024 帧 channel 满 → source `try_send` 丢帧 → 覆盖不全（`d09623d7d`）| Aug 8 |
+| U | **长音频 re-transcribe 被 idle timeout 杀**：全量 VAD/diarization 前期 60s+ 无事件 → `BATCH_IDLE_TIMEOUT` 误杀；已流式化根治（`9a8df481c`），不再依赖时长/段长 | Aug 8 |
 
 ### 长期 Gaps（Sprint 3+）
 
@@ -97,3 +101,16 @@ Sprint 2 全部 Phase A/B/C/D ✅ 已完成，当前无活跃 Gap。
 | C | 重启后 Continue → 只提未完成段 | ✅ |
 | C | `cargo test` DB roundtrip | ✅ |
 | D | 右键菜单正确显示三个选项 + Continue 条件激活 | ✅ |
+
+### Sprint 3（Aug 1-8）
+
+| 验证标准 | 状态 |
+|----------|------|
+| diarization 本地说话人分离（pyannote ONNX + wespeaker + 聚类）| ✅ Aug 1 |
+| 流式 VAD（Min-Cut + Merge）替代 DurationScheduler | ✅ Aug 1 |
+| 录音中实时分段回显 | ✅ Jul 31 |
+| diarization 参数网格搜索 → threshold 0.5 定为默认 | ✅ Aug 2 |
+| **live 丢帧根因修复**（diarization 解耦后台 task）：真实 84 组 vs 模拟 213 组 → 修复后一致 | ✅ Aug 8 |
+| **coverage_incomplete 检测** + B 自动补齐 + Continue 兜底 | ✅ Aug 8 |
+| **file re-transcribe 流式化**：长音频（84min）逐段返回 + 不 idle timeout（104 段完整 stitch，12889 词）| ✅ Aug 8 |
+| **transcript 虚拟化**：超长 transcript（>200 segments）@tanstack/react-virtual 窗口化 | ✅ Aug 8 |

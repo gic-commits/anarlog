@@ -143,3 +143,23 @@ Groq 有 TTS（`/v1/audio/speech`，Orpheus），**仅英语/阿拉伯语，无�
 
 ### 模型
 - whisper-large-v3 / v3-turbo：99+ 语言、实时优化（推理快，非 streaming API）
+
+## 实现完成（Aug 4）
+
+| Commit | 内容 |
+|--------|------|
+| `de736b355` | Provider/AdapterKind/BatchProvider 新增 `Groq`（识别 `api.groq.com`），run_batch 路由 Groq → `run_progressive_batch_from_file` |
+| `4a12e6574` | 429 限速：`SubmitError::RateLimited`（读 retry-after）+ 429 专用退避（Groq 6 次）|
+| `67444a400` | 前端 Groq provider 预设（卡片/模型/链接）+ `DIRECT_BATCH_PROVIDERS` + bindings 重生成 |
+| `156e113d7` | **WAV 容器**：Groq 拒绝 `audio/pcm` 裸上传（只接受 flac/mp3/mp4/.../wav/webm）→ `wrap_pcm_as_wav()` 44 字节 header → 分段提交 `audio.wav`（live queue.rs + file integration.rs 双路径）|
+| `a8bd99c02` | live 路径 provider 贯通：`ProgressiveBatchParams.provider` → `build_progressive_batch_config`（原硬编码 OpenAI 导致 Groq live 提交 raw → 400）|
+| `379fbfe22` | Groq 的 Mode（Batch/Progressive，无 Live）+ Segment 时长 UI 可选 |
+
+### 手工验证（Aug 4，全部通过）
+- **re-transcribe**：c5ee333b（263s）8/8 段 + 2495e7a5（147s）4/4 段全 200，零 abandoned；本地 diarization 正常（1 speaker / 3 speakers）
+- **live 录音**：单人 153s，VAD 7 组 idle-emit 全成功、458 words、1 speaker
+- 429 兜底：自动测试覆盖（`SubmitError::RateLimited` + 退避）
+
+### 待办
+- **Batch API**（URL 托管异步批量）：50% 折扣但不适合本地录音（需公网 URL），远期优化若 RPM 成瓶颈
+- TTS 无中文，不实现

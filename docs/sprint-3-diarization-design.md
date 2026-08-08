@@ -368,6 +368,7 @@ finish() → engine.finalize() 最终聚类
 
 - [x] Settings 页面新增 Diarization toggle + model 选择 + threshold slider（`select.tsx` DiarizationSection）
 - [x] threshold 默认 0.85（设置项保留；engine 在默认值时改走自适应估计，Aug 1 Night 实证发现固定 0.85 对中位距离 ~0.68 的多说话人音频会塌成 1 簇）
+- [x] **threshold 默认 0.85 → 0.5**（Aug 2 网格搜索）：4 音频 ground truth（c5ee333b=1 / 5fdd76a7=6-9 / 4a1092c6=3 / fa087f41=6）全测，0.5 + T8S5G2（min_total=8, span=5, gap=2）最优（3/4 全对）。`smooth_speakers` 改用「最大连续跨度 ≥5s 或 累计时长 ≥8s」双条件。schema/select/useRunBatch/api.rs/batch/mod.rs 五处一致
 - [x] Segment 渲染添加 speaker 标签 + 颜色
 - [x] CJK 后处理兼容 diarization（保留 speaker 标签）
 
@@ -384,7 +385,8 @@ finish() → engine.finalize() 最终聚类
 - [x] **最小时长过滤**（Aug 1 Night）：`smooth_speakers` 删除累计时长 < 2s 的孤立 speaker（噪声块），归并到最近 temporal 邻居，解决短块 embedding 噪音导致的过度分段
 - [x] 文件路径集成（`integration.rs`）：Segmenter VAD 先行 → `min_cut_merge` 分组 → 每段转录后按词中位时间 `speaker_at_time(group_start + mid)` 标注 → stitch 后 `propagate_speaker_to_none` 前后向填充
 - [x] 录音流集成（`plugins/transcription/src/listener/runtime.rs`）：录音中复用 `VadGroupStream.take_vad_segments()` → `feed_segments`（与文件路径同一批 VAD 段）→ `finish()` 时补喂尾部 + `finalize()` → 按词中位时间标注 speaker
-- [ ] 待验证：真实设备端到端（speaker 标签是否随 `SegmentResult` 正确显示）
+- [x] **live diarization 解耦**（Aug 8，`d09623d7d`）：diarization（embedding+聚类）原在 `rx.recv()` 消费循环内同步执行，秒级阻塞导致 PCM channel 满 → 丢帧 → 覆盖不全。现解耦到独立后台 task（unbounded channel + join），PCM 循环只跑便宜 VAD
+- [x] 待验证：真实设备端到端（speaker 标签是否随 `SegmentResult` 正确显示）
 
 ## 10. 开放问题
 
