@@ -6,6 +6,7 @@ use hypr_transcription_core::listener2 as core;
 use hypr_transcription_core::listener2::BatchProvider;
 use hypr_transcription_core::listener2::BatchRuntime;
 use ractor::{ActorRef, call_t, registry};
+use tauri::Manager;
 use tauri_plugin_settings::SettingsPluginExt;
 use tauri_specta::Event;
 
@@ -267,7 +268,7 @@ impl ListenerRuntime for TauriRuntime {
                 .into_iter()
                 .map(|f| session_dir.join(f))
                 .find(|p| p.exists());
-            if let Some(audio) = audio_path {
+            if let Some(audio) = audio_path.clone() {
                 if let Ok(source) = hypr_audio_utils::source_from_path(&audio) {
                     if let Some(dur) = source.total_duration() {
                         manager.set_audio_duration(Some((dur.as_secs_f64() * 1000.0) as u64));
@@ -316,6 +317,25 @@ impl ListenerRuntime for TauriRuntime {
                         "progressive_batch session finished"
                     );
 
+                    // B: auto-complete coverage gap. If the live stream dropped
+                    // frames and the transcript stops well before the audio end,
+                    // retry once via the file-based continue path (audio.mp3 is
+                    // now on disk) to fill the missing tail. Failure is
+                    // non-fatal — the job stays partial and the frontend offers
+                    // Continue.
+                    if response
+                        .metadata
+                        .get("coverage_incomplete")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                        && let Some(audio) = audio_path.clone()
+                        && let Some(filled) =
+                            auto_complete_live(&app, &params.session_id, &audio, &params.api_key)
+                                .await
+                    {
+                        response = filled;
+                    }
+
                     runtime.emit(core::BatchEvent::BatchResponse {
                         session_id: params.session_id.clone(),
                         response,
@@ -357,6 +377,135 @@ impl core::BatchRuntime for LiveBatchRuntime {
         }
         if let Err(e) = crate::TranscriptionEvent::from(event).emit(&self.app) {
             tracing::error!(?e, "failed to emit progressive batch event");
+        }
+    }
+}
+
+/// B: auto-complete a coverage-incomplete live recording by continuing the
+/// persisted job against the final audio file. Runs exactly once; if it fails
+/// or is still incomplete, the job stays partial and the frontend shows
+/// Continue for the user to decide.
+async fn auto_complete_live(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    audio_path: &std::path::Path,
+    api_key: &str,
+) -> Option<owhisper_interface::batch::Response> {
+    let state = app.try_state::<tauri_plugin_db::ManagedState>()?;
+    let pool = state.pool();
+
+    let job = match hypr_db_app::get_progressive_batch_job(pool, session_id).await {
+        Ok(Some(j)) if j.status == "partial" || j.status == "running" => j,
+        Ok(_) => {
+            tracing::info!(
+                session_id = %session_id,
+                "auto_complete skipped: no partial/running job"
+            );
+            return None;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "auto_complete: get job failed");
+            return None;
+        }
+    };
+
+    let segments = match hypr_db_app::list_completed_progressive_batch_segments(pool, &job.id).await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "auto_complete: list segments failed");
+            return None;
+        }
+    };
+
+    let mut completed: Vec<core::PersistedCompletedSegment> = Vec::new();
+    for seg in &segments {
+        let Some(response_json) = seg.response_json.as_deref() else {
+            continue;
+        };
+        let Ok(response) = serde_json::from_str(response_json) else {
+            continue;
+        };
+        completed.push(core::PersistedCompletedSegment {
+            index: seg.segment_index as usize,
+            global_start_ms: seg.global_start_ms,
+            response,
+        });
+    }
+    if completed.is_empty() {
+        return None;
+    }
+
+    // Re-align live-completed segments onto the full-audio group indices.
+    // Live groups were produced from a possibly frame-dropped PCM stream, so
+    // their indices don't match what `continue_from_file` will generate by
+    // replaying the full file. Aligning avoids wrong skip/dedup.
+    match core::compute_full_audio_groups(audio_path, job.segment_duration_ms as u32) {
+        Ok(full_groups) => {
+            completed = core::align_completed_segments_to_full_audio(&completed, &full_groups);
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "auto_complete: compute full groups failed");
+        }
+    }
+    if completed.is_empty() {
+        return None;
+    }
+
+    let language = if job.language.is_empty() {
+        vec![]
+    } else {
+        job.language
+            .parse::<hypr_language::Language>()
+            .ok()
+            .into_iter()
+            .collect()
+    };
+
+    let persist_params = core::BatchParams {
+        session_id: session_id.to_string(),
+        provider: job.provider.parse().ok()?,
+        file_path: audio_path.to_string_lossy().into_owned(),
+        model: (!job.model.is_empty()).then_some(job.model.clone()),
+        base_url: job.base_url.clone(),
+        api_key: api_key.to_string(),
+        languages: language,
+        keywords: vec![],
+        num_speakers: None,
+        min_speakers: None,
+        max_speakers: None,
+        progressive_batch: true,
+        segment_duration_ms: Some(job.segment_duration_ms as u32),
+        overlap_ms: Some(job.overlap_ms as u32),
+        max_concurrency: Some(job.max_concurrency as u32),
+        cjk_enabled: true,
+        cjk_features: None,
+        cjk_server_side: false,
+        diarization_enabled: false,
+        diarization_model: None,
+        diarization_threshold: 0.35,
+    };
+
+    let runtime = Arc::new(LiveBatchRuntime {
+        app: app.clone(),
+        persist: Some(persist_params.clone()),
+    });
+
+    match core::continue_from_file(runtime, persist_params, completed).await {
+        Ok(output) => {
+            tracing::info!(
+                session_id = %session_id,
+                filled_words = output.response.results.channels.first()
+                    .and_then(|c| c.alternatives.first())
+                    .map(|a| a.words.len())
+                    .unwrap_or(0),
+                "auto_complete: live transcript filled via continue"
+            );
+            Some(output.response)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "auto_complete: continue failed");
+            None
         }
     }
 }

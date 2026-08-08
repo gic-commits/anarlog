@@ -41,7 +41,8 @@ impl Default for CjkLayerFlags {
 use progressive::run_progressive_batch_session;
 use progressive_batch::run_progressive_batch_from_file;
 pub use progressive_batch::{
-    PersistedCompletedSegment, ProgressiveBatchConfig, ProgressiveBatchManager, continue_from_file,
+    PersistedCompletedSegment, ProgressiveBatchConfig, ProgressiveBatchManager,
+    align_completed_segments_to_full_audio, compute_full_audio_groups, continue_from_file,
     propagate_speaker_to_none,
 };
 use simple::{run_direct_batch_for_adapter_kind, run_soniqo_batch};

@@ -7,7 +7,8 @@ mod subtitle;
 
 pub use batch::{
     BatchParams, BatchProvider, BatchRunMode, BatchRunOutput, CjkLayerFlags,
-    PersistedCompletedSegment, ProgressiveBatchConfig, ProgressiveBatchManager, continue_from_file,
+    PersistedCompletedSegment, ProgressiveBatchConfig, ProgressiveBatchManager,
+    align_completed_segments_to_full_audio, compute_full_audio_groups, continue_from_file,
     expects_progressive_batch, propagate_speaker_to_none, run_batch,
 };
 pub use denoise::{DenoiseParams, run_denoise};

@@ -2,6 +2,8 @@
 
 mod integration;
 
+pub use integration::align_completed_segments_to_full_audio;
+pub use integration::compute_full_audio_groups;
 pub use integration::continue_from_file;
 pub use integration::propagate_speaker_to_none;
 pub use integration::run_progressive_batch_from_file;

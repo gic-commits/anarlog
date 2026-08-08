@@ -724,3 +724,229 @@ impl StreamingResampler {
         }
     }
 }
+
+/// Compute the full-archive VAD group sequence for an audio file, the same
+/// grouping the live `VadGroupStream` would produce if fed the whole file.
+/// Returns `(group_index, global_start_ms)` pairs, 0-based and ordered.
+///
+/// Used to re-align live-completed segments (whose indices came from a
+/// frame-dropped stream) onto the full-audio group indices so a subsequent
+/// `continue_from_file` can correctly skip already-transcribed groups.
+pub fn compute_full_audio_groups(
+    audio_path: &std::path::Path,
+    segment_duration_ms: u32,
+) -> Result<Vec<(usize, i64)>, crate::Error> {
+    let source = hypr_audio_utils::source_from_path(audio_path).map_err(|e| {
+        crate::BatchFailure::ProgressiveBatchFailed {
+            message: format!("failed to open audio file: {e}"),
+        }
+    })?;
+    let src_sample_rate: u32 = source.sample_rate().into();
+    let channels: usize = source.channels().get().into();
+    let raw: Vec<f32> = source.collect();
+    let mono: Vec<f32> = if channels > 1 {
+        raw.chunks_exact(channels)
+            .map(|c| c.iter().sum::<f32>() / channels as f32)
+            .collect()
+    } else {
+        raw
+    };
+    let pcm = resample_to_16k(&mono, src_sample_rate);
+    let i16: Vec<i16> = pcm
+        .iter()
+        .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+        .collect();
+
+    let mut stream = VadGroupStream::new(VadGroupStreamConfig {
+        sample_rate: TARGET_SAMPLE_RATE,
+        max_duration_ms: segment_duration_ms,
+        collect_vad_segments: false,
+    })
+    .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed { message: e })?;
+
+    const CHUNK: usize = 16000 / 10;
+    let mut out = Vec::new();
+    for chunk in i16.chunks(CHUNK) {
+        let f32s: Vec<f32> = chunk.iter().map(|&s| s as f32 / 32767.0).collect();
+        out.extend(stream.feed(&f32s));
+    }
+    out.extend(stream.flush());
+
+    let mut groups = out
+        .into_iter()
+        .map(|seg| (seg.index, seg.global_start_ms))
+        .collect::<Vec<_>>();
+    groups.sort_by_key(|(i, _)| *i);
+    Ok(groups)
+}
+
+/// Map live-completed segments (whose `global_start_ms`/`index` come from a
+/// possibly frame-dropped live stream) onto the full-audio group indices.
+/// Each live segment is matched to the full-audio group whose start time is
+/// closest; duplicate matches collapse to the first.
+pub fn align_completed_segments_to_full_audio(
+    completed: &[PersistedCompletedSegment],
+    full_groups: &[(usize, i64)],
+) -> Vec<PersistedCompletedSegment> {
+    if full_groups.is_empty() {
+        return completed.to_vec();
+    }
+    let mut aligned = Vec::with_capacity(completed.len());
+    let mut used = std::collections::HashSet::new();
+    for seg in completed {
+        // Binary search the group whose start_ms is nearest to seg.global_start_ms.
+        let mut lo = 0usize;
+        let mut hi = full_groups.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if full_groups[mid].1 < seg.global_start_ms {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let best = if lo == 0 {
+            0
+        } else if lo >= full_groups.len() {
+            full_groups.len() - 1
+        } else {
+            let prev = full_groups[lo - 1].1;
+            let next = full_groups[lo].1;
+            if (seg.global_start_ms - prev).abs() <= (next - seg.global_start_ms).abs() {
+                lo - 1
+            } else {
+                lo
+            }
+        };
+        let (gi, _) = full_groups[best];
+        if used.insert(gi) {
+            aligned.push(PersistedCompletedSegment {
+                index: gi,
+                global_start_ms: seg.global_start_ms,
+                response: seg.response.clone(),
+            });
+        }
+    }
+    aligned
+}
+
+fn resample_to_16k(mono: &[f32], src_rate: u32) -> Vec<f32> {
+    if src_rate == TARGET_SAMPLE_RATE {
+        return mono.to_vec();
+    }
+    let ratio = src_rate as f64 / TARGET_SAMPLE_RATE as f64;
+    let last = mono.len().saturating_sub(1);
+    let out_len = (mono.len() as f64 / ratio).round() as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let pos = i as f64 * ratio;
+        let lo = (pos.floor() as usize).min(last);
+        let hi = (pos.ceil() as usize).min(last);
+        let frac = pos - lo as f64;
+        out.push(mono[lo] * (1.0 - frac as f32) + mono[hi] * frac as f32);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn completed(index: usize, start_ms: i64) -> PersistedCompletedSegment {
+        PersistedCompletedSegment {
+            index,
+            global_start_ms: start_ms,
+            response: owhisper_interface::batch::Response {
+                metadata: serde_json::json!({}),
+                results: owhisper_interface::batch::Results { channels: vec![] },
+            },
+        }
+    }
+
+    #[test]
+    fn align_maps_live_segments_to_nearest_full_group() {
+        // Full audio groups at 10s, 40s, 70s (simulating a dropped-stream offset).
+        let full = vec![(0usize, 10_000i64), (1, 40_000), (2, 70_000)];
+        // Live completed segments were offset: started ~3s early due to drops.
+        let live = vec![
+            completed(0, 7_000),
+            completed(1, 37_000),
+            completed(2, 67_000),
+        ];
+        let aligned = align_completed_segments_to_full_audio(&live, &full);
+        assert_eq!(aligned.len(), 3);
+        assert_eq!(aligned[0].index, 0);
+        assert_eq!(aligned[1].index, 1);
+        assert_eq!(aligned[2].index, 2);
+    }
+
+    #[test]
+    fn align_collapses_duplicate_matches() {
+        let full = vec![(0usize, 10_000i64), (1, 40_000)];
+        // Two live segments both nearest to group 0.
+        let live = vec![completed(0, 11_000), completed(1, 12_000)];
+        let aligned = align_completed_segments_to_full_audio(&live, &full);
+        assert_eq!(aligned.len(), 1);
+        assert_eq!(aligned[0].index, 0);
+    }
+}
+
+#[cfg(test)]
+mod real_audio_tests {
+    use super::*;
+
+    /// End-to-end check on a real recording: full-audio groups must align back
+    /// to themselves (identity), and a "dropped" subset must map onto distinct
+    /// full groups with correct ordering. Requires ANARLOG_TEST_AUDIO.
+    #[test]
+    fn full_groups_align_identity_on_real_audio() {
+        let Some(path) = std::env::var("ANARLOG_TEST_AUDIO").ok() else {
+            eprintln!("skipping: ANARLOG_TEST_AUDIO not set");
+            return;
+        };
+        let groups = compute_full_audio_groups(std::path::Path::new(&path), 30000).unwrap();
+        assert!(!groups.is_empty(), "expected groups for real audio");
+        eprintln!("[align] full-audio groups: {}", groups.len());
+
+        // Identity: completed segments built from the groups themselves must
+        // map back to the same indices.
+        let live: Vec<PersistedCompletedSegment> = groups
+            .iter()
+            .map(|(i, start_ms)| completed_for_real(*i, *start_ms))
+            .collect();
+        let aligned = align_completed_segments_to_full_audio(&live, &groups);
+        assert_eq!(aligned.len(), groups.len());
+        for (a, g) in aligned.iter().zip(groups.iter()) {
+            assert_eq!(a.index, g.0, "identity alignment must preserve index");
+        }
+
+        // A dropped subset (every 3rd group) still maps to distinct groups.
+        let dropped: Vec<PersistedCompletedSegment> = groups
+            .iter()
+            .step_by(3)
+            .map(|(i, start_ms)| completed_for_real(*i, *start_ms))
+            .collect();
+        let aligned2 = align_completed_segments_to_full_audio(&dropped, &groups);
+        let indices: std::collections::HashSet<usize> = aligned2.iter().map(|s| s.index).collect();
+        assert_eq!(
+            indices.len(),
+            aligned2.len(),
+            "no duplicate matches expected"
+        );
+        eprintln!(
+            "[align] dropped-subset aligned to {} distinct groups",
+            indices.len()
+        );
+    }
+
+    fn completed_for_real(index: usize, start_ms: i64) -> PersistedCompletedSegment {
+        PersistedCompletedSegment {
+            index,
+            global_start_ms: start_ms,
+            response: owhisper_interface::batch::Response {
+                metadata: serde_json::json!({}),
+                results: owhisper_interface::batch::Results { channels: vec![] },
+            },
+        }
+    }
+}
