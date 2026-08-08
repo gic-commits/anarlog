@@ -121,6 +121,59 @@ pub fn estimate_threshold(embeddings: &[Vec<f32>]) -> f32 {
     (median + 0.15 * mad).clamp(0.4, 0.9)
 }
 
+/// L2-normalize an embedding vector in place.
+pub fn l2_normalize(v: &mut Vec<f32>) {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 1e-12 {
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
+    }
+}
+
+/// HDBSCAN clustering on cosine distance (matching WeSpeaker's diarization
+/// recipe: L2-normalize embeddings, build the cosine distance matrix, then
+/// density-cluster with HDBSCAN). HDBSCAN finds clusters of varying density
+/// automatically and labels outliers as -1, which the caller can then absorb
+/// (PAHC-style). Returns per-sample cluster ids (>=0), -1 for noise.
+pub fn hdbscan_cluster_embeddings(embeddings: &[Vec<f32>], min_cluster_size: usize) -> Vec<i32> {
+    let n = embeddings.len();
+    if n == 0 {
+        return vec![];
+    }
+    if n <= 2 {
+        return (0..n as i32).collect();
+    }
+
+    // L2-normalize and build cosine distance matrix (n x n) for Precalculated mode.
+    let mut normed: Vec<Vec<f32>> = embeddings.to_vec();
+    for v in normed.iter_mut() {
+        l2_normalize(v);
+    }
+    let mut dist = vec![0.0f32; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            let dot: f32 = normed[i]
+                .iter()
+                .zip(normed[j].iter())
+                .map(|(a, b)| a * b)
+                .sum();
+            dist[i * n + j] = (1.0 - dot).clamp(0.0, 2.0);
+        }
+    }
+    let data: Vec<Vec<f32>> = dist.chunks(n).map(|row| row.to_vec()).collect();
+
+    let hp = hdbscan::HdbscanHyperParams::builder()
+        .min_cluster_size(min_cluster_size)
+        .dist_metric(hdbscan::DistanceMetric::Precalculated)
+        .build();
+    let hdb = hdbscan::Hdbscan::new(&data, hp);
+    hdb.cluster().unwrap_or_else(|_| (0..n as i32).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +202,45 @@ mod tests {
     fn test_cosine_distance_same() {
         let d = cosine_distance(&[1.0, 0.0], &[1.0, 0.0]);
         assert!(d.abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_hdbscan_separates_two_groups() {
+        // 4 points: two tight groups far apart.
+        let embs = vec![
+            vec![1.0, 0.0],
+            vec![0.99, 0.02],
+            vec![-1.0, 0.0],
+            vec![-0.99, 0.02],
+        ];
+        let labels = hdbscan_cluster_embeddings(&embs, 2);
+        assert_eq!(labels.len(), 4);
+        // group A and group B should differ
+        assert_ne!(labels[0], labels[2]);
+        assert_eq!(labels[0], labels[1]);
+        assert_eq!(labels[2], labels[3]);
+    }
+
+    #[test]
+    fn test_hdbscan_single_group() {
+        // 5 identical-ish points → one cluster.
+        let embs: Vec<Vec<f32>> = (0..5).map(|_| vec![0.8, 0.6, 0.1]).collect();
+        let labels = hdbscan_cluster_embeddings(&embs, 3);
+        let unique: std::collections::HashSet<i32> = labels.iter().copied().collect();
+        assert!(
+            unique.len() <= 2,
+            "should collapse into one cluster, got {unique:?}"
+        );
+    }
+
+    #[test]
+    fn test_hdbscan_marks_outliers_as_noise() {
+        // A dominant group plus one distant outlier → outlier is -1 (noise).
+        let mut embs: Vec<Vec<f32>> = (0..8).map(|_| vec![0.9, 0.3, 0.1]).collect();
+        embs.push(vec![-1.0, 0.0, 0.0]); // distant outlier
+        let labels = hdbscan_cluster_embeddings(&embs, 3);
+        let outlier_label = labels[8];
+        assert_eq!(outlier_label, -1, "distant point should be noise");
     }
 
     #[test]

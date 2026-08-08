@@ -231,26 +231,21 @@ impl IncrementalDiarizationEngine {
             return;
         }
 
-        // The legacy 0.85 default is a loose upper bound that collapses
-        // tightly-clustered audio into one speaker; when a caller still passes
-        // it, estimate the cutoff from the actual distance distribution.
-        //
-        // Long recordings accumulate many turn-chunks; same-speaker chunks can
-        // drift apart in embedding space (vocal variety, room changes), so a
-        // fixed 0.5 threshold over-segments them into dozens of fake speakers.
-        // For large chunk counts we therefore fall back to the data-adaptive
-        // estimate (median + 0.15·MAD), which grows with the audio's natural
-        // embedding spread. Short audio keeps the caller's tuned threshold.
-        const ADAPTIVE_CHUNK_COUNT: usize = 600;
-        let threshold = if (self.config.threshold - 0.85).abs() < 1e-6
-            || valid_embs.len() >= ADAPTIVE_CHUNK_COUNT
-        {
-            clustering::estimate_threshold(&valid_embs)
-        } else {
-            self.config.threshold
-        };
+        // HDBSCAN density clustering (WeSpeaker recipe) on cosine distance:
+        // finds clusters of varying density automatically and labels outliers
+        // as -1, which the downstream smooth_speakers/merge passes absorb.
+        // Unlike the fixed-threshold agglomerative clustering, this does not
+        // over-segment long recordings into dozens of fake speakers.
+        const MIN_CLUSTER_SIZE: usize = 3;
+        let cids_i32 = clustering::hdbscan_cluster_embeddings(&valid_embs, MIN_CLUSTER_SIZE);
 
-        let cids = clustering::cluster_embeddings(&valid_embs, threshold);
+        // -1 (noise) chunks keep their pre-cluster label (temporarily use the
+        // index) so smooth_speakers can reassign them to temporal neighbors.
+        let mut cids: Vec<usize> = cids_i32
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| if c >= 0 { c as usize } else { usize::MAX - i })
+            .collect();
 
         let mut vi = 0;
         for seg in &mut self.segments {

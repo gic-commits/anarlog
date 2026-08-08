@@ -11,6 +11,7 @@ directml = ["hypr-onnx/directml"]
 hypr-onnx = { workspace = true }
 
 dasp = { workspace = true }
+hdbscan = "0.12"
 knf-rs = { git = "https://github.com/thewh1teagle/pyannote-rs", rev = "e23bd29", package = "knf-rs" }
 simsimd = { version = "6" }
 
