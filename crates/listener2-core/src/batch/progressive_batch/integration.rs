@@ -1,31 +1,14 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use hypr_audio_utils::Source;
 use hypr_pyannote_local::incremental_diarization::{
     IncrementalDiarizationConfig, IncrementalDiarizationEngine,
 };
-use hypr_pyannote_local::min_cut_merge::{MinCutMergeConfig, min_cut_merge};
-use hypr_pyannote_local::segmentation::Segmenter;
 
 use crate::batch::{BatchParams, BatchRunMode, BatchRunOutput};
 use crate::{BatchEvent, BatchRuntime};
 
 use super::*;
-
-/// Emit a lightweight progress heartbeat so the batch idle-timeout monitor
-/// (which kills a session with no events for 60s+) does not abort long
-/// recordings during the (event-free) decode/VAD/diarization preparation.
-fn emit_progress(runtime: &dyn BatchRuntime, session_id: &str, percentage: f64) {
-    use owhisper_interface::batch_stream::BatchStreamEvent;
-    runtime.emit(BatchEvent::BatchResponseStreamed {
-        session_id: session_id.to_string(),
-        event: BatchStreamEvent::Progress {
-            percentage,
-            partial_text: None,
-        },
-    });
-}
 
 fn mime_type_for_extension(path: &std::path::Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
@@ -76,399 +59,167 @@ pub async fn run_progressive_batch_from_file(
         .await;
     }
 
-    // Load full audio to mono f32 at source rate.
-    let raw: Vec<f32> = source.collect();
-    let mono_src: Vec<f32> = if channels > 1 {
-        raw.chunks_exact(channels)
-            .map(|c| c.iter().sum::<f32>() / channels as f32)
-            .collect()
-    } else {
-        raw
+    let audio_duration_ms = source
+        .total_duration()
+        .map(|d| (d.as_secs_f64() * 1000.0) as u64);
+
+    let session_dir = std::env::temp_dir().join(format!("progressive-batch-{session_id}"));
+    let _ = std::fs::create_dir_all(&session_dir);
+
+    let language = params.languages.first().map(|l| l.to_string());
+
+    // Stream through the same ProgressiveBatchManager the live path uses:
+    // VadGroupStream segments on the fly, each group is submitted as soon as
+    // it emits (streaming results back), and the whole pipeline stays live —
+    // no long event-free preparation phase to trip idle timeouts regardless of
+    // audio length or segment duration.
+    let config = ProgressiveBatchConfig {
+        session_id: session_id.clone(),
+        sample_rate: TARGET_SAMPLE_RATE,
+        segment_duration_ms,
+        overlap_ms: 0,
+        max_concurrency: params.max_concurrency.unwrap_or(2) as usize,
+        base_url: params.base_url,
+        api_key: params.api_key,
+        model: params.model,
+        language,
+        provider: params.provider,
+        session_dir,
+        vad_groups: true,
+        collect_vad_segments: params.diarization_enabled,
+        audio_duration_ms,
     };
+    let mut manager = ProgressiveBatchManager::new(config).with_runtime(runtime);
 
-    // Resample to TARGET_SAMPLE_RATE (16kHz) for VAD and transcription.
-    let pcm_f32 = if src_sample_rate == TARGET_SAMPLE_RATE {
-        mono_src
-    } else {
-        let ratio = src_sample_rate as f64 / TARGET_SAMPLE_RATE as f64;
-        let last = mono_src.len().saturating_sub(1);
-        let out_len = (mono_src.len() as f64 / ratio).round() as usize;
-        let mut out = Vec::with_capacity(out_len);
-        for i in 0..out_len {
-            let pos = i as f64 * ratio;
-            let lo = (pos.floor() as usize).min(last);
-            let hi = (pos.ceil() as usize).min(last);
-            let frac = pos - lo as f64;
-            out.push(mono_src[lo] * (1.0 - frac as f32) + mono_src[hi] * frac as f32);
-        }
-        out
-    };
-
-    // Convert to i16 for VAD.
-    let pcm_i16: Vec<i16> = pcm_f32
-        .iter()
-        .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
-        .collect();
-
-    // ── VAD (always needed) ──────────────────────────────────────────────
-    emit_progress(&*runtime, &session_id, 0.0);
-    let raw_vad_segments: Vec<hypr_pyannote_local::segmentation::Segment> = {
-        let mut segmenter = Segmenter::new(TARGET_SAMPLE_RATE).map_err(|e| {
-            crate::BatchFailure::ProgressiveBatchFailed {
-                message: format!("VAD init failed: {e}"),
-            }
-        })?;
-        segmenter
-            .process(&pcm_i16, TARGET_SAMPLE_RATE)
-            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-                message: format!("VAD failed: {e}"),
-            })?
-    };
-
-    let vad_count = raw_vad_segments.len();
-    emit_progress(&*runtime, &session_id, 0.05);
-
-    // ── Diarization (optional) ───────────────────────────────────────────
-    // Uses the same VAD segments as grouping, not the engine's internal VAD.
-    let diarization_engine: Option<IncrementalDiarizationEngine> = if params.diarization_enabled {
-        let mut engine = IncrementalDiarizationEngine::new(IncrementalDiarizationConfig {
+    // Diarization (optional): VAD segments drained from the stream feed the
+    // engine as they're produced. Embedding/clustering are comparatively slow
+    // but the audio stream keeps producing groups + segmentResult events, so
+    // the idle monitor is never starved.
+    let mut diarization_engine: Option<IncrementalDiarizationEngine> = if params.diarization_enabled
+    {
+        match IncrementalDiarizationEngine::new(IncrementalDiarizationConfig {
             sample_rate: TARGET_SAMPLE_RATE,
             model_path: params.diarization_model.clone(),
             threshold: params.diarization_threshold,
             recluster_interval: usize::MAX,
             ..Default::default()
-        })
-        .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-            message: format!("diarization init failed: {e}"),
-        })?;
-
-        engine.feed_segments(&raw_vad_segments).map_err(|e| {
-            crate::BatchFailure::ProgressiveBatchFailed {
-                message: format!("diarization feed failed: {e}"),
+        }) {
+            Ok(engine) => Some(engine),
+            Err(e) => {
+                tracing::warn!(error = %e, "[vad-batch] diarization init failed, continuing without");
+                None
             }
-        })?;
-        engine.finalize();
-
-        let speaker_segs = engine.speaker_segments();
-        let unique_speakers: std::collections::HashSet<usize> =
-            speaker_segs.iter().map(|s| s.speaker).collect();
-        tracing::info!(
-            "[diarization] {} speaker segments ({} unique speakers) using '{}' for session {}",
-            speaker_segs.len(),
-            unique_speakers.len(),
-            engine.provider_name(),
-            session_id,
-        );
-        Some(engine)
+        }
     } else {
         None
     };
-    emit_progress(&*runtime, &session_id, 0.1);
 
-    // ── Grouping ────────────────────────────────────────────────────────
-    // groups: (start_sec, end_sec, speaker)
-    // Always use raw_vad_segments from Segmenter for grouping (more reliable
-    // VAD than the diarization engine's internal IncrementalVad). Speaker labels
-    // are assigned per-word via engine.speaker_at_time() after transcription.
-    if let Some(ref engine) = diarization_engine {
-        let ss = engine.speaker_segments();
-        let seg_min = ss.first().map(|s| s.start).unwrap_or(0.0);
-        let seg_max = ss.last().map(|s| s.end).unwrap_or(0.0);
-        let total_speech: f64 = ss.iter().map(|s| s.end - s.start).sum();
-        tracing::info!(
-            "[diarization] speaker segments: count={}  range=[{:.1}, {:.1}]  total_speech={:.1}s",
-            ss.len(),
-            seg_min,
-            seg_max,
-            total_speech,
-        );
+    // Stream-decode and feed in 10s chunks (mirrors continue_from_file).
+    const CHUNK_FRAMES: usize = 48000 * 10;
+    let mut buf: Vec<f32> = Vec::with_capacity(CHUNK_FRAMES * channels);
+    let mut resampler = StreamingResampler::new(src_sample_rate, TARGET_SAMPLE_RATE);
+    let mut src_index = 0usize;
+
+    let mut drain_diarization =
+        |manager: &mut ProgressiveBatchManager,
+         engine: &mut Option<IncrementalDiarizationEngine>| {
+            if let Some(eng) = engine.as_mut() {
+                let vad_segments = manager.take_vad_segments();
+                if !vad_segments.is_empty() {
+                    if let Err(e) = eng.feed_segments(&vad_segments) {
+                        tracing::warn!(error = %e, "[vad-batch] diarization feed error");
+                    }
+                }
+            }
+        };
+
+    for sample in source {
+        buf.push(sample);
+        if buf.len() >= CHUNK_FRAMES * channels {
+            let mono: Vec<f32> = if channels > 1 {
+                buf.chunks_exact(channels)
+                    .map(|c| c.iter().sum::<f32>() / channels as f32)
+                    .collect()
+            } else {
+                std::mem::take(&mut buf)
+            };
+            let mut resampled = Vec::new();
+            resampler.push(&mono, src_index, &mut resampled);
+            src_index += mono.len();
+            manager.on_audio_frame(&resampled);
+            drain_diarization(&mut manager, &mut diarization_engine);
+            buf.clear();
+        }
     }
 
-    if raw_vad_segments.is_empty() {
-        return submit_file_direct(
-            runtime,
-            std::path::Path::new(&file_path),
-            &params,
-            &session_id,
-        )
-        .await;
-    }
-    let merged = min_cut_merge(
-        raw_vad_segments,
-        &pcm_i16,
-        TARGET_SAMPLE_RATE,
-        MinCutMergeConfig {
-            max_duration_ms: segment_duration_ms,
-        },
-    );
-    let groups: Vec<(f64, f64, usize)> = merged
-        .into_iter()
-        .map(|g| {
-            let start = g.first().map(|s| s.start).unwrap_or(0.0);
-            let end = g.last().map(|s| s.end).unwrap_or(0.0);
-            (start, end, 0)
-        })
-        .collect();
-    for (i, &(gs, ge, _spk)) in groups.iter().enumerate() {
-        tracing::info!(
-            "[vad-batch] group {}: start={:.1}s  end={:.1}s  span={:.1}s",
-            i,
-            gs,
-            ge,
-            ge - gs,
-        );
+    if !buf.is_empty() {
+        let mono: Vec<f32> = if channels > 1 {
+            buf.chunks_exact(channels)
+                .map(|c| c.iter().sum::<f32>() / channels as f32)
+                .collect()
+        } else {
+            buf
+        };
+        let mut resampled = Vec::new();
+        resampler.push(&mono, src_index, &mut resampled);
+        manager.on_audio_frame(&resampled);
+        drain_diarization(&mut manager, &mut diarization_engine);
     }
 
-    let total = groups.len();
+    let mut response = manager
+        .finish()
+        .await
+        .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed { message: e })?;
+
+    // Final diarization pass: feed any tail VAD segments flushed during
+    // finish, finalize clustering, then label words by their mid time.
+    if let Some(ref mut eng) = diarization_engine {
+        let tail = manager.take_vad_segments();
+        if !tail.is_empty() {
+            if let Err(e) = eng.feed_segments(&tail) {
+                tracing::warn!(error = %e, "[vad-batch] diarization tail feed error");
+            }
+        }
+        eng.finalize();
+        for channel in &mut response.results.channels {
+            for alt in &mut channel.alternatives {
+                for word in &mut alt.words {
+                    let mid = (word.start + word.end) / 2.0;
+                    word.speaker = eng.speaker_at_time(mid);
+                }
+            }
+        }
+        propagate_speaker_to_none(&mut response);
+    }
+
+    let word_count = response
+        .results
+        .channels
+        .first()
+        .and_then(|c| c.alternatives.first())
+        .map(|a| a.words.len())
+        .unwrap_or(0);
     tracing::info!(
-        "[vad-batch] {} groups from {} VAD segments for session {}",
-        total,
-        vad_count,
-        session_id,
+        "[vad-batch] stitch ok  words={}  last_end={:.1}s",
+        word_count,
+        response
+            .results
+            .channels
+            .first()
+            .and_then(|c| c.alternatives.first())
+            .and_then(|a| a.words.last())
+            .map(|w| w.end)
+            .unwrap_or(0.0),
     );
 
-    let session_dir = std::env::temp_dir().join(format!("progressive-batch-{session_id}"));
-    let _ = std::fs::create_dir_all(&session_dir);
-
-    let stitcher_config = StitcherConfig {
-        overlap_ms: 0,
-        segment_duration_ms: segment_duration_ms as u64,
-        total_segments: total,
-        audio_duration_ms: Some((duration_secs * 1000.0) as u64),
-    };
-    let mut stitcher = Stitcher::new(stitcher_config);
-
-    for (group_idx, &(group_start, group_end, _group_speaker)) in groups.iter().enumerate() {
-        let start_sample = (group_start * TARGET_SAMPLE_RATE as f64) as usize;
-        let end_sample = ((group_end * TARGET_SAMPLE_RATE as f64) as usize).min(pcm_i16.len());
-        let global_start_ms = (group_start * 1000.0) as i64;
-
-        let audio_bytes = pcm_i16[start_sample..end_sample]
-            .iter()
-            .flat_map(|&s| s.to_le_bytes())
-            .collect::<Vec<u8>>();
-
-        let listen_params = owhisper_interface::ListenParams {
-            model: params.model.clone(),
-            languages: params.languages.clone(),
-            ..Default::default()
-        };
-
-        let url =
-            owhisper_client::OpenAIAdapter::transcription_url(&params.base_url).map_err(|e| {
-                crate::BatchFailure::ProgressiveBatchFailed {
-                    message: format!("invalid URL: {e}"),
-                }
-            })?;
-
-        let client = owhisper_client::create_client();
-        const MAX_RETRIES: u32 = 3;
-        let mut resp = None;
-        let mut last_error: Option<String> = None;
-        let is_groq = matches!(params.provider, crate::batch::BatchProvider::Groq);
-        let upload_bytes = if is_groq {
-            crate::batch::progressive_batch::queue::wrap_pcm_as_wav(
-                &audio_bytes,
-                TARGET_SAMPLE_RATE,
-            )
-        } else {
-            audio_bytes.clone()
-        };
-        let (file_name, mime) = if is_groq {
-            ("audio.wav", "audio/wav")
-        } else {
-            ("audio.raw", "audio/pcm")
-        };
-        for attempt in 0..=MAX_RETRIES {
-            let file_part = reqwest::multipart::Part::bytes(upload_bytes.clone())
-                .file_name(file_name)
-                .mime_str(mime)
-                .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-                    message: format!("failed to create multipart: {e}"),
-                })?;
-
-            let form = owhisper_client::OpenAIAdapter::build_batch_multipart(
-                file_part,
-                &listen_params,
-                true,
-                false,
-            )
-            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-                message: format!("failed to build form: {e}"),
-            })?;
-
-            let send = client
-                .post(url.clone())
-                .multipart(form)
-                .header("Authorization", format!("Bearer {}", params.api_key))
-                .send()
-                .await;
-            match send {
-                Ok(r) if r.status().is_success() => {
-                    resp = Some(r);
-                    break;
-                }
-                Ok(r) => {
-                    let status = r.status();
-                    let body = r.text().await.unwrap_or_default();
-                    last_error = Some(format!("HTTP {}: {}", status, body));
-                    if attempt + 1 <= MAX_RETRIES && status.is_server_error() {
-                        let delay = Duration::from_secs(1 << attempt);
-                        tracing::warn!(
-                            "[vad-batch] group {} transient failure ({status}, attempt {}/{MAX_RETRIES}), retrying in {}s: {}",
-                            group_idx,
-                            attempt,
-                            delay.as_secs(),
-                            body,
-                        );
-                        tokio::time::sleep(delay).await;
-                        continue;
-                    }
-                    tracing::warn!(
-                        "[vad-batch] group {} failed ({}): {}",
-                        group_idx,
-                        status,
-                        body,
-                    );
-                    break;
-                }
-                Err(e) => {
-                    last_error = Some(format!("HTTP request failed: {e}"));
-                    if attempt + 1 <= MAX_RETRIES {
-                        let delay = Duration::from_secs(1 << attempt);
-                        tracing::warn!(
-                            "[vad-batch] group {} transport error (attempt {}/{MAX_RETRIES}), retrying in {}s: {e}",
-                            group_idx,
-                            attempt,
-                            delay.as_secs(),
-                        );
-                        tokio::time::sleep(delay).await;
-                        continue;
-                    }
-                    break;
-                }
-            }
-        }
-
-        let resp = match resp {
-            Some(r) => r,
-            None => {
-                stitcher.add_abandoned(group_idx);
-                tracing::warn!(
-                    "[vad-batch] group {} abandoned after {} retries: {:?}",
-                    group_idx,
-                    MAX_RETRIES,
-                    last_error,
-                );
-                continue;
-            }
-        };
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| crate::BatchFailure::ProgressiveBatchFailed {
-                message: format!("failed to read response body: {e}"),
-            })?;
-        tracing::info!(
-            "[vad-batch] group {} succeeded  (resp_len={})",
-            group_idx,
-            body.len(),
-        );
-
-        let mut segment_response: owhisper_interface::batch::Response = if matches!(
-            params.provider,
-            crate::batch::BatchProvider::OpenAI | crate::batch::BatchProvider::Groq
-        ) {
-            owhisper_client::OpenAIAdapter::parse_batch_response(&body).map_err(|e| {
-                crate::BatchFailure::ProgressiveBatchFailed {
-                    message: format!("failed to parse response: {e}"),
-                }
-            })?
-        } else {
-            serde_json::from_str(&body).map_err(|e| {
-                crate::BatchFailure::ProgressiveBatchFailed {
-                    message: format!("failed to parse response: {e}"),
-                }
-            })?
-        };
-
-        // Annotate speaker labels from the diarization engine
-        if let Some(ref engine) = diarization_engine {
-            for channel in &mut segment_response.results.channels {
-                for alt in &mut channel.alternatives {
-                    for word in &mut alt.words {
-                        let mid = (word.start + word.end) / 2.0;
-                        word.speaker = engine.speaker_at_time(group_start + mid);
-                    }
-                }
-            }
-        }
-
-        runtime.emit(BatchEvent::BatchSegmentResult {
-            session_id: session_id.clone(),
-            segment_index: group_idx,
-            global_start_ms,
-            response: segment_response.clone(),
-        });
-
-        stitcher.add_segment(CompletedSegment {
-            index: group_idx,
-            global_start_ms,
-            response: segment_response,
-        });
-    }
-
-    let has_completed = stitcher.segment_count() > 0;
-    let abandoned_count = stitcher.abandoned_indices().len();
-    tracing::info!(
-        "[vad-batch] completed={}/{}  abandoned={}  for session {}",
-        has_completed as usize,
-        total,
-        abandoned_count,
-        session_id,
+    let _ = std::fs::remove_dir_all(
+        &std::env::temp_dir().join(format!("progressive-batch-{session_id}")),
     );
-
-    if !has_completed {
-        return Err(crate::BatchFailure::ProgressiveBatchFailed {
-            message: "no groups completed successfully".to_string(),
-        }
-        .into());
-    }
-
-    match stitcher.stitch() {
-        Ok(mut response) => {
-            let word_count = response
-                .results
-                .channels
-                .first()
-                .and_then(|c| c.alternatives.first())
-                .map(|a| a.words.len())
-                .unwrap_or(0);
-            propagate_speaker_to_none(&mut response);
-            let _ = std::fs::remove_dir_all(&session_dir);
-            tracing::info!(
-                "[vad-batch] stitch ok  words={}  last_end={:.1}s",
-                word_count,
-                response
-                    .results
-                    .channels
-                    .first()
-                    .and_then(|c| c.alternatives.first())
-                    .and_then(|a| a.words.last())
-                    .map(|w| w.end)
-                    .unwrap_or(0.0),
-            );
-            Ok(BatchRunOutput {
-                session_id,
-                mode: BatchRunMode::Direct,
-                response,
-            })
-        }
-        Err(e) => Err(crate::BatchFailure::ProgressiveBatchFailed {
-            message: format!("stitch failed: {e:?}"),
-        }
-        .into()),
-    }
+    Ok(BatchRunOutput {
+        session_id,
+        mode: BatchRunMode::Direct,
+        response,
+    })
 }
 
 /// Propagate a valid speaker value to words with `speaker: None`.
