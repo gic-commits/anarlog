@@ -432,12 +432,45 @@ pub(crate) async fn persist_batch_event(
                 .get("coverage_incomplete")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            let has_gap_segments = response
+                .metadata
+                .get("gap_segments")
+                .and_then(|v| v.as_array())
+                .is_some_and(|arr| !arr.is_empty());
 
-            let status = if has_abandoned || coverage_incomplete {
+            let status = if has_abandoned || coverage_incomplete || has_gap_segments {
                 "partial"
             } else {
                 "completed"
             };
+
+            // Segments bordering a large gap had their audio dropped during
+            // transcription. Reset their DB status so a subsequent Continue
+            // re-submits exactly those segments (and overwrites the result).
+            if let Some(gap_segments) = response.metadata.get("gap_segments")
+                && let Some(gap_list) = gap_segments.as_array()
+                && !gap_list.is_empty()
+            {
+                for seg_val in gap_list {
+                    let Some(idx) = seg_val.as_u64() else {
+                        continue;
+                    };
+                    if let Err(e) = sqlx::query(
+                        "UPDATE progressive_batch_segments
+                         SET status = 'failed',
+                             response_json = NULL,
+                             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                         WHERE job_id = ?1 AND segment_index = ?2 AND status = 'completed'",
+                    )
+                    .bind(session_id)
+                    .bind(idx as i64)
+                    .execute(pool)
+                    .await
+                    {
+                        tracing::warn!("[batch_persist] reset gap segment failed: {e}");
+                    }
+                }
+            }
 
             if let Err(e) = sqlx::query(
                 "UPDATE progressive_batch_jobs

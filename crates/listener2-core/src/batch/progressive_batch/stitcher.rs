@@ -5,6 +5,9 @@ use serde_json::json;
 
 const DEDUP_EPSILON_S: f64 = 0.05;
 const GAP_WARNING_THRESHOLD_MS: i64 = 2000;
+/// Gaps at or above this size mark the bordering segments for a re-submit
+/// retry (the audio between them was not transcribed).
+const GAP_RETRY_THRESHOLD_MS: i64 = 10_000;
 /// Grace for how far the stitched transcript may stop before the known audio
 /// end before being flagged as coverage-incomplete (ms).
 const TAIL_COVERAGE_GRACE_MS: u64 = 10_000;
@@ -126,7 +129,12 @@ impl Stitcher {
 
         let mut tagged: Vec<TaggedWord> = Vec::new();
         let mut gaps: Vec<(usize, i64)> = Vec::new();
+        // Indices of segments that border a large gap (>= GAP_RETRY_THRESHOLD_MS).
+        // These are candidates for a re-submit retry, since their words do not
+        // cover the audio between adjacent segments (content was dropped).
+        let mut gap_segments: Vec<usize> = Vec::new();
         let mut prev_expected_end_ms: Option<i64> = None;
+        let mut prev_segment_index: Option<usize> = None;
 
         for (index, segment) in &self.segments {
             let alt = match segment.response.results.channels.first() {
@@ -150,9 +158,22 @@ impl Stitcher {
                 if gap_ms > GAP_WARNING_THRESHOLD_MS {
                     gaps.push((*index, gap_ms));
                 }
+                if gap_ms >= GAP_RETRY_THRESHOLD_MS {
+                    // Re-submit both the previous and this segment: the audio
+                    // between them was not transcribed.
+                    if let Some(prev_idx) = prev_segment_index {
+                        if !gap_segments.contains(&prev_idx) {
+                            gap_segments.push(prev_idx);
+                        }
+                    }
+                    if !gap_segments.contains(index) {
+                        gap_segments.push(*index);
+                    }
+                }
             }
             prev_expected_end_ms =
                 Some(segment.global_start_ms + self.config.segment_duration_ms as i64);
+            prev_segment_index = Some(*index);
 
             let offset_secs = segment.global_start_ms as f64 / 1000.0;
 
@@ -246,6 +267,10 @@ impl Stitcher {
                 })
                 .collect();
             metadata["gap_warnings"] = serde_json::json!(gap_warnings);
+        }
+
+        if !gap_segments.is_empty() {
+            metadata["gap_segments"] = serde_json::json!(gap_segments);
         }
 
         // Coverage check: if the known audio duration is set and the stitched
@@ -434,6 +459,28 @@ mod tests {
         assert!(gaps.is_some(), "should have gap warnings");
         assert_eq!(gaps.unwrap().len(), 1);
         assert_eq!(gaps.unwrap()[0]["gap_ms"].as_i64(), Some(34000));
+    }
+
+    #[test]
+    fn test_large_gap_marks_bordering_segments_for_retry() {
+        // A >=10s gap marks both the previous and current segment index.
+        let mut stitcher = Stitcher::new(config(1000));
+        stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "hello")]));
+        stitcher.add_segment(seg(1, 45000, vec![make_word(0.0, 1.0, "later")]));
+        let result = stitcher.stitch().unwrap();
+        let gap_segments = result.metadata["gap_segments"].as_array().unwrap();
+        assert!(gap_segments.contains(&serde_json::json!(0)));
+        assert!(gap_segments.contains(&serde_json::json!(1)));
+    }
+
+    #[test]
+    fn test_small_gap_does_not_mark_retry() {
+        // A sub-10s gap only emits a warning, no retry markers.
+        let mut stitcher = Stitcher::new(config(1000));
+        stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "hello")]));
+        stitcher.add_segment(seg(1, 34000, vec![make_word(0.0, 1.0, "later")]));
+        let result = stitcher.stitch().unwrap();
+        assert!(result.metadata.get("gap_segments").is_none());
     }
 
     #[test]
