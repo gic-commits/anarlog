@@ -822,7 +822,43 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | `pnpm -F @hypr/desktop typecheck` | ✅ |
 | dprint fmt | ✅ |
 
-## 下一步工作排布
+## Aug 8 — Diarization 聚类升级：HDBSCAN 取代固定 threshold（✅ 回测验证）
+
+### 问题
+84 分钟长音频（a60beadd）re-transcribe 产出 **64 个 unique speakers**（实际会议应 ~9 人）。根因：
+- 固定 threshold=0.5（Aug 2 网格搜索对短音频最优）在长音频上过度聚类——同一说话人的 chunks 在长音频里 embedding 距离 >0.5，被切碎成多个"假 speaker"
+- 假 speaker 各自满足 smooth_speakers 的连续 span 条件，不被合并 → "一句话切成多人"
+
+### 研究（Aug 8）
+研究 WeSpeaker 官方 diarization recipe（`examples/voxconverse/v2`）：
+- **谱聚类 + 特征值间隙自动定人数**（不依赖 threshold）
+- **UMAP 降维 + HDBSCAN + PAHC 合并**（效果最佳：DER 5.4 vs 谱 6.3）
+- Rust 生态有 `faer`（特征分解）+ `hdbscan`（纯 Rust）+ `fast-umap`
+- VBx（变分贝叶斯 HMM）：官方明说长音频 AHC 慢，排除
+- pyannote 端到端：需 HF token，不适合本地轻量，排除
+
+### 落地（第一步：HDBSCAN）
+| 文件 | 改动 |
+|------|------|
+| `clustering.rs` | 新增 `hdbscan_cluster_embeddings`（L2 归一化 + cosine 距离矩阵 + HDBSCAN Precalculated 模式，min_cluster_size=3）|
+| `incremental_diarization.rs` | `recluster` 用 HDBSCAN 替代 agglomerative；噪声(-1)段给唯一临时 label，smooth_speakers/merge_sandwiched 吸收 |
+| `Cargo.toml` | `hdbscan = "0.12"` |
+
+### 回测结果（真实 84min 音频 + wespeaker_zh_cnceleb_resnet34_LM）
+| 指标 | 旧（agglomerative+0.5）| 新（HDBSCAN）|
+|------|:---:|:---:|
+| unique speakers | **64** | **9** ✅ |
+| speaker 分布 | 58% speaker0 + 63 个碎片 | 主讲 68% + 8 个参与人 |
+
+### 验证
+- pyannote-local 33 测试（含 3 个新增 hdbscan）✅
+- listener2-core 137 测试 ✅
+- 回测 `assert unique <= 25` ✅（实际 9）
+
+### 第二步（待定）
+若需进一步：UMAP 降维（`fast-umap`）+ PAHC 合并 + 1.5s 滑窗 embedding（完整 WeSpeaker B 方案）。当前 HDBSCAN 已解决长音频过度聚类，第二步仅在需要时做。
+
+
 
 ### Sprint 4：Groq STT 适配（✅ 已实现 + 手工验证通过）
 
@@ -864,7 +900,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | 4 | **`min_duration_secs` 冗余字段删除** | ✅ 已确认（Aug 1）| 代码里已 0 处引用（全库搜索无匹配）——Jul 25 已由 `segment_duration_ms` 替代。已闭环 |
 | 5 | **真机端到端**：live 录音 speaker 标签 + 音频管道 | ⚠️ 已实测（Aug 2 PM），1+2+4 修复待复验 | 真机录 4 人对话 146.9s：diarization 引擎正常、3 unique speakers（实际 4，少 1）。暴露 2 个音频管道缺陷（#10 PCM 丢帧、#11 混音削波）已修（`5902cbb51`）。随后发现丢段真因是**尾组 stop 后堆积被 drain 丢弃**，已用 1+2+4 修复（`1c0e6a752`：录音中 idle 实时 emit + drain 放宽 + grace 重试）。最新验证（session c563d8c6）：8 组录音中实时提交、无 abandoned、完整 stitch ✅；残余 28s 空洞确认为**服务端长段 whisper 偶发 500/截断**（已报服务端）|
 | 6 | **内存峰值确认** <50MB（流式解码 + VAD prune）| 待实测 | 长录音（~1h）跑一遍验证 |
-| 7 | **diarization embedding 区分度不足**（原 MAD 系数标定）| 🔴 已确认根因，降为**远期优化** | wespeaker 短块 embedding 区分度不足：单说话人块间距离(0.468)与多说话人(0.676)高度重叠；c5 假 speaker(maxcontig 4.5s)与 4a1092c6 真实短说话人(4.6s)连续跨度几乎相同，纯阈值无法区分。**实测确认（Aug 2 PM）**：c5ee333b=1✅、5fdd76a7=7✅、fa087f41=7✅、4a1092c6=2❌（真实 3，少报 1 短说话人）。当前最优解 threshold 0.5 + T8S5G2（4 音频 3/4 全对），受样本限制非通用最优。远期：继续调低 threshold + 其他参数组合 / 换更鲁棒 embedding 模型 |
+| 7 | **diarization embedding 区分度不足**（原 MAD 系数标定）| ⚠️ 已缓解（Aug 8 HDBSCAN），深度调优降为远期 | 旧问题：固定 threshold 无法区分单说话人假 speaker 与真实短说话人（Aug 2 网格搜索 T8S5G2，threshold 0.5）。**HDBSCAN 密度聚类已取代固定 threshold**（`1d6acfee6`）：长音频 a60beadd 从 64 假 speaker → **9 个**（回测验证）。残留：4a1092c6（3 人）在旧方案少报 1 短说话人——HDBSCAN 是否改善待验证。远期：UMAP 降维 + PAHC + 1.5s 滑窗 embedding（完整 WeSpeaker B 方案）|
 | 8 | **服务端 whisper 500**（c5ee333b group5/6，33s 段稳定 500，73s 内容丢失）| ✅ 已修复（Aug 2 PM 验证）| 服务端定位 3 个根因并修复：① 丢段=`without_timestamps` 默认 True 与 word 时间戳冲突→改 False；② 500=clip 边界超音频长度（rodio 无前导静音触发）→clamp；③ 500=相邻 clip 重叠（>30s 段触发，解释"整段 500/拆半段正常"）→合并重叠 clip。验证：group5/group6/g5-ffmpeg 重新 POST 全部稳定 200 且转写正常。**客户端无需改动** |
 | 9 | **abandoned 段无补救入口**（远期关注点）| 📝 记录 | stitcher 部分失败（abandoned）不触发 Continue → 用户无法补救已丢失内容。从未构造出完整未完成状态，当前模拟不出。远期：abandoned 后提供重试/补转入口 |
 | 10 | **live PCM 静默丢帧**（`pipeline.rs` `try_send`）| ✅ 已修复（Aug 2 PM），待真机验证 | 根因：PCM channel（256）满时 `try_send` 失败**静默丢弃**。实测 VAD 平均 1.28ms（预算 120ms），丢帧是**偶发尖峰**（max 117ms）非持续瓶颈。修复：channel 256→**1024**（≈2min 缓冲）+ try_send 失败**计数 + 每 50 帧汇总日志**。若 1024 仍丢（日志见 `dropped_frames`），升级为"PCM 落盘 + 增量读"架构 |
