@@ -97,8 +97,17 @@ pub struct FbankEmbedding {
 }
 
 impl FbankEmbedding {
+    /// Intra-op thread count for the embedding ONNX session. Measured on the
+    /// Wespeaker ResNet34 model: 2 threads gives ~1.5x speedup over 1 on CPU;
+    /// >2 regresses (synchronization overhead). 8 threads is ~2.5x SLOWER.
+    const INTRA_THREADS: usize = 2;
+
     pub fn new(model_path: &std::path::Path, model_name: String) -> Result<Self, crate::Error> {
-        let mut session = hypr_onnx::load_model_from_path(model_path)?;
+        let mut session = hypr_onnx::load_model_from_bytes_with_threads(
+            &std::fs::read(model_path).map_err(|e| crate::Error::Io(e.to_string()))?,
+            Self::INTRA_THREADS,
+            1,
+        )?;
 
         let (inp, out) = NAME_SETS
             .iter()

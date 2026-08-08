@@ -10,6 +10,8 @@ pub enum Error {
     ShapeError(#[from] hypr_onnx::ndarray::ShapeError),
     #[error("knf error: {0}")]
     KnfError(String),
+    #[error("io error: {0}")]
+    Io(String),
     #[error("empty row in outputs")]
     EmptyRowError,
 }
