@@ -15,6 +15,7 @@ specta-typescript = { workspace = true }
 
 [dependencies]
 hypr-audio = { workspace = true }
+hypr-audio-utils = { workspace = true }
 hypr-db-app = { workspace = true }
 hypr-language = { workspace = true }
 hypr-pyannote-local = { workspace = true }

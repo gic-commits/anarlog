@@ -1,15 +1,23 @@
 use std::collections::BTreeMap;
 
 use owhisper_interface::batch::{self, Response};
+use serde_json::json;
 
 const DEDUP_EPSILON_S: f64 = 0.05;
 const GAP_WARNING_THRESHOLD_MS: i64 = 2000;
+/// Grace for how far the stitched transcript may stop before the known audio
+/// end before being flagged as coverage-incomplete (ms).
+const TAIL_COVERAGE_GRACE_MS: u64 = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct StitcherConfig {
     pub overlap_ms: u64,
     pub segment_duration_ms: u64,
     pub total_segments: usize,
+    /// Known full duration of the source audio (ms). When set, `stitch` marks
+    /// the result as coverage-incomplete if the stitched words stop well
+    /// before the end (e.g. live PCM frames were dropped upstream).
+    pub audio_duration_ms: Option<u64>,
 }
 
 impl Default for StitcherConfig {
@@ -18,6 +26,7 @@ impl Default for StitcherConfig {
             overlap_ms: 1000,
             segment_duration_ms: 30000,
             total_segments: 0,
+            audio_duration_ms: None,
         }
     }
 }
@@ -239,6 +248,22 @@ impl Stitcher {
             metadata["gap_warnings"] = serde_json::json!(gap_warnings);
         }
 
+        // Coverage check: if the known audio duration is set and the stitched
+        // words stop well before the end, the recording was not fully
+        // transcribed (e.g. live PCM frames dropped upstream). Surface it so
+        // callers can attempt recovery for the missing tail.
+        if let Some(audio_dur_ms) = self.config.audio_duration_ms {
+            let coverage_end_ms = (total_duration * 1000.0) as i64;
+            let missing_tail_ms = audio_dur_ms as i64 - coverage_end_ms;
+            let incomplete = missing_tail_ms > TAIL_COVERAGE_GRACE_MS as i64;
+            metadata["coverage_end_ms"] = json!(coverage_end_ms);
+            metadata["audio_duration_ms"] = json!(audio_dur_ms);
+            metadata["missing_tail_ms"] = json!(missing_tail_ms);
+            if incomplete {
+                metadata["coverage_incomplete"] = json!(true);
+            }
+        }
+
         Ok(Response {
             metadata,
             results: batch::Results {
@@ -263,6 +288,7 @@ mod tests {
             overlap_ms,
             segment_duration_ms: 30000,
             total_segments: 0,
+            audio_duration_ms: None,
         }
     }
 
@@ -467,6 +493,7 @@ mod tests {
             overlap_ms: 1000,
             segment_duration_ms: 30000,
             total_segments: 0,
+            audio_duration_ms: None,
         });
         assert!(!stitcher.is_complete());
     }
@@ -477,6 +504,7 @@ mod tests {
             overlap_ms: 1000,
             segment_duration_ms: 30000,
             total_segments: 0,
+            audio_duration_ms: None,
         });
         stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "hi")]));
         stitcher.add_segment(seg(2, 58000, vec![make_word(0.0, 1.0, "later")]));
@@ -552,6 +580,7 @@ mod tests {
             overlap_ms: 1000,
             segment_duration_ms: 30000,
             total_segments: 5,
+            audio_duration_ms: None,
         });
         stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "a")]));
         stitcher.add_segment(seg(1, 29000, vec![make_word(0.0, 1.0, "b")]));
@@ -568,6 +597,7 @@ mod tests {
             overlap_ms: 1000,
             segment_duration_ms: 30000,
             total_segments: 2,
+            audio_duration_ms: None,
         });
         stitcher.add_segment(seg(1, 29000, vec![make_word(0.0, 1.0, "b")]));
         // With total_segments=2, stitch should know segments 0 and 1
@@ -587,23 +617,12 @@ mod tests {
         stitcher.add_segment(seg(
             0,
             0,
-            vec![
-                make_word(0.0, 1.0, "hello"),
-                make_word(28.0, 29.0, "world"),
-            ],
+            vec![make_word(0.0, 1.0, "hello"), make_word(28.0, 29.0, "world")],
         ));
         // Segment 1 has only 1 word — coalesced into segment 0
         // Segment 2 also has 1 word — also coalesced (cascade)
-        stitcher.add_segment(seg(
-            1,
-            29000,
-            vec![make_word(0.0, 0.5, "orphan")],
-        ));
-        stitcher.add_segment(seg(
-            2,
-            58000,
-            vec![make_word(0.0, 1.0, "today")],
-        ));
+        stitcher.add_segment(seg(1, 29000, vec![make_word(0.0, 0.5, "orphan")]));
+        stitcher.add_segment(seg(2, 58000, vec![make_word(0.0, 1.0, "today")]));
         let result = stitcher.stitch().unwrap();
         let boundaries = result.metadata["segment_boundaries"]
             .as_array()
@@ -623,11 +642,7 @@ mod tests {
     #[test]
     fn test_coalesce_orphan_between_large_segments() {
         let mut stitcher = Stitcher::new(config(1000));
-        stitcher.add_segment(seg(
-            0,
-            0,
-            vec![make_word(0.0, 1.0, "alpha")],
-        ));
+        stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "alpha")]));
         // Segment 1 has 2 words — coalesced into segment 0
         stitcher.add_segment(seg(
             1,
@@ -659,7 +674,10 @@ mod tests {
         // After coalescing: seg0(alpha+orphans), seg2(beta..zeta) → 2 boundaries
         assert_eq!(boundaries.len(), 2, "1 orphan coalesced, large seg kept");
         assert_eq!(boundaries[0], 0);
-        assert_eq!(boundaries[1], 3, "seg2 starts at word 3 (after coalesced orphans)");
+        assert_eq!(
+            boundaries[1], 3,
+            "seg2 starts at word 3 (after coalesced orphans)"
+        );
         let words = &result.results.channels[0].alternatives[0].words;
         assert_eq!(words.len(), 8);
     }
@@ -667,11 +685,7 @@ mod tests {
     #[test]
     fn test_large_segment_not_coalesced() {
         let mut stitcher = Stitcher::new(config(1000));
-        stitcher.add_segment(seg(
-            0,
-            0,
-            vec![make_word(0.0, 1.0, "alpha")],
-        ));
+        stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "alpha")]));
         // Segment 1 has 3 words — NOT coalesced (threshold ≤2)
         stitcher.add_segment(seg(
             1,
@@ -698,6 +712,7 @@ mod tests {
             overlap_ms: 1000,
             segment_duration_ms: 30000,
             total_segments: 5,
+            audio_duration_ms: None,
         });
         stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "hi")]));
         stitcher.add_segment(seg(2, 58000, vec![make_word(0.0, 1.0, "later")]));
@@ -708,5 +723,35 @@ mod tests {
         assert!(abandoned.contains(&serde_json::json!(1)));
         assert!(abandoned.contains(&serde_json::json!(3)));
         assert!(abandoned.contains(&serde_json::json!(4)));
+    }
+
+    #[test]
+    fn marks_coverage_incomplete_when_words_stop_before_audio_end() {
+        // Audio is 120s but the last stitched word ends at ~1s → flagged.
+        let cfg = StitcherConfig {
+            overlap_ms: 1000,
+            segment_duration_ms: 30000,
+            total_segments: 1,
+            audio_duration_ms: Some(120_000),
+        };
+        let mut stitcher = Stitcher::new(cfg);
+        stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "hi")]));
+        let result = stitcher.stitch().unwrap();
+        assert_eq!(result.metadata["coverage_incomplete"], json!(true));
+        assert_eq!(result.metadata["missing_tail_ms"], json!(119_000));
+    }
+
+    #[test]
+    fn does_not_flag_coverage_when_audio_duration_unknown() {
+        let cfg = StitcherConfig {
+            overlap_ms: 1000,
+            segment_duration_ms: 30000,
+            total_segments: 1,
+            audio_duration_ms: None,
+        };
+        let mut stitcher = Stitcher::new(cfg);
+        stitcher.add_segment(seg(0, 0, vec![make_word(0.0, 1.0, "hi")]));
+        let result = stitcher.stitch().unwrap();
+        assert!(result.metadata.get("coverage_incomplete").is_none());
     }
 }

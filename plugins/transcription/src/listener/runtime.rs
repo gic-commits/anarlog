@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use hypr_storage::StorageRuntime;
 use hypr_transcription_core::listener::ListenerRuntime;
 use hypr_transcription_core::listener2 as core;
 use hypr_transcription_core::listener2::BatchProvider;
@@ -9,6 +10,7 @@ use tauri_plugin_settings::SettingsPluginExt;
 use tauri_specta::Event;
 
 use crate::{CaptureDataEvent, CaptureLifecycleEvent, CaptureStatusEvent, SessionStateCache};
+use hypr_audio_utils::Source as _;
 use hypr_transcription_core::listener::State as RootState;
 use hypr_transcription_core::listener::actors::{RootActor, RootMsg};
 
@@ -39,6 +41,7 @@ fn build_progressive_batch_config(
         session_dir: std::env::temp_dir().join(format!("progressive-{}", params.session_id)),
         vad_groups: true,
         collect_vad_segments: params.diarization_enabled,
+        audio_duration_ms: None,
     }
 }
 
@@ -167,6 +170,10 @@ impl ListenerRuntime for TauriRuntime {
         pcm_rx: tokio::sync::mpsc::Receiver<Arc<[f32]>>,
     ) {
         let app = self.app.clone();
+        let sessions_base = self
+            .vault_base()
+            .map(|base| base.join("sessions"))
+            .unwrap_or_else(|_| std::env::temp_dir());
 
         tauri::async_runtime::spawn(async move {
             let config = build_progressive_batch_config(&params);
@@ -224,6 +231,27 @@ impl ListenerRuntime for TauriRuntime {
                         if let Err(e) = eng.feed_segments(&vad_segments) {
                             tracing::warn!(error = %e, "diarization feed_segments error");
                         }
+                    }
+                }
+            }
+
+            // PCM stream ended (recording stopped). The final audio file is
+            // now on disk — apply its real duration so the stitcher can flag
+            // a coverage-incomplete transcript if live frames were dropped.
+            let session_dir = sessions_base.join(&params.session_id);
+            let audio_path = ["audio.mp3", "audio.wav", "audio.ogg"]
+                .into_iter()
+                .map(|f| session_dir.join(f))
+                .find(|p| p.exists());
+            if let Some(audio) = audio_path {
+                if let Ok(source) = hypr_audio_utils::source_from_path(&audio) {
+                    if let Some(dur) = source.total_duration() {
+                        manager.set_audio_duration(Some((dur.as_secs_f64() * 1000.0) as u64));
+                        tracing::info!(
+                            session_id = %params.session_id,
+                            audio_duration_ms = dur.as_secs_f64() * 1000.0,
+                            "progressive_batch set audio duration from final file"
+                        );
                     }
                 }
             }

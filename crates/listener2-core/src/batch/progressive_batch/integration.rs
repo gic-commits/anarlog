@@ -217,6 +217,7 @@ pub async fn run_progressive_batch_from_file(
         overlap_ms: 0,
         segment_duration_ms: segment_duration_ms as u64,
         total_segments: total,
+        audio_duration_ms: Some((duration_secs * 1000.0) as u64),
     };
     let mut stitcher = Stitcher::new(stitcher_config);
 
@@ -614,6 +615,9 @@ pub async fn continue_from_file(
     let _ = std::fs::create_dir_all(&session_dir);
 
     let language = params.languages.first().map(|l| l.to_string());
+    let audio_duration_ms = source
+        .total_duration()
+        .map(|d| (d.as_secs_f64() * 1000.0) as u64);
 
     let config = ProgressiveBatchConfig {
         session_id: session_id.clone(),
@@ -629,6 +633,7 @@ pub async fn continue_from_file(
         session_dir,
         vad_groups: true,
         collect_vad_segments: false,
+        audio_duration_ms,
     };
 
     let mut manager =

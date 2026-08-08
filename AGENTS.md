@@ -873,6 +873,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | 13 | **服务端长段 whisper 偶发不稳定**（~33-40s 段 500/截断）| 🔴 已报服务端（Aug 2 PM）| 与 c5ee333b group5/6（33s 段稳定 500）同类问题复发：c563d8c6 group0（37.2s）live 提交时偶发 500/只转前 28s，但同段样本重新 POST 稳定 200 且完整。服务端称已修复过（without_timestamps/clip 边界/clip 重叠），但长段偶发不稳定仍存在。已发简报 |
 | 14 | **外部扬声器人声录音质量差**（AEC 无参考信号）| 📝 已知限制，搁置（Aug 2 PM）| 场景：手机/语音电话独立外放（不经过 Mac 音频系统），人声经空气进入麦克风 → CATap far-end 无参考 → 自研 ONNX AEC 遇训练分布外输入可能误伤真人声 → 录音偏差。真人讲话（无外放）质量正常，证明非链路 bug。**任何 AEC（苹果硬件/我们软件）都依赖 far-end 参考，外部扬声器是固有限制**。**候选修复**：far-end 能量低时跳过 AEC（最简单）。**待用户在公司找真实语音电话实测后再定是否解决** |
 | 15 | **Groq STT 手工验证**（Sprint 4 收尾）| ✅ 已闭环（Aug 4）| 完整 app re-transcribe 两个真实音频：① 客户端分段提交 ✅（8/8 + 4/4 全部 200，无 abandoned；WAV 容器修复 `156e113d7` 生效）② 本地 diarization ✅（c5ee333b=1 speaker、2495e7a5=3 speakers [1,11,9]，315/315 词有 speaker 标签）③ 429 兜底 ✅（自动测试覆盖）。**live 录音模式走 Groq 也已验证**（Aug 4：单人 153s 录音，VAD 7 组全成功、458 words、1 speaker）。期间修复 live 路径 provider 硬编码（`a8bd99c02`）|
+| 16 | **live progressive 录音丢帧根因** | 🔴 待查（Aug 8）| 80 分钟录音实测：真实 transcript 仅 84 段、覆盖 62min；用同一 audio.mp3 **模拟完整 live 输入**（`test_live_feed_vad_group_coverage`，listener2-core）产出 **213 组、完整覆盖 84min** → VAD/分组逻辑正常，**根因在 source pipeline（`listener-core/src/actors/source/pipeline.rs`）真实运行时丢 PCM 帧**（`try_send` 失败丢帧）。后果：转录覆盖不全 + 时间轴与真实音频累积错位（用户实测 44:52 后定位不准）。已做保底措施（global_start_ms 拼合 + 完整性检查），但丢帧根因本身待查 |
 
 ### Sprint 3 Phase D（录音流 diarization）— ✅ live 对齐 + 自适应修复完成，仅剩真机验证
 

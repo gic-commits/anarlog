@@ -70,6 +70,9 @@ pub struct ProgressiveBatchConfig {
     /// Retain VAD segments from the stream so consumers (e.g. live
     /// diarization) can drain them via `take_vad_segments`.
     pub collect_vad_segments: bool,
+    /// Known full duration of the source audio (ms), when available. Used by
+    /// the stitcher to flag coverage-incomplete transcripts (dropped frames).
+    pub audio_duration_ms: Option<u64>,
 }
 
 impl Default for ProgressiveBatchConfig {
@@ -88,6 +91,7 @@ impl Default for ProgressiveBatchConfig {
             session_dir: PathBuf::new(),
             vad_groups: false,
             collect_vad_segments: false,
+            audio_duration_ms: None,
         }
     }
 }
@@ -167,6 +171,7 @@ impl ProgressiveBatchManager {
             overlap_ms: config.overlap_ms as u64,
             segment_duration_ms: config.segment_duration_ms as u64,
             total_segments: 0,
+            audio_duration_ms: config.audio_duration_ms,
         });
         for seg in &completed {
             stitcher.add_segment(CompletedSegment {
@@ -204,6 +209,14 @@ impl ProgressiveBatchManager {
     pub fn with_runtime(mut self, runtime: Arc<dyn BatchRuntime>) -> Self {
         self.runtime = Some(runtime);
         self
+    }
+
+    /// Set the known full duration of the source audio (ms). The live path
+    /// knows the final audio length only after recording stops (the mp3 is
+    /// written then), so it is applied right before `finish` so the stitcher
+    /// can flag coverage-incomplete transcripts.
+    pub fn set_audio_duration(&mut self, duration_ms: Option<u64>) {
+        self.config.audio_duration_ms = duration_ms;
     }
 
     #[cfg(test)]
@@ -387,6 +400,7 @@ impl ProgressiveBatchManager {
                 overlap_ms: self.config.overlap_ms as u64,
                 segment_duration_ms: self.config.segment_duration_ms as u64,
                 total_segments: 0,
+                audio_duration_ms: self.config.audio_duration_ms,
             });
 
             for seg in &segments {
@@ -440,6 +454,7 @@ impl ProgressiveBatchManager {
                     overlap_ms: self.config.overlap_ms as u64,
                     segment_duration_ms: self.config.segment_duration_ms as u64,
                     total_segments: all_segments.len(),
+                    audio_duration_ms: self.config.audio_duration_ms,
                 };
                 let mut queue = BatchQueue::with_submit_fn(qc, self.submit_fn.clone());
                 let stitcher = Stitcher::new(sc);
@@ -607,6 +622,7 @@ impl ProgressiveBatchManager {
 mod tests {
     use super::*;
     use futures_util::FutureExt;
+    use hypr_audio_utils::Source as _;
     use std::sync::Mutex;
 
     fn mock_write_wav() -> WriteWavFn {
@@ -1323,5 +1339,155 @@ mod tests {
         for w in words {
             assert_eq!(w.word, "test");
         }
+    }
+
+    /// Replays a real recording through the live `on_audio_frame` path and
+    /// checks that the VAD-grouped segments cover the whole audio without
+    /// large coverage gaps. Segments are captured by a mock submit fn; no
+    /// network call is made. Set ANARLOG_TEST_AUDIO to the mp3 path to run.
+    #[tokio::test]
+    async fn test_live_feed_vad_group_coverage() {
+        let Some(path) = std::env::var("ANARLOG_TEST_AUDIO").ok() else {
+            eprintln!("skipping: ANARLOG_TEST_AUDIO not set");
+            return;
+        };
+        let source = hypr_audio_utils::source_from_path(std::path::Path::new(&path)).unwrap();
+        let src_rate: u32 = source.sample_rate().into();
+        let channels: usize = source.channels().get().into();
+        let raw: Vec<f32> = source.collect();
+        let mono: Vec<f32> = if channels > 1 {
+            raw.chunks_exact(channels)
+                .map(|c| c.iter().sum::<f32>() / channels as f32)
+                .collect()
+        } else {
+            raw
+        };
+        // Resample to 16kHz.
+        let ratio = src_rate as f64 / 16000.0;
+        let out_len = (mono.len() as f64 / ratio).round() as usize;
+        let mut pcm = Vec::with_capacity(out_len);
+        for i in 0..out_len {
+            let src = (i as f64 * ratio).round() as usize;
+            pcm.push(mono[src.min(mono.len().saturating_sub(1))]);
+        }
+        let audio_secs = pcm.len() as f64 / 16000.0;
+        eprintln!(
+            "[coverage] decoded {:.1}s audio ({} samples @16k)",
+            audio_secs,
+            pcm.len()
+        );
+
+        let submitted: std::sync::Arc<std::sync::Mutex<Vec<(usize, i64, f64)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let submitted2 = submitted.clone();
+        let submit = Arc::new(move |seg: QueuedSegment, _: QueueConfig| {
+            let submitted = submitted2.clone();
+            async move {
+                let dur_s = seg.samples.len() as f64 / seg.sample_rate as f64;
+                eprintln!(
+                    "[coverage] submit seg[{}] global_start_ms={} dur={dur_s:.1}s samples={}",
+                    seg.index,
+                    seg.global_start_ms,
+                    seg.samples.len()
+                );
+                submitted
+                    .lock()
+                    .unwrap()
+                    .push((seg.index, seg.global_start_ms, dur_s));
+                SegmentResult::Completed {
+                    index: seg.index,
+                    global_start_ms: seg.global_start_ms,
+                    response: batch::Response {
+                        metadata: serde_json::json!({}),
+                        results: batch::Results {
+                            channels: vec![batch::Channel {
+                                alternatives: vec![batch::Alternatives {
+                                    transcript: "t".to_string(),
+                                    confidence: 0.95,
+                                    words: vec![batch::Word {
+                                        word: "t".to_string(),
+                                        start: 0.0,
+                                        end: 0.5,
+                                        confidence: 0.95,
+                                        channel: 0,
+                                        speaker: None,
+                                        punctuated_word: None,
+                                    }],
+                                }],
+                            }],
+                        },
+                    },
+                }
+            }
+            .boxed()
+        });
+
+        let cfg = ProgressiveBatchConfig {
+            session_id: "coverage".to_string(),
+            sample_rate: 16000,
+            segment_duration_ms: 30000,
+            overlap_ms: 0,
+            max_concurrency: 2,
+            base_url: "http://localhost:8080/v1".to_string(),
+            api_key: "test".to_string(),
+            model: None,
+            language: None,
+            session_dir: PathBuf::from("/tmp/progressive-coverage"),
+            provider: BatchProvider::OpenAI,
+            vad_groups: true,
+            collect_vad_segments: false,
+            audio_duration_ms: Some((audio_secs * 1000.0) as u64),
+        };
+        let mut manager = ProgressiveBatchManager::with_fns(cfg, mock_write_wav(), submit);
+
+        // Feed in 100ms chunks like the live source pipeline.
+        let chunk = 1600;
+        for c in pcm.chunks(chunk) {
+            manager.on_audio_frame(c);
+        }
+        let result = manager.finish().await;
+        assert!(result.is_ok(), "finish failed: {:?}", result.err());
+
+        let mut segs = submitted.lock().unwrap().clone();
+        eprintln!("[coverage] {} VAD groups submitted", segs.len());
+        segs.sort_by_key(|s| s.1);
+        let mut prev_end_ms = 0i64;
+        let mut largest_gap = 0i64;
+        let mut largest_gap_at = 0f64;
+        for (idx, start_ms, dur_s) in &segs {
+            let end_ms = start_ms + (dur_s * 1000.0) as i64;
+            let gap = start_ms - prev_end_ms;
+            if gap > largest_gap {
+                largest_gap = gap;
+                largest_gap_at = *start_ms as f64 / 1000.0;
+            }
+            eprintln!(
+                "[coverage]   seg[{idx}] global={}..{} dur={dur_s:.1}s gap_before={}ms",
+                start_ms, end_ms, gap
+            );
+            prev_end_ms = end_ms;
+        }
+        eprintln!(
+            "[coverage] audio={audio_secs:.1}s, groups={}, largest_gap={largest_gap}ms at {largest_gap_at:.1}s",
+            segs.len()
+        );
+        // The VAD-grouped segments must cover essentially the whole recording:
+        // the last group should land near the end of the audio, and there
+        // should be a healthy number of groups (this is what real live
+        // recordings were missing — far fewer groups + coverage stopping
+        // early because source pipeline frames were dropped).
+        let last_end = segs
+            .last()
+            .map(|(_, s, d)| s + (d * 1000.0) as i64)
+            .unwrap_or(0);
+        assert!(
+            (audio_secs * 1000.0 - last_end as f64).abs() < 60_000.0,
+            "VAD groups must cover audio end: last_end={last_end}ms audio={audio_secs:.1}s"
+        );
+        assert!(
+            segs.len() >= 50,
+            "expected many VAD groups for a long recording, got {}",
+            segs.len()
+        );
     }
 }
