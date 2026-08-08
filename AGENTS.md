@@ -874,6 +874,16 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 
 **当前 diarization 耗时（84min 音频）**：解码+VAD ~2min + embedding ~3.2min + HDBSCAN ~1min ≈ **~5.5min**。
 
+**模型对比实测 + 默认切换（Aug 8，`59e5972e8`）**：
+| 模型 | 维 | threads=2/chunk | diarization(84min) | speakers |
+|------|:---:|:---:|:---:|:---:|
+| wespeaker-zh-LM（旧默认）| 256 | 104ms | 334s | 9 |
+| **campplus-200k（新默认）**| 192 | **52ms** | **157.5s** | 8 ✅ |
+- campplus 输入 `feats[B,T,80]→embs[B,192]`，与 FbankEmbedding 兼容（NAME_SETS 覆盖）
+- **默认模型切换**：schema.ts / select.tsx 默认值 → `campplus_cn_en_common_200k.onnx`（UI 标 default/fast，wespeaker-zh-LM 保留为 accurate）
+- 当前 diarization 总耗时降至 **~4.5min**（解码+VAD ~2min + embedding ~1.5min + HDBSCAN ~1min）
+- 批量推理验证不可行：CPU 上 wespeaker/campplus batch 无收益（0.3-0.8×）
+
 **剩余优化空间（远期）**：并行 embedding（多线程 + 多 session，当前 session 是 `&mut` 单线程安全）；或探索 CPU 上更高效的 embedding 模型/ONNX 配置。
 
 
