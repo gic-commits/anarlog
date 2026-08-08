@@ -85,16 +85,21 @@ pub fn render_speaker_label(
 ) -> String {
     if let Some(ctx) = ctx {
         if let Some(human_id) = key.speaker_human_id.as_ref() {
-            if let Some(name) = ctx.human_name_by_id.get(human_id) {
+            // Only return a human name if it's non-empty — otherwise fall
+            // through to "You" / "Speaker N" instead of leaking the UUID.
+            if let Some(name) = ctx.human_name_by_id.get(human_id)
+                && !name.is_empty()
+            {
                 return name.clone();
             }
-            return human_id.clone();
         }
 
         if key.channel == ChannelProfile::DirectMic
             && let Some(self_human_id) = ctx.self_human_id.as_ref()
         {
-            if let Some(name) = ctx.human_name_by_id.get(self_human_id) {
+            if let Some(name) = ctx.human_name_by_id.get(self_human_id)
+                && !name.is_empty()
+            {
                 return name.clone();
             }
             return "You".to_string();
@@ -143,6 +148,36 @@ mod tests {
             render_speaker_label(&direct_mic_key(), Some(&ctx), None),
             "You"
         );
+    }
+
+    #[test]
+    fn does_not_leak_human_id_when_name_missing() {
+        // Segment was assigned to self (DirectMic) but no display name exists:
+        // must render "You", never the raw UUID.
+        let ctx = SpeakerLabelContext {
+            self_human_id: Some("self".to_string()),
+            human_name_by_id: HashMap::new(),
+        };
+        let key = SegmentKey {
+            channel: ChannelProfile::DirectMic,
+            speaker_index: None,
+            speaker_human_id: Some("self".to_string()),
+        };
+        assert_eq!(render_speaker_label(&key, Some(&ctx), None), "You");
+    }
+
+    #[test]
+    fn does_not_leak_human_id_when_name_is_empty_string() {
+        let ctx = SpeakerLabelContext {
+            self_human_id: Some("self".to_string()),
+            human_name_by_id: [("self".to_string(), "".to_string())].into_iter().collect(),
+        };
+        let key = SegmentKey {
+            channel: ChannelProfile::DirectMic,
+            speaker_index: None,
+            speaker_human_id: Some("self".to_string()),
+        };
+        assert_eq!(render_speaker_label(&key, Some(&ctx), None), "You");
     }
 
     #[test]
