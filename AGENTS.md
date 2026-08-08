@@ -870,7 +870,7 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 | 10 | **live PCM 静默丢帧**（`pipeline.rs` `try_send`）| ✅ 已修复（Aug 2 PM），待真机验证 | 根因：PCM channel（256）满时 `try_send` 失败**静默丢弃**。实测 VAD 平均 1.28ms（预算 120ms），丢帧是**偶发尖峰**（max 117ms）非持续瓶颈。修复：channel 256→**1024**（≈2min 缓冲）+ try_send 失败**计数 + 每 50 帧汇总日志**。若 1024 仍丢（日志见 `dropped_frames`），升级为"PCM 落盘 + 增量读"架构 |
 | 11 | **混音削波**（`audio-utils/lib.rs` `mix_sample_f32`）| ✅ 已修复（Aug 2 PM），待真机验证 | 根因：MicAndSpeaker 模式 `(mic+spk).clamp(-1,1)` 双通道同时有声时削波。**溯源：`cb8913b7b`（Aug 1）才把 progressive 从"只发 mic"改成"混音 mic+spk"**，削波随之引入（此前只发 AEC mic，无混音）。修复：`(mic+spk)*0.5` 衰减相加 |
 | 12 | **live 停止后无完成提醒**（前端通知问题）| ⚠️ 待查（Aug 2 PM）| 真机测试：点停止后，后端 `waitForLiveBatchResult completed` 正常完成，但 UI 无"处理完成"提示。后端事件已发，前端通知逻辑可能缺失或未订阅。需查前端 stop 后完成事件 → 通知的链路 |
-| 13 | **服务端长段 whisper 偶发不稳定**（~33-40s 段 500/截断）| 🔴 已报服务端（Aug 2 PM）| 与 c5ee333b group5/6（33s 段稳定 500）同类问题复发：c563d8c6 group0（37.2s）live 提交时偶发 500/只转前 28s，但同段样本重新 POST 稳定 200 且完整。服务端称已修复过（without_timestamps/clip 边界/clip 重叠），但长段偶发不稳定仍存在。已发简报 |
+| 13 | **服务端长段 whisper 偶发不稳定**（~33-40s 段 500/截断）| 🔴 已报服务端（Aug 2 PM），Aug 8 新增证据 | 与 c5ee333b group5/6（33s 段稳定 500）同类问题复发：c563d8c6 group0（37.2s）live 提交时偶发 500/只转前 28s，但同段样本重新 POST 稳定 200 且完整。服务端称已修复过（without_timestamps/clip 边界/clip 重叠），但长段偶发不稳定仍存在。**Aug 8 新证据**：file re-transcribe 流式重构后（84min 音频 → 104 组，VAD 分组无 gap 验证正确），转录仍有 3 处 50-70s 内容缺失（47:29/52:10/79:00），VAD 探针确认这些区域有语音（13/19/14 段），但 **Groq whisper word 时间戳漂移**（word 时长异常达 5.5s，静音被吸进词时长）导致拼接后 gap。**确认是数据来源时间戳质量问题，非客户端分组/拼接 bug** |
 | 14 | **外部扬声器人声录音质量差**（AEC 无参考信号）| 📝 已知限制，搁置（Aug 2 PM）| 场景：手机/语音电话独立外放（不经过 Mac 音频系统），人声经空气进入麦克风 → CATap far-end 无参考 → 自研 ONNX AEC 遇训练分布外输入可能误伤真人声 → 录音偏差。真人讲话（无外放）质量正常，证明非链路 bug。**任何 AEC（苹果硬件/我们软件）都依赖 far-end 参考，外部扬声器是固有限制**。**候选修复**：far-end 能量低时跳过 AEC（最简单）。**待用户在公司找真实语音电话实测后再定是否解决** |
 | 15 | **Groq STT 手工验证**（Sprint 4 收尾）| ✅ 已闭环（Aug 4）| 完整 app re-transcribe 两个真实音频：① 客户端分段提交 ✅（8/8 + 4/4 全部 200，无 abandoned；WAV 容器修复 `156e113d7` 生效）② 本地 diarization ✅（c5ee333b=1 speaker、2495e7a5=3 speakers [1,11,9]，315/315 词有 speaker 标签）③ 429 兜底 ✅（自动测试覆盖）。**live 录音模式走 Groq 也已验证**（Aug 4：单人 153s 录音，VAD 7 组全成功、458 words、1 speaker）。期间修复 live 路径 provider 硬编码（`a8bd99c02`）|
 | 16 | **live progressive 录音丢帧根因** | ✅ 已修复（Aug 8，`d09623d7d`）| 80 分钟录音实测：真实 transcript 仅 84 段、覆盖 62min；模拟完整 live 输入产出 213 组、完整覆盖 84min → VAD/分组逻辑正常。**根因：diarization feed（ONNX embedding + 重聚类）在 `rx.recv()` 消费循环内同步执行**，秒级阻塞导致 1024 帧（~122s）PCM channel 满 → source `try_send` 丢帧 → VAD 漏检 → 覆盖不全 + 时间轴错位。**修复：diarization 解耦到独立后台 task**（unbounded channel + join），PCM 循环只跑便宜 VAD。配套保底：coverage_incomplete 检测（`68a7eb545`）+ B 自动补齐/Continue（`279236455` + `928987564`）|
@@ -888,11 +888,14 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 ### 近期待办（按优先级）
 
 1. **真机复验 live 录音**：1+2+4 修复（`1c0e6a752`）下丢段是否消失、声音是否正常、女声段是否还丢（#5/#10/#11）
-2. **服务端长段 whisper 不稳定**：等 speaches 反馈（#13）
+2. **服务端长段 whisper 不稳定**：等 speaches 反馈（#13，Aug 8 新增时间戳漂移证据）
 3. **#12 无完成提醒**：查前端 stop 后完成事件 → 通知链路
 4. 长录音内存峰值实测（#6）
 5. **外部扬声器人声**：等用户在公司找真实语音电话实测（#14）
 6. ~~**Groq + live 录音验证**~~ ✅ 已完成（Aug 4）：单人 153s 录音全成功（见 Sprint 4 手工验证）
+7. ~~**live 丢帧根因 + 保底**~~ ✅ 已完成（Aug 8）：丢帧根因=diarization 阻塞消费循环（`d09623d7d`），保底=coverage_incomplete 检测 + B 自动补齐 + Continue（`68a7eb545`/`279236455`/`928987564`）
+8. ~~**file re-transcribe 流式化**~~ ✅ 已完成（Aug 8，`9a8df481c`）：长音频逐段返回 + 不 idle timeout（原全量 VAD/diarization 前期 60s+ 无事件被 idle 杀）
+9. **前端定位功能待提交**：transcript 虚拟化（@tanstack/react-virtual）+ 音频进度条→文字定位（工作区未提交）
 
 ### 已有但未落库的 diarization 改动（Jul 30-31，已随 Aug 1 commit 提交）
 
