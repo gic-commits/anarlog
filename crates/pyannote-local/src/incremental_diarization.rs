@@ -144,6 +144,20 @@ impl IncrementalDiarizationEngine {
             MAX_CHUNK_SECS,
         );
 
+        // Periodic diagnostics: report chunking on the first segment and then
+        // roughly every 100 segments so we can see how many turn-chunks each
+        // VAD segment splits into (many → over-segmentation risk).
+        if self.segments.is_empty() || self.segments.len() % 100 == 0 {
+            eprintln!(
+                "[diarization] feed_one_segment: vad=[{:.1}s, {:.1}s] dur={:.1}s -> {} turn-chunks (total_voc={})",
+                seg.start,
+                seg.end,
+                seg.end - seg.start,
+                chunks.len(),
+                self.segments.len() + chunks.len(),
+            );
+        }
+
         for (start_s, end_s) in chunks {
             let lo = ((start_s - seg.start) * sample_rate) as usize;
             let hi = (((end_s - seg.start) * sample_rate) as usize).min(seg.samples.len());

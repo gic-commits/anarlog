@@ -63,6 +63,15 @@ pub async fn run_progressive_batch_from_file(
         .total_duration()
         .map(|d| (d.as_secs_f64() * 1000.0) as u64);
 
+    tracing::info!(
+        "[vad-batch] run_progressive_batch_from_file: session={} segment_duration_ms={} diarization_enabled={} diarization_model={:?} diarization_threshold={}",
+        session_id,
+        segment_duration_ms,
+        params.diarization_enabled,
+        params.diarization_model,
+        params.diarization_threshold,
+    );
+
     let session_dir = std::env::temp_dir().join(format!("progressive-batch-{session_id}"));
     let _ = std::fs::create_dir_all(&session_dir);
 
@@ -126,6 +135,10 @@ pub async fn run_progressive_batch_from_file(
             if let Some(eng) = engine.as_mut() {
                 let vad_segments = manager.take_vad_segments();
                 if !vad_segments.is_empty() {
+                    tracing::info!(
+                        "[vad-batch] diarization feed {} vad segments",
+                        vad_segments.len()
+                    );
                     if let Err(e) = eng.feed_segments(&vad_segments) {
                         tracing::warn!(error = %e, "[vad-batch] diarization feed error");
                     }
@@ -176,19 +189,47 @@ pub async fn run_progressive_batch_from_file(
     if let Some(ref mut eng) = diarization_engine {
         let tail = manager.take_vad_segments();
         if !tail.is_empty() {
+            tracing::info!(
+                "[vad-batch] diarization tail feed {} vad segments",
+                tail.len()
+            );
             if let Err(e) = eng.feed_segments(&tail) {
                 tracing::warn!(error = %e, "[vad-batch] diarization tail feed error");
             }
         }
+        let t0 = std::time::Instant::now();
         eng.finalize();
+        let speaker_segs = eng.speaker_segments();
+        let unique: std::collections::HashSet<usize> =
+            speaker_segs.iter().map(|s| s.speaker).collect();
+        tracing::info!(
+            "[vad-batch] diarization finalize: {} speaker segments, {} unique speakers, took {:.1}s",
+            speaker_segs.len(),
+            unique.len(),
+            t0.elapsed().as_secs_f64()
+        );
+        let mut labeled = 0usize;
         for channel in &mut response.results.channels {
             for alt in &mut channel.alternatives {
                 for word in &mut alt.words {
                     let mid = (word.start + word.end) / 2.0;
                     word.speaker = eng.speaker_at_time(mid);
+                    labeled += 1;
                 }
             }
         }
+        let labeled_unique: std::collections::HashSet<Option<usize>> = response
+            .results
+            .channels
+            .iter()
+            .flat_map(|c| &c.alternatives)
+            .flat_map(|a| &a.words)
+            .map(|w| w.speaker)
+            .collect();
+        tracing::info!(
+            "[vad-batch] diarization labeled {labeled} words, unique speaker values: {:?}",
+            labeled_unique.iter().flatten().collect::<Vec<_>>()
+        );
         propagate_speaker_to_none(&mut response);
     }
 
