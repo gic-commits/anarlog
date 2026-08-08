@@ -1075,13 +1075,17 @@ function DiarizationSection() {
   const setSettings = useSetSettingValues();
 
   const enabled = diarization_enabled ?? false;
-  const model = diarization_model ?? "wespeaker_zh_cnceleb_resnet34_LM.onnx";
+  const model = diarization_model ?? "campplus_cn_en_common_200k.onnx";
   const threshold = diarization_threshold ?? 0.5;
 
   const MODELS: { value: string; label: string }[] = [
     {
+      value: "campplus_cn_en_common_200k.onnx",
+      label: "Cam++ 200k (default, fast)",
+    },
+    {
       value: "wespeaker_zh_cnceleb_resnet34_LM.onnx",
-      label: "CN-Celeb LM (default)",
+      label: "CN-Celeb LM (accurate)",
     },
     {
       value: "wespeaker_zh_cnceleb_resnet34.onnx",
@@ -1090,10 +1094,6 @@ function DiarizationSection() {
     {
       value: "wespeaker-voxceleb-resnet34-LM.onnx",
       label: "VoxCeleb",
-    },
-    {
-      value: "campplus_cn_en_common_200k.onnx",
-      label: "Cam++ 200k (fast)",
     },
   ];
 

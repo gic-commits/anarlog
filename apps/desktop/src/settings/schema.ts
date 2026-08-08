@@ -182,7 +182,7 @@ export const SETTING_DEFINITIONS = {
   diarization_model: {
     type: "string",
     path: ["ai", "diarization_model"],
-    default: "wespeaker_zh_cnceleb_resnet34_LM.onnx" as string,
+    default: "campplus_cn_en_common_200k.onnx" as string,
   },
   diarization_threshold: {
     type: "number",
