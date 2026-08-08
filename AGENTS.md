@@ -858,6 +858,24 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 ### 第二步（待定）
 若需进一步：UMAP 降维（`fast-umap`）+ PAHC 合并 + 1.5s 滑窗 embedding（完整 WeSpeaker B 方案）。当前 HDBSCAN 已解决长音频过度聚类，第二步仅在需要时做。
 
+### embedding 提取优化（Aug 8，`73e0bb9a1`）
+**ONNX intra_threads=2**（CPU 上 wespeaker 模型最优，~1.5× 加速）：
+- `hypr_onnx` 新增 `load_model_from_bytes_with_threads`（默认 1/1 不变，VAD/AEC/denoise 不受影响）
+- `FbankEmbedding` 用 `intra_threads=2`，`inter_threads=1`
+- **实测（84min 音频）**：diarization 480s → **334s（-30%）**，speakers 9 不变
+
+**实测的 embedding 优化探索（已验证不可行/次优）**：
+| 方案 | 结果 |
+|------|------|
+| 批量推理（batch 16/32/96）| ❌ 反而慢（0.3-0.8×）——CPU 上 wespeaker batch 无收益（模型内部已优化 / 内存带宽受限）|
+| intra_threads=4 | 次优（122ms/chunk vs 2线程 101ms）|
+| intra_threads=8 | 严重回归（395ms/chunk，同步开销）|
+| **intra_threads=2** | ✅ 最优（101ms/chunk）|
+
+**当前 diarization 耗时（84min 音频）**：解码+VAD ~2min + embedding ~3.2min + HDBSCAN ~1min ≈ **~5.5min**。
+
+**剩余优化空间（远期）**：并行 embedding（多线程 + 多 session，当前 session 是 `&mut` 单线程安全）；或探索 CPU 上更高效的 embedding 模型/ONNX 配置。
+
 
 
 ### Sprint 4：Groq STT 适配（✅ 已实现 + 手工验证通过）
