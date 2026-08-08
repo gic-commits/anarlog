@@ -11,7 +11,7 @@ use crate::{
     TranscriptionEvent, TranscriptionParams,
 };
 
-const BATCH_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const BATCH_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub struct Listener2<'a, R: tauri::Runtime, M: tauri::Manager<R>> {
     manager: &'a M,

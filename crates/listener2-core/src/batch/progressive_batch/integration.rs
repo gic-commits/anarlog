@@ -13,6 +13,20 @@ use crate::{BatchEvent, BatchRuntime};
 
 use super::*;
 
+/// Emit a lightweight progress heartbeat so the batch idle-timeout monitor
+/// (which kills a session with no events for 60s+) does not abort long
+/// recordings during the (event-free) decode/VAD/diarization preparation.
+fn emit_progress(runtime: &dyn BatchRuntime, session_id: &str, percentage: f64) {
+    use owhisper_interface::batch_stream::BatchStreamEvent;
+    runtime.emit(BatchEvent::BatchResponseStreamed {
+        session_id: session_id.to_string(),
+        event: BatchStreamEvent::Progress {
+            percentage,
+            partial_text: None,
+        },
+    });
+}
+
 fn mime_type_for_extension(path: &std::path::Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
         Some("mp3") => "audio/mpeg",
@@ -97,6 +111,7 @@ pub async fn run_progressive_batch_from_file(
         .collect();
 
     // ── VAD (always needed) ──────────────────────────────────────────────
+    emit_progress(&*runtime, &session_id, 0.0);
     let raw_vad_segments: Vec<hypr_pyannote_local::segmentation::Segment> = {
         let mut segmenter = Segmenter::new(TARGET_SAMPLE_RATE).map_err(|e| {
             crate::BatchFailure::ProgressiveBatchFailed {
@@ -111,6 +126,7 @@ pub async fn run_progressive_batch_from_file(
     };
 
     let vad_count = raw_vad_segments.len();
+    emit_progress(&*runtime, &session_id, 0.05);
 
     // ── Diarization (optional) ───────────────────────────────────────────
     // Uses the same VAD segments as grouping, not the engine's internal VAD.
@@ -147,6 +163,7 @@ pub async fn run_progressive_batch_from_file(
     } else {
         None
     };
+    emit_progress(&*runtime, &session_id, 0.1);
 
     // ── Grouping ────────────────────────────────────────────────────────
     // groups: (start_sec, end_sec, speaker)
