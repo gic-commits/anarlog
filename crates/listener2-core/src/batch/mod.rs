@@ -148,6 +148,34 @@ pub struct BatchParams {
     pub diarization_threshold: f32,
 }
 
+impl Default for BatchParams {
+    fn default() -> Self {
+        Self {
+            session_id: String::new(),
+            provider: BatchProvider::OpenAI,
+            file_path: String::new(),
+            model: None,
+            base_url: String::new(),
+            api_key: String::new(),
+            languages: Vec::new(),
+            keywords: Vec::new(),
+            num_speakers: None,
+            min_speakers: None,
+            max_speakers: None,
+            progressive_batch: false,
+            segment_duration_ms: None,
+            overlap_ms: None,
+            max_concurrency: None,
+            cjk_enabled: default_cjk_enabled(),
+            cjk_features: None,
+            cjk_server_side: false,
+            diarization_enabled: false,
+            diarization_model: None,
+            diarization_threshold: default_diarization_threshold(),
+        }
+    }
+}
+
 fn default_diarization_threshold() -> f32 {
     0.5
 }

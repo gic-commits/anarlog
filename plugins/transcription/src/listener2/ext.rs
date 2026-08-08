@@ -315,7 +315,7 @@ impl core::BatchRuntime for TauriBatchRuntime {
     }
 }
 
-async fn persist_batch_event(
+pub(crate) async fn persist_batch_event(
     app: tauri::AppHandle,
     event: core::BatchEvent,
     params: core::BatchParams,
@@ -427,8 +427,13 @@ async fn persist_batch_event(
                 .get("abandoned_segments")
                 .and_then(|v| v.as_array())
                 .is_some_and(|arr| !arr.is_empty());
+            let coverage_incomplete = response
+                .metadata
+                .get("coverage_incomplete")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
-            let status = if has_abandoned {
+            let status = if has_abandoned || coverage_incomplete {
                 "partial"
             } else {
                 "completed"

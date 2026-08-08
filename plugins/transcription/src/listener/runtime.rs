@@ -178,7 +178,31 @@ impl ListenerRuntime for TauriRuntime {
         tauri::async_runtime::spawn(async move {
             let config = build_progressive_batch_config(&params);
 
-            let runtime = Arc::new(LiveBatchRuntime { app: app.clone() });
+            // Live path persists job/segment rows so coverage-incomplete
+            // recordings can be continued. `persist_batch_event` needs a
+            // BatchParams; construct a minimal one from the live params.
+            let persist_params = core::BatchParams {
+                session_id: params.session_id.clone(),
+                provider: config.provider,
+                file_path: String::new(),
+                model: config.model.clone(),
+                base_url: config.base_url.clone(),
+                api_key: config.api_key.clone(),
+                languages: params
+                    .language
+                    .as_deref()
+                    .and_then(|l| l.parse().ok())
+                    .into_iter()
+                    .collect(),
+                segment_duration_ms: Some(config.segment_duration_ms),
+                overlap_ms: Some(config.overlap_ms),
+                max_concurrency: Some(config.max_concurrency as u32),
+                ..Default::default()
+            };
+            let runtime = Arc::new(LiveBatchRuntime {
+                app: app.clone(),
+                persist: Some(persist_params),
+            });
             let segments_dir = config.session_dir.join("progressive-batch");
             let mut manager =
                 core::ProgressiveBatchManager::new(config).with_runtime(runtime.clone());
@@ -318,10 +342,19 @@ impl ListenerRuntime for TauriRuntime {
 
 struct LiveBatchRuntime {
     app: tauri::AppHandle,
+    persist: Option<core::BatchParams>,
 }
 
 impl core::BatchRuntime for LiveBatchRuntime {
     fn emit(&self, event: core::BatchEvent) {
+        // Persist job/segment rows so a coverage-incomplete live recording can
+        // be continued later (frontend shows "Continue" for partial jobs).
+        if let (Some(params), Some(app)) = (self.persist.clone(), Some(self.app.clone())) {
+            let persist_event = event.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::listener2::ext::persist_batch_event(app, persist_event, params).await;
+            });
+        }
         if let Err(e) = crate::TranscriptionEvent::from(event).emit(&self.app) {
             tracing::error!(?e, "failed to emit progressive batch event");
         }
