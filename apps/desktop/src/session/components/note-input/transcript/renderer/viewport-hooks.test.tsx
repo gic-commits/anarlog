@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { createRef } from "react";
 import { describe, expect, it } from "vitest";
 
-import { useScrollDetection } from "./viewport-hooks";
+import { estimateSegmentHeight, useScrollDetection } from "./viewport-hooks";
 
 function setScrollMetrics(
   element: HTMLDivElement,
@@ -56,5 +56,19 @@ describe("useScrollDetection", () => {
 
     expect(result.current.autoScrollEnabled).toBe(false);
     expect(result.current.scrollTarget).toBe("bottom");
+  });
+});
+
+describe("estimateSegmentHeight", () => {
+  it("scales with text length", () => {
+    const short = { text: "短", words: [] };
+    const long = { text: "长".repeat(80), words: [] };
+    expect(estimateSegmentHeight(long)).toBeGreaterThan(
+      estimateSegmentHeight(short),
+    );
+  });
+
+  it("has a floor height for empty text", () => {
+    expect(estimateSegmentHeight({ text: "", words: [] })).toBeGreaterThan(0);
   });
 });

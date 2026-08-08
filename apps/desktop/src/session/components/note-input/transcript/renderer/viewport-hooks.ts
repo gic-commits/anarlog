@@ -261,3 +261,20 @@ export function usePlaybackAutoScroll(
 
   return { resetUserScroll };
 }
+
+// Estimated render height of a segment. Height is driven mainly by how many
+// text lines the segment wraps to (a CJK line is ~40 chars wide), plus the
+// sticky header. Kept deliberately close to reality so virtualizer offset
+// calculations stay accurate for unmeasured tail segments.
+export const SEGMENT_HEADER_HEIGHT_PX = 40;
+export const SEGMENT_LINE_HEIGHT_PX = 22;
+export const SEGMENT_LINE_CHARS = 40;
+
+export function estimateSegmentHeight(segment: {
+  text?: string | null;
+  words: unknown[];
+}): number {
+  const text = segment.text ?? "";
+  const lines = Math.max(1, Math.ceil(text.length / SEGMENT_LINE_CHARS));
+  return SEGMENT_HEADER_HEIGHT_PX + lines * SEGMENT_LINE_HEIGHT_PX;
+}
