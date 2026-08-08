@@ -23,10 +23,16 @@ type AudioPlayerState = "playing" | "paused" | "stopped";
 interface TimeSnapshot {
   current: number;
   total: number;
+  /** Increments on every user interaction with the timeline (click/drag). */
+  interactionCount: number;
 }
 
 class TimeStore {
-  private snapshot: TimeSnapshot = { current: 0, total: 0 };
+  private snapshot: TimeSnapshot = {
+    current: 0,
+    total: 0,
+    interactionCount: 0,
+  };
   private listeners = new Set<() => void>();
 
   getSnapshot = (): TimeSnapshot => {
@@ -52,8 +58,18 @@ class TimeStore {
     this.notify();
   }
 
+  /** Called when the user clicks/drags the timeline, not programmatic seeks. */
+  markInteraction(value: number) {
+    this.snapshot = {
+      ...this.snapshot,
+      current: value,
+      interactionCount: this.snapshot.interactionCount + 1,
+    };
+    this.notify();
+  }
+
   reset() {
-    this.snapshot = { current: 0, total: 0 };
+    this.snapshot = { current: 0, total: 0, interactionCount: 0 };
     this.notify();
   }
 
@@ -214,7 +230,7 @@ export function AudioPlayerProvider({
     };
 
     const handleInteraction = (currentTime: number) => {
-      syncCurrentTime(currentTime, true);
+      store.markInteraction(currentTime);
     };
 
     const handleDecode = (dur: number) => {

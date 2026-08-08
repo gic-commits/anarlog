@@ -70,6 +70,7 @@ export function TranscriptViewer({
   } = useAudioPlayer();
   const time = useAudioTime();
   const deferredCurrentMs = useDeferredValue(time.current * 1000);
+  const interactionCount = time.interactionCount;
   const isPlaying = playerState === "playing";
 
   useHotkeys(
@@ -156,6 +157,7 @@ export function TranscriptViewer({
               seek={seek}
               startPlayback={start}
               audioExists={audioExists}
+              seekInteractionCount={interactionCount}
             />
             {index < visibleTranscriptIds.length - 1 && <TranscriptSeparator />}
           </div>

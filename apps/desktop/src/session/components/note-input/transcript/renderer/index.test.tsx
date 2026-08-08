@@ -35,7 +35,7 @@ vi.mock("~/audio-player", () => ({
 }));
 
 vi.mock("~/audio-player/provider", () => ({
-  useAudioTime: () => ({ current: 0 }),
+  useAudioTime: () => ({ current: 0, total: 0, interactionCount: 0 }),
 }));
 
 vi.mock("~/contexts/shell", () => ({
