@@ -233,10 +233,18 @@ impl IncrementalDiarizationEngine {
 
         // The legacy 0.85 default is a loose upper bound that collapses
         // tightly-clustered audio into one speaker; when a caller still passes
-        // it, estimate the cutoff from the actual distance distribution. The
-        // current default (0.5) is used directly — it separates speakers better
-        // on real multi-speaker audio.
-        let threshold = if (self.config.threshold - 0.85).abs() < 1e-6 {
+        // it, estimate the cutoff from the actual distance distribution.
+        //
+        // Long recordings accumulate many turn-chunks; same-speaker chunks can
+        // drift apart in embedding space (vocal variety, room changes), so a
+        // fixed 0.5 threshold over-segments them into dozens of fake speakers.
+        // For large chunk counts we therefore fall back to the data-adaptive
+        // estimate (median + 0.15·MAD), which grows with the audio's natural
+        // embedding spread. Short audio keeps the caller's tuned threshold.
+        const ADAPTIVE_CHUNK_COUNT: usize = 600;
+        let threshold = if (self.config.threshold - 0.85).abs() < 1e-6
+            || valid_embs.len() >= ADAPTIVE_CHUNK_COUNT
+        {
             clustering::estimate_threshold(&valid_embs)
         } else {
             self.config.threshold
@@ -259,6 +267,11 @@ impl IncrementalDiarizationEngine {
         // vote over a time window, so brief misassigned chunks get absorbed
         // into their temporal neighbors.
         self.smooth_speakers();
+
+        // Merge A-B-A flicker turns (a speaker's short occurrences sandwiched
+        // between the same other speaker) — this is a person's voice split
+        // into a few chunks by clustering, not a real turn change.
+        self.merge_sandwiched_short_turns();
 
         // Propagate speaker from nearest valid segment to short/invalid ones.
         let n = self.segments.len();
@@ -354,6 +367,80 @@ impl IncrementalDiarizationEngine {
         }
         for (i, spk) in reassigned.into_iter().enumerate() {
             self.segments[i].speaker = spk;
+        }
+    }
+
+    /// Merge "flicker" speakers: a speaker whose individual occurrences are
+    /// short and sandwiched between the SAME other speaker (A-B-A pattern).
+    /// One person's voice split by clustering into a few chunks produces this
+    /// pattern — the brief B segments are reassigned to the surrounding A.
+    fn merge_sandwiched_short_turns(&mut self) {
+        const SWITCH_MAX_SECS: f64 = 4.0;
+        const GUARD_SECS: f64 = 0.8;
+
+        let n = self.segments.len();
+        if n < 3 {
+            return;
+        }
+
+        // Track how much total time a speaker occupies in short sandwiched
+        // turns, plus whether the enclosing speaker is consistent (A-B-A).
+        // First pass: collect per-speaker short-turn spans.
+        let mut short_turn_span: std::collections::HashMap<usize, f64> =
+            std::collections::HashMap::new();
+        let mut candidate: std::collections::HashMap<usize, Option<usize>> =
+            std::collections::HashMap::new();
+        for i in 0..n {
+            let seg = &self.segments[i];
+            if !seg.valid {
+                continue;
+            }
+            let span = seg.end - seg.start;
+            if span > SWITCH_MAX_SECS {
+                continue;
+            }
+            // Find enclosing non-self speakers.
+            let mut prev_spk: Option<usize> = None;
+            for j in (0..i).rev() {
+                if self.segments[j].valid && self.segments[j].speaker != seg.speaker {
+                    prev_spk = Some(self.segments[j].speaker);
+                    break;
+                }
+            }
+            let mut next_spk: Option<usize> = None;
+            for j in i + 1..n {
+                if self.segments[j].valid && self.segments[j].speaker != seg.speaker {
+                    next_spk = Some(self.segments[j].speaker);
+                    break;
+                }
+            }
+            // A-B-A: prev and next are the same speaker and within GUARD.
+            if let (Some(p), Some(nx)) = (prev_spk, next_spk)
+                && p == nx
+            {
+                let entry = candidate.entry(seg.speaker).or_insert(Some(p));
+                if *entry != Some(p) {
+                    *entry = None; // ambiguous — different enclosers
+                }
+                *short_turn_span.entry(seg.speaker).or_insert(0.0) += span;
+            }
+        }
+
+        // A speaker whose total short-sandwiched time is small is a flicker.
+        const MAX_TOTAL_SHORT_SECS: f64 = 12.0;
+        for (spk, encloser) in candidate.iter() {
+            let Some(encloser) = encloser else {
+                continue;
+            };
+            let total = short_turn_span.get(spk).copied().unwrap_or(0.0);
+            if total >= MAX_TOTAL_SHORT_SECS {
+                continue;
+            }
+            for seg in &mut self.segments {
+                if seg.valid && seg.speaker == *spk {
+                    seg.speaker = *encloser;
+                }
+            }
         }
     }
 
@@ -481,5 +568,48 @@ mod tests {
         engine.smooth_speakers();
         let after: Vec<usize> = engine.segments.iter().map(|s| s.speaker).collect();
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn test_merge_sandwiched_short_turn() {
+        // A-B-A flicker: spk1 appears briefly (1s) sandwiched between spk0.
+        let mut engine = engine_with_segments(&[
+            (0.0, 4.0, 0, true),
+            (4.0, 5.0, 1, true),
+            (5.0, 9.0, 0, true),
+        ]);
+        engine.merge_sandwiched_short_turns();
+        assert!(engine.segments.iter().all(|s| s.speaker == 0));
+    }
+
+    #[test]
+    fn test_merge_does_not_touch_real_interleaved_turn() {
+        // spk1 has a real 3s turn between different speakers (not A-B-A) —
+        // must be preserved.
+        let mut engine = engine_with_segments(&[
+            (0.0, 4.0, 0, true),
+            (4.0, 7.0, 1, true),
+            (7.0, 11.0, 2, true),
+        ]);
+        let before: Vec<usize> = engine.segments.iter().map(|s| s.speaker).collect();
+        engine.merge_sandwiched_short_turns();
+        let after: Vec<usize> = engine.segments.iter().map(|s| s.speaker).collect();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn test_merge_keeps_recurring_short_speaker() {
+        // spk1 recurs as short 1s sandwiched turns 14 times → total 14s
+        // (> MAX_TOTAL_SHORT_SECS) so it's a real recurring participant.
+        let mut specs = vec![(0.0, 4.0, 0, true)];
+        for i in 0..14 {
+            let base = 4.0 + i as f64 * 2.0;
+            specs.push((base, base + 1.0, 1, true));
+            specs.push((base + 1.0, base + 2.0, 0, true));
+        }
+        let mut engine = engine_with_segments(&specs);
+        engine.merge_sandwiched_short_turns();
+        // spk1 must survive (14s cumulative short turns > 12s threshold).
+        assert!(engine.segments.iter().any(|s| s.speaker == 1));
     }
 }
