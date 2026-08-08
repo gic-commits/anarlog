@@ -15,13 +15,14 @@
   ├─ 短段合并
   │    ─ <1.5s 合并到相邻段
   │
-  ├─ Embedding (wespeaker-cnceleb-LM 25MB ONNX, 256-dim)
-  │    ─ 每段提取 256-dim speaker embedding
+  ├─ Embedding (campplus-200k 28MB ONNX, 192-dim; 备选 wespeaker-zh-LM 256-dim)
+  │    ─ 每段提取 speaker embedding（intra_threads=2 优化）
   │    ─ 短段(>=1.5s)跳过，标记为继承相邻段
   │
-  ├─ Clustering (average-linkage agglomerative)
-  │    ─ cosine distance matrix → threshold=0.35
-  │    ─ 输出说话人标签
+  ├─ Clustering (HDBSCAN density clustering, Aug 8)
+  │    ─ L2 normalize → cosine distance matrix → HDBSCAN
+  │    ─ 自动按密度定簇数（不依赖 threshold）；噪声(-1)被 smooth_speakers/merge_sandwiched 吸收
+  │    ─ 取代 agglomerative + threshold（长音频过度聚类 64→9）
   │
    ├─ [NEW] VAD Min-Cut + Merge（WhisperX 算法）
    │    ─ 超 max_duration 的段在 [½τ, τ] 区间内找 VAD 最低分切开
@@ -44,10 +45,12 @@
 
 | 角色 | 模型 | Dim | 来源 | 说明 |
 |------|------|-----|------|------|
-| **默认** ⭐ | `wespeaker_zh_cnceleb_resnet34_LM.onnx` | 256 | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | CN-Celeb 中文训练 + Large Margin 微调 |
-| **备选** | `campplus_cn_en_common_200k.onnx` | 192 | [welcomyou HF](https://huggingface.co/welcomyou/campplus-3dspeaker-200k-onnx) | 200k 说话人，速度最快+9% |
+| **默认 ⭐（Aug 8 起）** | `campplus_cn_en_common_200k.onnx` | 192 | [welcomyou HF](https://huggingface.co/welcomyou/campplus-3dspeaker-200k-onnx) | 200k 说话人，**CPU 最快（2×）**，分离度更高（F-M 0.85）|
+| **备选（原默认）** | `wespeaker_zh_cnceleb_resnet34_LM.onnx` | 256 | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | CN-Celeb 中文训练 + Large Margin 微调，更准但慢（UI 标 accurate）|
 
 后续通过设置界面让用户选择。
+
+> **Aug 8 切换**：默认从 wespeaker-zh-LM 换成 campplus-200k（`59e5972e8`）——回测 84min 音频 campplus 157.5s vs wespeaker 334s（2× 快），speaker 数 8 vs 9（均合理）。wespeaker-zh-LM 保留为 UI "accurate" 选项。
 
 ### 3.2 中文 4-speaker 测试 (SOND)
 
@@ -68,7 +71,7 @@
 | wespeaker-voxceleb | 8.24s | 10.22s | 1.80× |
 
 > 以上数据已包含模型加载（一次性），Embed 时间为逐段推理的累加。
-> Sprint 3 正式开发时可优化：batching、线程数调优、warmup 推理。
+> **Aug 8 优化已落地**：intra_threads=2（+1.5×）+ campplus 默认（+2×），合计约 3× 加速（84min 音频 embedding ~3.2min → ~1.5min）。batching 已验证在 CPU 上无收益（0.3-0.8×），warmup 已隐式生效。
 
 ### 3.4 下载
 
@@ -385,16 +388,45 @@ finish() → engine.finalize() 最终聚类
 - [x] **最小时长过滤**（Aug 1 Night）：`smooth_speakers` 删除累计时长 < 2s 的孤立 speaker（噪声块），归并到最近 temporal 邻居，解决短块 embedding 噪音导致的过度分段
 - [x] 文件路径集成（`integration.rs`）：Segmenter VAD 先行 → `min_cut_merge` 分组 → 每段转录后按词中位时间 `speaker_at_time(group_start + mid)` 标注 → stitch 后 `propagate_speaker_to_none` 前后向填充
 - [x] 录音流集成（`plugins/transcription/src/listener/runtime.rs`）：录音中复用 `VadGroupStream.take_vad_segments()` → `feed_segments`（与文件路径同一批 VAD 段）→ `finish()` 时补喂尾部 + `finalize()` → 按词中位时间标注 speaker
-- [x] **live diarization 解耦**（Aug 8，`d09623d7d`）：diarization（embedding+聚类）原在 `rx.recv()` 消费循环内同步执行，秒级阻塞导致 PCM channel 满 → 丢帧 → 覆盖不全。现解耦到独立后台 task（unbounded channel + join），PCM 循环只跑便宜 VAD
+ - [x] **live diarization 解耦**（Aug 8，`d09623d7d`）：diarization（embedding+聚类）原在 `rx.recv()` 消费循环内同步执行，秒级阻塞导致 PCM channel 满 → 丢帧 → 覆盖不全。现解耦到独立后台 task（unbounded channel + join），PCM 循环只跑便宜 VAD
 - [x] 待验证：真实设备端到端（speaker 标签是否随 `SegmentResult` 正确显示）
+
+### Phase E: HDBSCAN 聚类 + 性能优化（Aug 8 ✅）
+
+**背景**：84 分钟长音频 re-transcribe 产出 64 个 fake speakers（实际 ~9 人）。根因：固定 threshold=0.5（Aug 2 网格搜索对短音频最优）在长音频上过度聚类——同一说话人的 chunks 在长音频里 embedding 距离 >0.5，被切碎成多个"假 speaker"，且各自满足 smooth_speakers 的连续 span 条件不被合并 → "一句话切成多人"。
+
+**研究结论（Aug 8）**：WeSpeaker 官方 VoxConverse v2 recipe 用 **UMAP + HDBSCAN + PAHC**（DER 5.4，优于谱聚类 6.3）；谱聚类用**特征值间隙自动定人数**。Rust 生态有 `hdbscan`/`faer`/`fast-umap`。VBx 明确不适合长音频（>30min AHC 慢），pyannote 端到端需 HF token。第二步（UMAP + PAHC + 1.5s 滑窗 embedding）仅 CPU 环境，当前不适合，记远期。
+
+**改动**：
+- [x] `clustering.rs` 新增 `hdbscan_cluster_embeddings`：L2 归一化 + cosine 距离矩阵 + HDBSCAN（Precalculated，min_cluster_size=3）
+- [x] `incremental_diarization.rs` `recluster` 用 HDBSCAN 替代 agglomerative；噪声(-1)段给唯一临时 label，smooth_speakers/merge_sandwiched 吸收
+- [x] `Cargo.toml` 依赖 `hdbscan = "0.12"`
+- [x] ONNX 线程优化：`hypr_onnx::load_model_from_bytes_with_threads`；embedding 用 intra_threads=2（1.5×）
+- [x] 默认模型切换：`wespeaker_zh_cnceleb_resnet34_LM` → `campplus_cn_en_common_200k`（2× 快 + 分离度更高）
+
+**回测（84min 音频，wespeaker_zh_cnceleb_resnet34_LM）**：
+| 指标 | 旧（agglomerative+0.5）| 新（HDBSCAN）|
+|------|:---:|:---:|
+| unique speakers | 64 | **9** ✅ |
+| 处理时间 | ~480s | ~334s（intra_threads=2）|
+
+**模型对比 + 默认切换**：
+| 模型 | 维 | threads=2/chunk | diarization(84min) | speakers |
+|------|:---:|:---:|:---:|:---:|
+| wespeaker-zh-LM（旧默认）| 256 | 104ms | 334s | 9 |
+| **campplus-200k（新默认）**| 192 | **52ms** | **157.5s** | 8 ✅ |
+
+**已排除的优化**：批量推理（CPU 上 wespeaker/campplus batch 0.3-0.8×，无收益）；intra_threads=4/8（回归）。
+
+**当前 diarization 耗时（84min）**：解码+VAD ~2min + embedding ~1.5min + HDBSCAN ~1min ≈ **~4.5min**。
 
 ## 10. 开放问题
 
-1. ~~**阈值自适应**~~: ✅ 已解决（Aug 1 Night）— `clustering::estimate_threshold`（median + 0.15·MAD），默认 0.85 时自动估计。遗留：不同音频最优阈值仍随距离尺度变化，MAD 系数 0.15 是基于 5fdd76a7（4 说话人）标定的，c5ee333b 上会偏高（7 spk vs 可能更少）
+1. ~~**阈值自适应**~~: ✅ **已被 HDBSCAN 取代（Aug 8）**。固定 threshold（无论 0.85 自适应还是 0.5 网格调优）在长音频上过度聚类（84min → 64 fake speakers）。HDBSCAN 按密度自动定簇数，不再依赖 threshold。残留：短音频/边缘场景的假 speaker 合并仍靠 smooth_speakers/merge_sandwiched 启发式
 
-2. **说话人数预设**: 是否允许用户指定 speaker count？如果已知是 2-person 对话，可固定 n_clusters=2。
+2. **说话人数预设**: 是否允许用户指定 speaker count？如果已知是 2-person 对话，可固定 n_clusters=2。HDBSCAN 下可通过 min_cluster_size / 强制簇数实现
 
-3. **推理优化**: batching（多段合并为一次 ONNX 调用）、线程数调优、warmup 推理 — 留到 Sprint 3 正式开发
+3. **推理优化**: ✅ 已部分解决（Aug 8）— intra_threads=2（1.5×）+ campplus 模型（2×）。已验证 batch 无收益（CPU）。远期：并行 embedding（多线程 + 多 session，当前 session `&mut` 单线程安全）
 
 4. **CJK 交互**: 先染色再 CJK 后处理，speaker 变更处的 gap 是否需要插入分段标记？
 
