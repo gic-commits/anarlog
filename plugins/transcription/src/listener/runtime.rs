@@ -205,8 +205,9 @@ impl ListenerRuntime for TauriRuntime {
                 persist: Some(persist_params),
             });
             let segments_dir = config.session_dir.join("progressive-batch");
-            let mut manager =
-                core::ProgressiveBatchManager::new(config).with_runtime(runtime.clone());
+            let manager = Arc::new(tokio::sync::Mutex::new(
+                core::ProgressiveBatchManager::new(config).with_runtime(runtime.clone()),
+            ));
             tracing::info!(
                 session_id = %params.session_id,
                 segments_dir = %segments_dir.display(),
@@ -244,21 +245,44 @@ impl ListenerRuntime for TauriRuntime {
                 None
             };
 
-            let mut rx = pcm_rx;
-            while let Some(frame) = rx.recv().await {
-                manager.on_audio_frame(&frame);
-                // Feed diarization with the same VAD segments the segmenter
-                // grouped on (via the stream's shared VAD), matching the file
-                // re-transcribe path's `feed_segments`.
-                if let Some(ref mut eng) = diarization_engine {
-                    let vad_segments = manager.take_vad_segments();
-                    if !vad_segments.is_empty() {
-                        if let Err(e) = eng.feed_segments(&vad_segments) {
-                            tracing::warn!(error = %e, "diarization feed_segments error");
+            // Diarization (embedding + clustering) is expensive and must NOT
+            // run on the PCM consumption loop — a long embedding/cluster pass
+            // would block `rx.recv()` and overflow the source PCM channel
+            // (dropping frames → coverage gaps). Feed VAD segments into a
+            // dedicated channel and let a separate task drain them.
+            let (dia_tx, mut dia_rx) = tokio::sync::mpsc::unbounded_channel::<
+                hypr_pyannote_local::segmentation::Segment,
+            >();
+            let dia_engine = std::sync::Arc::new(tokio::sync::Mutex::new(diarization_engine));
+            let dia_task = {
+                let session_id = params.session_id.clone();
+                let dia_engine = dia_engine.clone();
+                tauri::async_runtime::spawn(async move {
+                    while let Some(seg) = dia_rx.recv().await {
+                        let mut eng = dia_engine.lock().await;
+                        if let Some(ref mut e) = *eng {
+                            if let Err(err) = e.feed_segments(std::slice::from_ref(&seg)) {
+                                tracing::warn!(error = %err, "diarization feed_segments error");
+                            }
                         }
                     }
+                })
+            };
+
+            let mut rx = pcm_rx;
+            while let Some(frame) = rx.recv().await {
+                manager.lock().await.on_audio_frame(&frame);
+                // Hand VAD segments to the diarization task (non-blocking).
+                let vad_segments = manager.lock().await.take_vad_segments();
+                for seg in vad_segments {
+                    let _ = dia_tx.send(seg);
                 }
             }
+
+            // Close the diarization feed channel and wait for the background
+            // task to drain everything we sent before finalizing.
+            drop(dia_tx);
+            let _ = dia_task.await;
 
             // PCM stream ended (recording stopped). The final audio file is
             // now on disk — apply its real duration so the stitcher can flag
@@ -271,7 +295,10 @@ impl ListenerRuntime for TauriRuntime {
             if let Some(audio) = audio_path.clone() {
                 if let Ok(source) = hypr_audio_utils::source_from_path(&audio) {
                     if let Some(dur) = source.total_duration() {
-                        manager.set_audio_duration(Some((dur.as_secs_f64() * 1000.0) as u64));
+                        manager
+                            .lock()
+                            .await
+                            .set_audio_duration(Some((dur.as_secs_f64() * 1000.0) as u64));
                         tracing::info!(
                             session_id = %params.session_id,
                             audio_duration_ms = dur.as_secs_f64() * 1000.0,
@@ -281,27 +308,34 @@ impl ListenerRuntime for TauriRuntime {
                 }
             }
 
-            match manager.finish().await {
+            let finish_result = {
+                let mut mgr = manager.lock().await;
+                mgr.finish().await
+            };
+            match finish_result {
                 Ok(mut response) => {
                     // Annotate with speaker labels after final clustering.
                     // Drain any VAD segments flushed during finish() first.
-                    if let Some(ref mut eng) = diarization_engine {
-                        let tail = manager.take_vad_segments();
-                        if !tail.is_empty() {
-                            if let Err(e) = eng.feed_segments(&tail) {
-                                tracing::warn!(error = %e, "diarization tail feed error");
-                            }
-                        }
-                        eng.finalize();
-                        if let Some(ch) = response.results.channels.first_mut() {
-                            if let Some(alt) = ch.alternatives.first_mut() {
-                                for word in &mut alt.words {
-                                    let mid = (word.start + word.end) / 2.0;
-                                    word.speaker = eng.speaker_at_time(mid);
+                    {
+                        let mut eng = dia_engine.lock().await;
+                        if let Some(ref mut e) = *eng {
+                            let tail = { manager.lock().await.take_vad_segments() };
+                            if !tail.is_empty() {
+                                if let Err(err) = e.feed_segments(&tail) {
+                                    tracing::warn!(error = %err, "diarization tail feed error");
                                 }
                             }
+                            e.finalize();
+                            if let Some(ch) = response.results.channels.first_mut() {
+                                if let Some(alt) = ch.alternatives.first_mut() {
+                                    for word in &mut alt.words {
+                                        let mid = (word.start + word.end) / 2.0;
+                                        word.speaker = e.speaker_at_time(mid);
+                                    }
+                                }
+                            }
+                            core::propagate_speaker_to_none(&mut response);
                         }
-                        core::propagate_speaker_to_none(&mut response);
                     }
 
                     let total_words = response
