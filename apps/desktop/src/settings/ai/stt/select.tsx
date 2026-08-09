@@ -1118,46 +1118,50 @@ function DiarizationSection() {
 
       {enabled && (
         <div className="ml-1 flex flex-col gap-3 pt-1">
-          <div className="flex items-center gap-2">
-            <span className="text-muted-foreground w-16 shrink-0 text-xs">
-              <Trans>Model</Trans>
-            </span>
-            <Select
-              value={model}
-              onValueChange={(v) => setSettings({ diarization_model: v })}
-            >
-              <SelectTrigger className="bg-card h-7 flex-1 text-xs shadow-none">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {MODELS.map((m) => (
-                  <SelectItem key={m.value} value={m.value}>
-                    {m.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-muted-foreground w-16 shrink-0 text-xs">
-              <Trans>Threshold</Trans>
-            </span>
-            <div className="flex flex-1 items-center gap-2">
-              <input
-                type="range"
-                min={0.1}
-                max={0.99}
-                step={0.01}
-                value={threshold}
-                onChange={(e) =>
-                  setSettings({ diarization_threshold: Number(e.target.value) })
-                }
-                className="bg-muted accent-foreground [&::-webkit-slider-thumb]:bg-foreground h-1 w-full cursor-pointer appearance-none rounded-full [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full"
-              />
-              <span className="text-muted-foreground w-8 text-right text-xs tabular-nums">
-                {threshold.toFixed(2)}
+          <div className="grid grid-cols-2 items-center gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="text-muted-foreground w-16 shrink-0 text-xs">
+                <Trans>Model</Trans>
               </span>
+              <Select
+                value={model}
+                onValueChange={(v) => setSettings({ diarization_model: v })}
+              >
+                <SelectTrigger className="bg-card h-7 flex-1 text-xs shadow-none">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MODELS.map((m) => (
+                    <SelectItem key={m.value} value={m.value}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="text-muted-foreground w-16 shrink-0 text-xs">
+                <Trans>Threshold</Trans>
+              </span>
+              <div className="flex flex-1 items-center gap-2">
+                <input
+                  type="range"
+                  min={0.1}
+                  max={0.99}
+                  step={0.01}
+                  value={threshold}
+                  onChange={(e) =>
+                    setSettings({
+                      diarization_threshold: Number(e.target.value),
+                    })
+                  }
+                  className="bg-muted accent-foreground [&::-webkit-slider-thumb]:bg-foreground h-1 w-full cursor-pointer appearance-none rounded-full [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full"
+                />
+                <span className="text-muted-foreground w-8 shrink-0 text-right text-xs tabular-nums">
+                  {threshold.toFixed(2)}
+                </span>
+              </div>
             </div>
           </div>
         </div>
