@@ -38,6 +38,8 @@ pub struct SessionParams {
     pub diarization_model: Option<String>,
     #[serde(default)]
     pub diarization_threshold: f32,
+    #[serde(default)]
+    pub mic_device: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -140,6 +142,7 @@ mod tests {
             diarization_enabled: false,
             diarization_model: None,
             diarization_threshold: 0.35,
+            mic_device: None,
         }
     }
 

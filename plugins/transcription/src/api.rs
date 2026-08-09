@@ -44,6 +44,8 @@ pub struct CaptureParams {
     pub diarization_model: Option<String>,
     #[serde(default)]
     pub diarization_threshold: f32,
+    #[serde(default)]
+    pub mic_device: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -322,6 +324,7 @@ impl From<CaptureParams> for listener::actors::SessionParams {
             diarization_enabled: value.diarization_enabled,
             diarization_model: value.diarization_model,
             diarization_threshold: value.diarization_threshold,
+            mic_device: value.mic_device,
         }
     }
 }
@@ -487,6 +490,7 @@ mod tests {
             diarization_enabled: false,
             diarization_model: None,
             diarization_threshold: 0.35,
+            mic_device: None,
         }
     }
 

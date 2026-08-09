@@ -3,6 +3,7 @@ use std::sync::{Arc, MutexGuard};
 use std::time::{Duration, Instant};
 
 use hypr_transcription_core::listener2 as core;
+use hypr_transcription_core::listener2::BatchRuntime as _;
 use tauri_specta::Event;
 use tokio::task::JoinHandle;
 
@@ -96,25 +97,49 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Listener2<'a, R, M> {
         let runtime = Arc::new(TauriBatchRuntime {
             app: app.clone(),
             control: control.clone(),
-            params: batch_params,
+            params: batch_params.clone(),
         });
 
+        let task_app = app.clone();
         let task = tokio::spawn({
             let runtime = runtime.clone();
             let registry = registry.clone();
             let control = control.clone();
             let session_id = session_id.clone();
+            let batch_params = batch_params.clone();
             async move {
                 tracing::info!(
                     "[DEBUG] core::run_batch starting for session {}",
                     session_id
                 );
-                let result = core::run_batch(runtime, params.into()).await;
+                let result = core::run_batch(runtime.clone(), batch_params.clone()).await;
                 tracing::info!(
                     "[DEBUG] core::run_batch finished for session {}: {:?}",
                     session_id,
                     result.as_ref().err()
                 );
+
+                // Retry gap segments once automatically. The first pass may
+                // have long gaps from provider timestamp drift; re-submitting
+                // just the failed (gap) segments fills them. Emitting a second
+                // BatchResponse lets the frontend overwrite the partial one.
+                if let Ok(output) = &result
+                    && let Some(filled) = auto_retry_gap_segments(
+                        &task_app,
+                        runtime.clone(),
+                        &session_id,
+                        &batch_params,
+                        output,
+                    )
+                    .await
+                {
+                    runtime.emit(core::BatchEvent::BatchResponse {
+                        session_id: session_id.clone(),
+                        response: filled,
+                        mode: output.mode,
+                    });
+                }
+
                 finish_batch_session(&registry, &session_id, &control);
             }
         });
@@ -353,9 +378,14 @@ pub(crate) async fn persist_batch_event(
             .bind(&model)
             .bind(&params.base_url)
             .bind(&language)
-            .bind(params.segment_duration_ms.map(|v| v as i64))
-            .bind(params.overlap_ms.map(|v| v as i64))
-            .bind(params.max_concurrency.map(|v| v as i64))
+            .bind(
+                params
+                    .segment_duration_ms
+                    .map(|v| v as i64)
+                    .unwrap_or(30000),
+            )
+            .bind(params.overlap_ms.map(|v| v as i64).unwrap_or(1000))
+            .bind(params.max_concurrency.map(|v| v as i64).unwrap_or(2))
             .execute(pool)
             .await
             {
@@ -604,6 +634,146 @@ impl core::DenoiseRuntime for TauriDenoiseRuntime {
 fn batch_lock_poisoned(name: &'static str) -> core::Error {
     tracing::error!(lock = name, "batch_session_lock_poisoned");
     core::Error::BatchError(format!("{name} poisoned"))
+}
+
+/// Retry gap segments once after a file re-transcribe finishes with gaps.
+///
+/// The first pass stitches all segments, but long provider timestamp drift can
+/// leave content holes between segments. `gap_segments` in the response marks
+/// the bordering segments as failed in the DB (via persist_batch_event), so a
+/// Continue-style re-run skips the healthy completed segments and only
+/// re-submits the failed ones.
+async fn auto_retry_gap_segments(
+    app: &tauri::AppHandle,
+    runtime: Arc<dyn core::BatchRuntime>,
+    session_id: &str,
+    params: &core::BatchParams,
+    output: &core::BatchRunOutput,
+) -> Option<owhisper_interface::batch::Response> {
+    use tauri::Manager;
+
+    let gaps = output.response.metadata.get("gap_segments")?.as_array()?;
+    if gaps.is_empty() {
+        return None;
+    }
+    tracing::info!(
+        session_id = %session_id,
+        gap_count = gaps.len(),
+        "auto_retry: gap segments detected, retrying once"
+    );
+
+    let state = app.try_state::<tauri_plugin_db::ManagedState>()?;
+    let pool = state.pool();
+
+    // The first pass's persist marks gap segments failed asynchronously, so
+    // reset them here to guarantee a race-free re-submit (idempotent with the
+    // persist path).
+    for seg_val in gaps {
+        let Some(idx) = seg_val.as_u64() else {
+            continue;
+        };
+        if let Err(e) = sqlx::query(
+            "UPDATE progressive_batch_segments
+             SET status = 'failed',
+                 response_json = NULL,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE job_id = ?1 AND segment_index = ?2 AND status = 'completed'",
+        )
+        .bind(session_id)
+        .bind(idx as i64)
+        .execute(pool)
+        .await
+        {
+            tracing::warn!(error = %e, "auto_retry: reset gap segment failed");
+        }
+    }
+
+    let job = match hypr_db_app::get_progressive_batch_job(pool, session_id).await {
+        Ok(Some(j)) if j.status == "partial" || j.status == "running" => j,
+        Ok(_) => {
+            tracing::info!(session_id = %session_id, "auto_retry skipped: no partial/running job");
+            return None;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "auto_retry: get job failed");
+            return None;
+        }
+    };
+
+    let segments = match hypr_db_app::list_completed_progressive_batch_segments(pool, &job.id).await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "auto_retry: list segments failed");
+            return None;
+        }
+    };
+
+    let mut completed: Vec<core::PersistedCompletedSegment> = Vec::new();
+    for seg in &segments {
+        let Some(response_json) = seg.response_json.as_deref() else {
+            continue;
+        };
+        let Ok(response) = serde_json::from_str(response_json) else {
+            continue;
+        };
+        completed.push(core::PersistedCompletedSegment {
+            index: seg.segment_index as usize,
+            global_start_ms: seg.global_start_ms,
+            response,
+        });
+    }
+    if completed.is_empty() {
+        tracing::info!(session_id = %session_id, "auto_retry skipped: no completed segments");
+        return None;
+    }
+
+    let retry_params = core::BatchParams {
+        session_id: session_id.to_string(),
+        provider: params.provider,
+        file_path: params.file_path.clone(),
+        model: params.model.clone(),
+        base_url: params.base_url.clone(),
+        api_key: params.api_key.clone(),
+        languages: params.languages.clone(),
+        keywords: params.keywords.clone(),
+        num_speakers: params.num_speakers,
+        min_speakers: params.min_speakers,
+        max_speakers: params.max_speakers,
+        progressive_batch: true,
+        segment_duration_ms: Some(job.segment_duration_ms as u32),
+        overlap_ms: Some(job.overlap_ms as u32),
+        max_concurrency: Some(job.max_concurrency as u32),
+        cjk_enabled: params.cjk_enabled,
+        cjk_features: params.cjk_features.clone(),
+        cjk_server_side: params.cjk_server_side,
+        diarization_enabled: params.diarization_enabled,
+        diarization_model: params.diarization_model.clone(),
+        diarization_threshold: params.diarization_threshold,
+    };
+
+    match core::continue_from_file(runtime, retry_params, completed).await {
+        Ok(retry_output) => {
+            let filled_words = retry_output
+                .response
+                .results
+                .channels
+                .first()
+                .and_then(|c| c.alternatives.first())
+                .map(|a| a.words.len())
+                .unwrap_or(0);
+            tracing::info!(
+                session_id = %session_id,
+                filled_words = filled_words,
+                "auto_retry: gap segments retried"
+            );
+            Some(retry_output.response)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "auto_retry: continue failed");
+            None
+        }
+    }
 }
 
 fn lock_batch_sessions(

@@ -86,15 +86,14 @@ pub fn render_speaker_label(
     if let Some(ctx) = ctx {
         if let Some(human_id) = key.speaker_human_id.as_ref() {
             // Only return a human name if it's non-empty — otherwise fall
-            // through to "You" / "Speaker N" instead of leaking the UUID.
+            // through to "Speaker N" (matching the UI) instead of leaking
+            // the UUID or mislabeling as "You".
             if let Some(name) = ctx.human_name_by_id.get(human_id)
                 && !name.is_empty()
             {
                 return name.clone();
             }
-        }
-
-        if key.channel == ChannelProfile::DirectMic
+        } else if key.channel == ChannelProfile::DirectMic
             && let Some(self_human_id) = ctx.self_human_id.as_ref()
         {
             if let Some(name) = ctx.human_name_by_id.get(self_human_id)
@@ -153,7 +152,7 @@ mod tests {
     #[test]
     fn does_not_leak_human_id_when_name_missing() {
         // Segment was assigned to self (DirectMic) but no display name exists:
-        // must render "You", never the raw UUID.
+        // must render "Speaker N" like the UI, never the raw UUID.
         let ctx = SpeakerLabelContext {
             self_human_id: Some("self".to_string()),
             human_name_by_id: HashMap::new(),
@@ -163,7 +162,11 @@ mod tests {
             speaker_index: None,
             speaker_human_id: Some("self".to_string()),
         };
-        assert_eq!(render_speaker_label(&key, Some(&ctx), None), "You");
+        let mut labeler = SpeakerLabeler::new();
+        assert_eq!(
+            render_speaker_label(&key, Some(&ctx), Some(&mut labeler)),
+            "Speaker 1"
+        );
     }
 
     #[test]
@@ -177,7 +180,11 @@ mod tests {
             speaker_index: None,
             speaker_human_id: Some("self".to_string()),
         };
-        assert_eq!(render_speaker_label(&key, Some(&ctx), None), "You");
+        let mut labeler = SpeakerLabeler::new();
+        assert_eq!(
+            render_speaker_label(&key, Some(&ctx), Some(&mut labeler)),
+            "Speaker 1"
+        );
     }
 
     #[test]

@@ -215,7 +215,7 @@ impl ListenerRuntime for TauriRuntime {
             );
 
             // Set up diarization engine if enabled
-            let mut diarization_engine = if params.diarization_enabled {
+            let diarization_engine = if params.diarization_enabled {
                 match hypr_pyannote_local::incremental_diarization::IncrementalDiarizationEngine::new(
                     hypr_pyannote_local::incremental_diarization::IncrementalDiarizationConfig {
                         sample_rate: params.sample_rate,
@@ -255,7 +255,6 @@ impl ListenerRuntime for TauriRuntime {
             >();
             let dia_engine = std::sync::Arc::new(tokio::sync::Mutex::new(diarization_engine));
             let dia_task = {
-                let session_id = params.session_id.clone();
                 let dia_engine = dia_engine.clone();
                 tauri::async_runtime::spawn(async move {
                     while let Some(seg) = dia_rx.recv().await {

@@ -199,8 +199,17 @@ impl IncrementalDiarizationEngine {
     /// When the timestamp falls in a silence gap (no segment), returns None
     /// and the caller (propagate_speaker_to_none) fills from neighbor words.
     pub fn speaker_at_time(&self, time_s: f64) -> Option<usize> {
+        // Skip invalid segments (no valid embedding) and the HDBSCAN noise
+        // sentinel (`usize::MAX - i`), which would otherwise leak as a
+        // garbage speaker label into word annotations when smooth passes
+        // didn't absorb the noise chunk.
+        const NOISE_SENTINEL_FLOOR: usize = usize::MAX - 1_000_000;
         for seg in &self.segments {
-            if seg.start <= time_s && time_s < seg.end {
+            if seg.valid
+                && seg.speaker < NOISE_SENTINEL_FLOOR
+                && seg.start <= time_s
+                && time_s < seg.end
+            {
                 return Some(seg.speaker);
             }
         }
@@ -241,7 +250,7 @@ impl IncrementalDiarizationEngine {
 
         // -1 (noise) chunks keep their pre-cluster label (temporarily use the
         // index) so smooth_speakers can reassign them to temporal neighbors.
-        let mut cids: Vec<usize> = cids_i32
+        let cids: Vec<usize> = cids_i32
             .iter()
             .enumerate()
             .map(|(i, &c)| if c >= 0 { c as usize } else { usize::MAX - i })
@@ -371,7 +380,6 @@ impl IncrementalDiarizationEngine {
     /// pattern — the brief B segments are reassigned to the surrounding A.
     fn merge_sandwiched_short_turns(&mut self) {
         const SWITCH_MAX_SECS: f64 = 4.0;
-        const GUARD_SECS: f64 = 0.8;
 
         let n = self.segments.len();
         if n < 3 {

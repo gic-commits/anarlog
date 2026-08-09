@@ -10,6 +10,7 @@ Default permissions for the plugin
 - `allow-stop-capture`
 - `allow-get-mic-muted`
 - `allow-set-mic-muted`
+- `allow-set-mic-device`
 - `allow-get-capture-state`
 - `allow-get-capture-snapshot`
 - `allow-is-supported-languages-live`
@@ -368,6 +369,32 @@ Enables the run_denoise command without any pre-configured scope.
 <td>
 
 Denies the run_denoise command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-set-mic-device`
+
+</td>
+<td>
+
+Enables the set_mic_device command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-set-mic-device`
+
+</td>
+<td>
+
+Denies the set_mic_device command without any pre-configured scope.
 
 </td>
 </tr>

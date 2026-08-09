@@ -107,6 +107,17 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Listener<'a, R, M> {
     }
 
     #[tracing::instrument(skip_all)]
+    pub async fn set_mic_device(&self, device: Option<String>) -> Result<(), crate::Error> {
+        if let Some(cell) = registry::where_is(SourceActor::name()) {
+            let actor: ActorRef<SourceMsg> = cell.into();
+            let _ = actor.cast(SourceMsg::SetMicDevice(device));
+            Ok(())
+        } else {
+            Err(crate::Error::ActorNotFound(SourceActor::name().to_string()))
+        }
+    }
+
+    #[tracing::instrument(skip_all)]
     pub async fn start_capture(&self, params: CaptureParams) -> Result<(), crate::Error> {
         tracing::info!(
             "[DEBUG] start_capture: model={} base_url={} provider={:?} transcription_mode={:?}",

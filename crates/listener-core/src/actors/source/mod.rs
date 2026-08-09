@@ -27,6 +27,7 @@ pub enum SourceMsg {
     SetMicMute(bool),
     GetMicMute(RpcReplyPort<bool>),
     GetMicDevice(RpcReplyPort<Option<String>>),
+    SetMicDevice(Option<String>),
     PrepareListenerRefresh(RpcReplyPort<ListenerRefreshReplay>),
     SetListenerRouting(ListenerRouting),
     SetRecorder(Option<ActorRef<RecMsg>>),
@@ -71,6 +72,9 @@ pub struct SourceState {
     pub(super) mic_device: Option<String>,
     pub(super) onboarding: bool,
     pub(super) mic_muted: Arc<AtomicBool>,
+    /// True once the user explicitly picked an input device for this process.
+    /// While set, default-input changes must NOT restart the source.
+    explicit_mic_device: Arc<AtomicBool>,
     pub(super) run_task: Option<tokio::task::JoinHandle<()>>,
     pub(super) stream_cancel_token: Option<CancellationToken>,
     pub(super) current_mode: ChannelMode,
@@ -89,10 +93,11 @@ struct DeviceChangeWatcher {
 }
 
 impl DeviceChangeWatcher {
-    fn spawn(actor: ActorRef<SourceMsg>) -> Self {
+    fn spawn(actor: ActorRef<SourceMsg>, follow_default_input: Arc<AtomicBool>) -> Self {
         let (event_tx, event_rx) = mpsc::channel();
         let handle = DeviceSwitchMonitor::spawn_debounced(event_tx);
-        let thread = std::thread::spawn(move || Self::event_loop(event_rx, actor));
+        let thread =
+            std::thread::spawn(move || Self::event_loop(event_rx, actor, follow_default_input));
 
         Self {
             _handle: handle,
@@ -100,12 +105,22 @@ impl DeviceChangeWatcher {
         }
     }
 
-    fn event_loop(event_rx: Receiver<DeviceSwitch>, actor: ActorRef<SourceMsg>) {
+    fn event_loop(
+        event_rx: Receiver<DeviceSwitch>,
+        actor: ActorRef<SourceMsg>,
+        follow_default_input: Arc<AtomicBool>,
+    ) {
         loop {
             match event_rx.recv() {
                 Ok(DeviceSwitch::DefaultInputChanged) => {
-                    tracing::info!("default_input_changed_restarting_source");
-                    actor.stop(Some("device_change".to_string()));
+                    // Only follow OS default-input switches while the user has
+                    // not explicitly pinned an input device for this run.
+                    if follow_default_input.load(Ordering::Relaxed) {
+                        tracing::info!("default_input_changed_restarting_source");
+                        actor.stop(Some("device_change".to_string()));
+                    } else {
+                        tracing::info!("default_input_changed_ignored_explicit_device");
+                    }
                 }
                 Ok(_) => {}
                 Err(_) => break,
@@ -140,15 +155,17 @@ impl Actor for SourceActor {
                     session_id: session_id.clone(),
                 });
 
-            let device_watcher = DeviceChangeWatcher::spawn(myself.clone());
-
             let silence_stream_tx = Some(args.audio.play_silence());
+            let explicit_mic_device = Arc::new(AtomicBool::new(args.mic_device.is_some()));
             let mic_device = args
                 .mic_device
                 .or_else(|| Some(args.audio.default_device_name()));
             tracing::info!(mic_device = ?mic_device);
 
             let pipeline = Pipeline::new(args.runtime.clone(), args.session_id.clone());
+
+            let device_watcher =
+                DeviceChangeWatcher::spawn(myself.clone(), explicit_mic_device.clone());
 
             let mut st = SourceState {
                 runtime: args.runtime,
@@ -157,14 +174,15 @@ impl Actor for SourceActor {
                 mic_device,
                 onboarding: args.onboarding,
                 mic_muted: Arc::new(AtomicBool::new(false)),
+                explicit_mic_device,
                 run_task: None,
                 stream_cancel_token: None,
-                _device_watcher: Some(device_watcher),
-                _silence_stream_tx: silence_stream_tx,
                 current_mode: ChannelMode::MicAndSpeaker,
                 pipeline,
                 listener_routing: args.listener_routing,
                 recorder: args.recorder,
+                _device_watcher: Some(device_watcher),
+                _silence_stream_tx: silence_stream_tx,
             };
 
             start_source_loop(&myself, &mut st).await?;
@@ -196,6 +214,26 @@ impl Actor for SourceActor {
                 if !reply.is_closed() {
                     let _ = reply.send(st.mic_device.clone());
                 }
+            }
+            SourceMsg::SetMicDevice(device) => {
+                tracing::info!(?device, "switching_input_device");
+                st.mic_device = device.clone();
+                st.explicit_mic_device
+                    .store(device.is_some(), Ordering::Relaxed);
+
+                // Restart the capture stream with the new device. The session,
+                // listener routing and pipeline are untouched — only the raw
+                // PCM source is swapped, so the timeline stays continuous.
+                if let Some(token) = st.stream_cancel_token.take() {
+                    token.cancel();
+                }
+                if let Some(handle) = st.run_task.take() {
+                    if handle.await.is_err() {
+                        tracing::warn!("source_stream_task_join_failed");
+                    }
+                }
+
+                start_source_loop(&myself, st).await?;
             }
             SourceMsg::PrepareListenerRefresh(reply) => {
                 st.listener_routing = ListenerRouting::Buffering;

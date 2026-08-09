@@ -709,6 +709,7 @@ mod tests {
                 diarization_enabled: false,
                 diarization_model: None,
                 diarization_threshold: 0.35,
+                mic_device: None,
             },
             app_dir: std::env::temp_dir(),
             started_at_instant: Instant::now(),

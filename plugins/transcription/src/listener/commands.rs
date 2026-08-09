@@ -46,6 +46,18 @@ pub async fn set_mic_muted<R: tauri::Runtime>(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn set_mic_device<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    device: Option<String>,
+) -> Result<(), String> {
+    app.listener()
+        .set_mic_device(device)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn start_capture<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     params: CaptureParams,

@@ -129,7 +129,7 @@ pub async fn run_progressive_batch_from_file(
     let mut resampler = StreamingResampler::new(src_sample_rate, TARGET_SAMPLE_RATE);
     let mut src_index = 0usize;
 
-    let mut drain_diarization =
+    let drain_diarization =
         |manager: &mut ProgressiveBatchManager,
          engine: &mut Option<IncrementalDiarizationEngine>| {
             if let Some(eng) = engine.as_mut() {
@@ -368,7 +368,7 @@ async fn submit_file_direct(
             message: format!("failed to read response body: {e}"),
         })?;
 
-    let response: owhisper_interface::batch::Response = if matches!(
+    let mut response: owhisper_interface::batch::Response = if matches!(
         params.provider,
         crate::batch::BatchProvider::OpenAI | crate::batch::BatchProvider::Groq
     ) {
@@ -383,6 +383,12 @@ async fn submit_file_direct(
         })?
     };
 
+    // Short files (< segment_duration_ms) skip the VAD-grouped path, so run
+    // diarization here to keep speaker labels consistent with longer files.
+    if params.diarization_enabled {
+        annotate_diarization(file_path, params, &mut response);
+    }
+
     runtime.emit(BatchEvent::BatchSegmentResult {
         session_id: session_id.to_string(),
         segment_index: 0,
@@ -395,6 +401,105 @@ async fn submit_file_direct(
         mode: BatchRunMode::Direct,
         response,
     })
+}
+
+/// Decode an audio file to 16 kHz mono i16 samples for the diarization engine.
+fn decode_to_16k_mono_i16(path: &std::path::Path) -> Result<Vec<i16>, crate::BatchFailure> {
+    let source = hypr_audio_utils::source_from_path(path).map_err(|e| {
+        crate::BatchFailure::ProgressiveBatchFailed {
+            message: format!("failed to open audio file: {e}"),
+        }
+    })?;
+    let src_rate: u32 = source.sample_rate().into();
+    let channels: usize = source.channels().get().into();
+
+    let mut resampler = StreamingResampler::new(src_rate, TARGET_SAMPLE_RATE);
+    let mut out: Vec<i16> = Vec::new();
+    let mut src_index = 0usize;
+    let mut buf: Vec<f32> = Vec::new();
+    let to_i16 = |samples: Vec<f32>| {
+        samples
+            .into_iter()
+            .map(|s| (s * 32768.0).clamp(-32768.0, 32767.0) as i16)
+            .collect::<Vec<i16>>()
+    };
+    for sample in source {
+        buf.push(sample);
+        if buf.len() >= 4096 * channels {
+            let mono: Vec<f32> = if channels > 1 {
+                buf.chunks_exact(channels)
+                    .map(|c| c.iter().sum::<f32>() / channels as f32)
+                    .collect()
+            } else {
+                std::mem::take(&mut buf)
+            };
+            let mut resampled = Vec::new();
+            resampler.push(&mono, src_index, &mut resampled);
+            src_index += mono.len();
+            out.extend(to_i16(resampled));
+            buf.clear();
+        }
+    }
+    if !buf.is_empty() {
+        let mono: Vec<f32> = if channels > 1 {
+            buf.chunks_exact(channels)
+                .map(|c| c.iter().sum::<f32>() / channels as f32)
+                .collect()
+        } else {
+            buf
+        };
+        let mut resampled = Vec::new();
+        resampler.push(&mono, src_index, &mut resampled);
+        out.extend(to_i16(resampled));
+    }
+    Ok(out)
+}
+
+fn annotate_diarization(
+    file_path: &std::path::Path,
+    params: &BatchParams,
+    response: &mut owhisper_interface::batch::Response,
+) {
+    let samples = match decode_to_16k_mono_i16(file_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "diarization decode failed, skipping");
+            return;
+        }
+    };
+    if samples.is_empty() {
+        return;
+    }
+
+    let mut engine = match IncrementalDiarizationEngine::new(IncrementalDiarizationConfig {
+        sample_rate: TARGET_SAMPLE_RATE,
+        model_path: params.diarization_model.clone(),
+        threshold: params.diarization_threshold,
+        recluster_interval: 5,
+        ..Default::default()
+    }) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(error = %e, "diarization engine init failed, skipping");
+            return;
+        }
+    };
+
+    if let Err(e) = engine.feed_pcm(&samples) {
+        tracing::warn!(error = %e, "diarization feed failed, skipping");
+        return;
+    }
+    engine.finalize();
+
+    for channel in &mut response.results.channels {
+        for alt in &mut channel.alternatives {
+            for word in &mut alt.words {
+                let mid = (word.start + word.end) / 2.0;
+                word.speaker = engine.speaker_at_time(mid);
+            }
+        }
+    }
+    propagate_speaker_to_none(response);
 }
 
 /// Continue a previously interrupted/partial progressive batch.

@@ -3,6 +3,7 @@ const COMMANDS: &[&str] = &[
     "get_current_microphone_device",
     "get_mic_muted",
     "set_mic_muted",
+    "set_mic_device",
     "start_capture",
     "stop_capture",
     "get_capture_state",
