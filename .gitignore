@@ -38,3 +38,6 @@ crates/pyannote-local/tests/models/*.onnx
 # Test logs
 progressive_batch-test.log
 
+
+# Tauri updater signing keys (never commit private key)
+apps/desktop/src-tauri/.signing/
