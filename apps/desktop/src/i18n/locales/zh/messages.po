@@ -15,83 +15,83 @@ msgstr ""
 
 #: src/settings/general/notification.tsx
 msgid "(default)"
-msgstr ""
+msgstr "（默认）"
 
 #. placeholder {0}: issue.user?.login
 #: src/task/resource-view.tsx
 msgid "{0} opened on"
-msgstr ""
+msgstr "{0} 打开于"
 
 #. placeholder {0}: formatLanguageList(unsupportedLanguages)
 #: src/settings/ai/stt/select.tsx
 msgid "{model} can't transcribe {0}. Try another model or change your spoken languages."
-msgstr ""
+msgstr "{model} 无法转写 {0}。请尝试其他模型或更改您的口语语言。"
 
 #: src/settings/ai/stt/select.tsx
 msgid "{model} can't transcribe all selected languages together. Try another model or use fewer spoken languages."
-msgstr ""
+msgstr "{model} 无法同时转写所有所选语言。请尝试其他模型或减少口语语言。"
 
 #: src/settings/general/account.tsx
 msgid "{trialDaysRemaining} day left"
-msgstr ""
+msgstr "剩余 {trialDaysRemaining} 天"
 
 #: src/settings/general/account.tsx
 msgid "{trialDaysRemaining} days left"
-msgstr ""
+msgstr "剩余 {trialDaysRemaining} 天"
 
 #: src/settings/general/storage/index.tsx
 msgid "1 day"
-msgstr ""
+msgstr "1 天"
 
 #: src/settings/general/storage/index.tsx
 msgid "1 month"
-msgstr ""
+msgstr "1 个月"
 
 #: src/settings/general/storage/index.tsx
 msgid "1 week"
-msgstr ""
+msgstr "1 周"
 
 #: src/settings/general/storage/index.tsx
 msgid "3 days"
-msgstr ""
+msgstr "3 天"
 
 #: src/templates/template-sidebar.tsx
 msgid "A to Z"
-msgstr ""
+msgstr "A 到 Z"
 
 #: src/settings/general/permissions.tsx
 msgid "Accessibility"
-msgstr ""
+msgstr "无障碍"
 
 #: src/onboarding/index.tsx
 #: src/settings/general/account.tsx
 #: src/sidebar/settings.tsx
 msgid "Account"
-msgstr ""
+msgstr "账户"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Activity"
-msgstr ""
+msgstr "活动"
 
 #: src/contacts/shared.tsx
 #: src/settings/personalization/index.tsx
 #: src/settings/todo/github.tsx
 msgid "Add"
-msgstr ""
+msgstr "添加"
 
 #. placeholder {0}: option.name
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
 msgid "Add \"{0}\""
-msgstr ""
+msgstr "添加“{0}”"
 
 #. placeholder {0}: provider.displayName
 #: src/calendar/components/sidebar.tsx
 msgid "Add {0} account"
-msgstr ""
+msgstr "添加 {0} 账户"
 
 #: src/session/components/note-input/enhanced/config-error.tsx
 msgid "Add API key"
-msgstr ""
+msgstr "添加 API 密钥"
 
 #: src/settings/general/spoken-languages.tsx
 msgid "Add language"
@@ -99,23 +99,23 @@ msgstr "添加语言"
 
 #: src/settings/personalization/index.tsx
 msgid "Add names, jargon, or product terms to prefer"
-msgstr ""
+msgstr "添加希望优先识别的名称、行话或产品术语"
 
 #: src/contacts/details.tsx
 msgid "Add notes about this contact..."
-msgstr ""
+msgstr "添加关于此联系人的备注…"
 
 #: src/contacts/details.tsx
 msgid "Add organization"
-msgstr ""
+msgstr "添加组织"
 
 #: src/contacts/new-person-form.tsx
 msgid "Add person"
-msgstr ""
+msgstr "添加人员"
 
 #: src/settings/todo/github.tsx
 msgid "Add repository"
-msgstr ""
+msgstr "添加仓库"
 
 #: src/settings/general/spoken-languages.tsx
 msgid "Add spoken language"
@@ -127,31 +127,31 @@ msgstr "其他口语语言"
 
 #: src/settings/ai/shared/index.tsx
 msgid "Advanced"
-msgstr ""
+msgstr "高级"
 
 #: src/settings/ai/stt/select.tsx
 msgid "After recording"
-msgstr ""
+msgstr "录音后"
 
 #: src/contacts/details.tsx
 msgid "AI-generated summary of all interactions and notes with this contact will appear here. This will synthesize key discussion points, action items, and relationship context across all meetings and notes."
-msgstr ""
+msgstr "与这位联系人的所有互动和笔记的 AI 摘要将显示在这里。它将综合所有会议和笔记中的关键讨论点、行动项和关系背景。"
 
 #: src/shared/open-note-dialog.tsx
 msgid "All Notes"
-msgstr ""
+msgstr "全部笔记"
 
 #: src/onboarding/permissions.tsx
 msgid "Allow access"
-msgstr ""
+msgstr "允许访问"
 
 #: src/onboarding/permissions.tsx
 msgid "Allow microphone access"
-msgstr ""
+msgstr "允许麦克风访问"
 
 #: src/onboarding/permissions.tsx
 msgid "Allow system audio access"
-msgstr ""
+msgstr "允许系统音频访问"
 
 #: src/settings/general/app-settings.tsx
 msgid "Always ready without manually launching."
@@ -159,39 +159,39 @@ msgstr "无需手动启动，随时就绪。"
 
 #: src/session/components/note-input/enhanced/streaming.tsx
 msgid "Analyzing structure..."
-msgstr ""
+msgstr "正在分析结构…"
 
 #: src/onboarding/permissions.tsx
 msgid "Anarlog can hear others"
-msgstr ""
+msgstr "Anarlog 可以听到他人"
 
 #: src/onboarding/permissions.tsx
 msgid "Anarlog can hear your voice"
-msgstr ""
+msgstr "Anarlog 可以听到您的声音"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Anarlog could not verify the migration status"
-msgstr ""
+msgstr "Anarlog 无法验证迁移状态"
 
 #: src/settings/general/account.tsx
 msgid "Anarlog couldn't sign you out. Try again."
-msgstr ""
+msgstr "Anarlog 无法退出登录。请重试。"
 
 #: src/onboarding/index.tsx
 msgid "Anarlog needs access to your microphone and system audio to record and transcribe your meetings"
-msgstr ""
+msgstr "Anarlog 需要访问您的麦克风和系统音频来录制和转写您的会议。"
 
 #: src/onboarding/index.tsx
 msgid "Anarlog will sync your calendar to get meeting reminders"
-msgstr ""
+msgstr "Anarlog 将同步您的日历以获取会议提醒"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Animals & Nature"
-msgstr ""
+msgstr "动物与自然"
 
 #: src/settings/ai/shared/index.tsx
 msgid "API Key"
-msgstr ""
+msgstr "API 密钥"
 
 #: src/settings/general/index.tsx
 #: src/sidebar/settings.tsx
@@ -200,48 +200,52 @@ msgstr "应用"
 
 #: src/settings/general/theme.tsx
 msgid "Appearance"
-msgstr ""
+msgstr "外观"
 
 #: src/settings/personalization/index.tsx
 msgid "Applied to every generated or regenerated meeting summary."
-msgstr ""
+msgstr "应用于每个生成或重新生成的会议摘要。"
+
+#: src/settings/ai/stt/select.tsx
+msgid "Apply jieba segmentation and acoustic word grouping to Chinese transcription results"
+msgstr "对中文转写结果应用 jieba 分词和声学词组"
 
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
 msgid "Apply to all"
-msgstr ""
+msgstr "应用到全部"
 
 #: src/chat/components/input/index.tsx
 msgid "Ask & search about anything, or be creative!"
-msgstr ""
+msgstr "询问和搜索任何内容，或发挥创意！"
 
 #: src/shared/chat-cta.tsx
 msgid "Ask Anarlog anything"
-msgstr ""
+msgstr "向 Anarlog 询问任何问题"
 
 #: src/chat/components/input/index.tsx
 #: src/shared/chat-cta.tsx
 msgid "Ask anything"
-msgstr ""
+msgstr "询问任何问题"
 
 #: src/task/resource-view.tsx
 msgid "Assignees:"
-msgstr ""
+msgstr "指派对象："
 
 #: src/settings/general/permissions.tsx
 msgid "Audio"
-msgstr ""
+msgstr "音频"
 
 #: src/settings/general/storage/index.tsx
 msgid "Audio file retention"
-msgstr ""
+msgstr "音频文件保留"
 
 #: src/instruction/index.tsx
 msgid "Authorize access in your browser, then return to Anarlog."
-msgstr ""
+msgstr "在浏览器中授权访问，然后返回 Anarlog。"
 
 #: src/settings/general/notification.tsx
 msgid "Automatically detect when a meeting starts based on microphone activity."
-msgstr ""
+msgstr "根据麦克风活动自动检测会议何时开始。"
 
 #: src/settings/general/app-settings.tsx
 msgid "Automatically start listening when an event-backed note reaches its scheduled start time."
@@ -255,589 +259,605 @@ msgstr "当会议应用释放麦克风时，自动停止聆听。"
 #: src/instruction/index.tsx
 #: src/sidebar/custom-sidebar-header.tsx
 msgid "Back"
-msgstr ""
+msgstr "返回"
 
 #: src/settings/ai/shared/index.tsx
 msgid "Base URL"
-msgstr ""
+msgstr "基础 URL"
+
+#: src/settings/ai/stt/select.tsx
+msgid "Batch"
+msgstr "批量"
 
 #: src/instruction/index.tsx
 msgid "Browser handoff not working? Paste the callback link instead"
-msgstr ""
+msgstr "浏览器跳转无效？请粘贴回调链接"
 
 #: src/calendar/components/sidebar.tsx
 #: src/settings/general/permissions.tsx
 #: src/sidebar/calendar.tsx
 #: src/sidebar/settings.tsx
 msgid "Calendar"
-msgstr ""
+msgstr "日历"
 
 #: src/onboarding/index.tsx
 msgid "Calendar connected"
-msgstr ""
+msgstr "日历已连接"
 
 #: src/settings/ai/stt/select.tsx
 msgid "Can transcribe while the meeting is happening."
-msgstr ""
+msgstr "可在会议进行时实时转写。"
 
 #: src/settings/general/account.tsx
 #: src/settings/general/storage/legacy-cleanup.tsx
 #: src/settings/todo/github.tsx
 msgid "Cancel"
-msgstr ""
+msgstr "取消"
 
 #: src/session/components/outer-header/metadata/date.tsx
 msgid "Cancel date edit"
-msgstr ""
+msgstr "取消日期编辑"
 
 #: src/onboarding/folder-location.tsx
 msgid "Change"
-msgstr ""
+msgstr "更改"
 
 #: src/chat/components/toolbar-controls.tsx
 msgid "Chat history"
-msgstr ""
+msgstr "聊天记录"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Checking migration..."
-msgstr ""
+msgstr "正在检查迁移…"
 
 #: src/onboarding/account/after-login.tsx
 msgid "Checking trial eligibility..."
-msgstr ""
+msgstr "正在检查试用资格…"
 
 #: src/session/components/outer-header/overflow/export-modal.tsx
 msgid "Choose a file format and what to include."
-msgstr ""
+msgstr "选择文件格式和要包含的内容。"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Choose custom color"
-msgstr ""
+msgstr "选择自定义颜色"
 
 #: src/settings/general/theme.tsx
 msgid "Choose light, dark, or match your system setting."
-msgstr ""
+msgstr "选择浅色、深色或跟随系统设置。"
 
 #: src/onboarding/folder-location.tsx
 msgid "Choose storage location"
-msgstr ""
+msgstr "选择存储位置"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Choose template icon"
-msgstr ""
+msgstr "选择模板图标"
+
+#: src/settings/ai/stt/select.tsx
+msgid "CJK (Server)"
+msgstr "CJK（服务端）"
+
+#: src/settings/ai/stt/select.tsx
+msgid "CJK post-processing (Local)"
+msgstr "CJK 后处理（本地）"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Clean Up"
-msgstr ""
+msgstr "清理"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Clean up legacy files?"
-msgstr ""
+msgstr "清理旧版文件？"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Cleaning up..."
-msgstr ""
+msgstr "正在清理…"
 
 #: src/contacts/shared.tsx
 #: src/templates/template-sidebar.tsx
 msgid "Clear search"
-msgstr ""
+msgstr "清除搜索"
 
 #: src/shared/ui/resource-list/preview-header.tsx
 msgid "Clone"
-msgstr ""
+msgstr "克隆"
 
 #: src/changelog/index.tsx
 #: src/session/components/note-input/search/bar.tsx
 #: src/shared/open-note-dialog.tsx
 msgid "Close"
-msgstr ""
+msgstr "关闭"
 
 #: src/changelog/index.tsx
 msgid "Close changelog"
-msgstr ""
+msgstr "关闭更新日志"
 
 #: src/chat/components/toolbar-controls.tsx
 msgid "Close chat"
-msgstr ""
+msgstr "关闭聊天"
 
 #: src/task/resource-view.tsx
 msgid "Closed"
-msgstr ""
+msgstr "已关闭"
 
 #: src/task/resource-view.tsx
 msgid "comment"
-msgstr ""
+msgstr "评论"
 
 #: src/task/resource-view.tsx
 msgid "commented on"
-msgstr ""
+msgstr "评论于"
 
 #: src/task/resource-view.tsx
 msgid "comments"
-msgstr ""
+msgstr "评论"
 
 #: src/contacts/details.tsx
 msgid "Company"
-msgstr ""
+msgstr "公司"
 
 #: src/settings/general/account.tsx
 msgid "Compare Free and Pro before you sign in."
-msgstr ""
+msgstr "登录前比较免费版和 Pro 版。"
 
 #: src/instruction/index.tsx
 msgid "Complete sign-in in your browser, then return to Anarlog."
-msgstr ""
+msgstr "在浏览器中完成登录，然后返回 Anarlog。"
 
 #: src/settings/general/account.tsx
 msgid "Complete the sign-in flow in your browser, then come back here if Anarlog does not reconnect automatically."
-msgstr ""
+msgstr "在浏览器中完成登录流程，如果 Anarlog 没有自动重连，请回到这里。"
 
 #: src/instruction/index.tsx
 msgid "Complete your purchase"
-msgstr ""
+msgstr "完成您的购买"
 
 #: src/session/components/floating/options-menu.tsx
 msgid "Configure"
-msgstr ""
+msgstr "配置"
 
 #: src/settings/ai/llm/configure.tsx
 #: src/settings/ai/stt/configure.tsx
 msgid "Configure Providers"
-msgstr ""
+msgstr "配置服务商"
 
 #: src/onboarding/folder-location.tsx
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
 msgid "Confirm"
-msgstr ""
+msgstr "确认"
 
 #. placeholder {0}: config.displayName
 #. placeholder {0}: integration.displayName
 #: src/instruction/index.tsx
 #: src/settings/todo/provider-content.tsx
 msgid "Connect {0}"
-msgstr ""
+msgstr "连接 {0}"
 
 #: src/onboarding/index.tsx
 msgid "Connect calendar"
-msgstr ""
+msgstr "连接日历"
 
 #: src/settings/todo/github.tsx
 msgid "Connect GitHub for private repos."
-msgstr ""
+msgstr "连接 GitHub 以访问私有仓库。"
 
 #: src/onboarding/calendar.tsx
 msgid "Connect Google Calendar"
-msgstr ""
+msgstr "连接 Google 日历"
 
 #: src/onboarding/calendar.tsx
 msgid "Connect Outlook"
-msgstr ""
+msgstr "连接 Outlook"
 
 #: src/instruction/index.tsx
 msgid "Connect your integration"
-msgstr ""
+msgstr "连接您的集成"
 
 #: src/sidebar/contacts.tsx
 #: src/sidebar/settings.tsx
 msgid "Contacts"
-msgstr ""
+msgstr "联系人"
 
 #: src/sidebar/settings.tsx
 msgid "Context"
-msgstr ""
+msgstr "上下文"
 
 #: src/onboarding/calendar.tsx
 msgid "Continue"
-msgstr ""
+msgstr "继续"
 
 #: src/onboarding/account/after-login.tsx
 msgid "Continuing without trial"
-msgstr ""
+msgstr "在无试用的情况下继续"
 
 #: src/chat/components/message/normal.tsx
 msgid "Copy message"
-msgstr ""
+msgstr "复制消息"
 
 #: src/onboarding/account/after-login.tsx
 msgid "Could not start trial"
-msgstr ""
+msgstr "无法开始试用"
 
 #: src/onboarding/index.tsx
 msgid "Create account"
-msgstr ""
+msgstr "创建账户"
 
 #: src/templates/details.tsx
 msgid "Create template"
-msgstr ""
+msgstr "创建模板"
 
 #: src/session/components/outer-header/overflow/export-modal.tsx
 msgid "Created"
-msgstr ""
+msgstr "已创建"
 
 #: src/settings/general/theme.tsx
 msgid "Dark"
-msgstr ""
+msgstr "深色"
 
 #: src/session/components/outer-header/metadata/date.tsx
 msgid "Date and time are required"
-msgstr ""
+msgstr "必须提供日期和时间"
 
 #: src/session/components/outer-header/overflow/delete.tsx
 #: src/templates/sections-editor.tsx
 #: src/templates/template-form.tsx
 msgid "Delete"
-msgstr ""
+msgstr "删除"
 
 #: src/sidebar/timeline/item.tsx
 msgid "Delete All Recurring Events"
-msgstr ""
+msgstr "删除所有重复事件"
 
 #: src/sidebar/timeline/item.tsx
 msgid "Delete Event"
-msgstr ""
+msgstr "删除事件"
 
 #: src/settings/ai/stt/select.tsx
 msgid "Delete model"
-msgstr ""
+msgstr "删除模型"
 
 #: src/sidebar/timeline/item.tsx
 msgid "Delete Note"
-msgstr ""
+msgstr "删除笔记"
 
 #: src/session/components/outer-header/overflow/delete.tsx
 msgid "Delete recording"
-msgstr ""
+msgstr "删除录音"
 
 #: src/sidebar/timeline/index.tsx
 msgid "Delete Selected ({sessionCount})"
-msgstr ""
+msgstr "删除所选（{sessionCount}）"
 
 #: src/sidebar/timeline/item.tsx
 msgid "Delete This Event"
-msgstr ""
+msgstr "删除此事件"
 
 #: src/session/components/outer-header/overflow/delete.tsx
 msgid "Deleting..."
-msgstr ""
+msgstr "正在删除…"
 
 #: src/templates/template-form.tsx
 msgid "Describe the template purpose..."
-msgstr ""
+msgstr "描述模板用途…"
 
 #: src/settings/general/notification.tsx
 msgid "Detection delay"
-msgstr ""
+msgstr "检测延迟"
 
 #: src/sidebar/settings.tsx
 msgid "Developers"
-msgstr ""
+msgstr "开发者"
 
 #: src/settings/personalization/index.tsx
 msgid "Dictionary"
-msgstr ""
+msgstr "词典"
 
 #: src/settings/todo/provider-content.tsx
 msgid "Disconnect"
-msgstr ""
+msgstr "断开连接"
 
 #: src/settings/todo/github.tsx
 msgid "Disconnect private repo access."
-msgstr ""
+msgstr "断开私有仓库访问。"
 
 #: src/settings/general/storage/index.tsx
 msgid "Don't save"
-msgstr ""
+msgstr "不保存"
 
 #: src/settings/general/notification.tsx
 msgid "Don't show notifications when Do-Not-Disturb is enabled on your system"
-msgstr ""
+msgstr "当系统开启勿扰模式时不显示通知"
 
 #: src/settings/ai/stt/select.tsx
 msgid "Download"
-msgstr ""
+msgstr "下载"
 
 #: src/templates/details.tsx
 #: src/templates/template-form.tsx
 msgid "Duplicate"
-msgstr ""
+msgstr "复制"
 
 #: src/session/components/outer-header/overflow/export-modal.tsx
 msgid "Duration"
-msgstr ""
+msgstr "时长"
 
 #: src/session/components/outer-header/metadata/date.tsx
 msgid "Edit date"
-msgstr ""
+msgstr "编辑日期"
 
 #: src/onboarding/account/after-login.tsx
 msgid "Eligible for free trial"
-msgstr ""
+msgstr "符合免费试用条件"
 
 #: src/contacts/details.tsx
 msgid "Email"
-msgstr ""
+msgstr "电子邮件"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Emojis"
-msgstr ""
+msgstr "表情符号"
 
 #. placeholder {0}: permissionName.toLowerCase()
 #: src/onboarding/permissions.tsx
 msgid "Enable {0}"
-msgstr ""
+msgstr "启用 {0}"
 
 #: src/session/components/outer-header/metadata/participants/chip.tsx
 msgid "Enhance contact"
-msgstr ""
+msgstr "增强联系人"
 
 #: src/session/components/outer-header/metadata/participants/chip.tsx
 msgid "Enhance contact {label}"
-msgstr ""
+msgstr "增强联系人 {label}"
 
 #: src/settings/ai/stt/select.tsx
 msgid "Enter a model identifier"
-msgstr ""
+msgstr "输入模型标识符"
 
 #: src/session/components/outer-header/metadata/date.tsx
 msgid "Enter a valid date and time"
-msgstr ""
+msgstr "输入有效的日期和时间"
 
 #: src/templates/template-form.tsx
 msgid "Enter template title"
-msgstr ""
+msgstr "输入模板标题"
 
 #: src/settings/ai/shared/index.tsx
 msgid "Enter your API key"
-msgstr ""
+msgstr "输入您的 API 密钥"
 
 #: src/settings/ai/shared/index.tsx
 msgid "Enter your API key (optional)"
-msgstr ""
+msgstr "输入您的 API 密钥（可选）"
 
 #: src/settings/general/notification.tsx
 msgid "Event notifications"
-msgstr ""
+msgstr "事件通知"
 
 #: src/settings/personalization/index.tsx
 msgid "Example: Start with a two-sentence overview, then list decisions and action items with owners. Do not use headings."
-msgstr ""
+msgstr "示例：先写两句话的概述，然后列出决策和带有负责人的行动项。不要使用标题。"
 
 #: src/settings/general/notification.tsx
 msgid "Exclude apps from detection"
-msgstr ""
+msgstr "从检测中排除应用"
 
 #: src/session/components/outer-header/overflow/export-modal.tsx
 #: src/session/components/outer-header/overflow/index.tsx
 msgid "Export"
-msgstr ""
+msgstr "导出"
 
 #: src/session/components/outer-header/overflow/export-modal.tsx
 msgid "Exporting..."
-msgstr ""
+msgstr "正在导出…"
 
 #: src/onboarding/calendar.tsx
 msgid "Failed to load Google Calendar"
-msgstr ""
+msgstr "加载 Google 日历失败"
 
 #: src/settings/todo/provider-content.tsx
 msgid "Failed to load integration status"
-msgstr ""
+msgstr "加载集成状态失败"
 
 #: src/task/resource-view.tsx
 msgid "Failed to load issue"
-msgstr ""
+msgstr "加载问题失败"
 
 #: src/onboarding/calendar.tsx
 msgid "Failed to load Outlook Calendar"
-msgstr ""
+msgstr "加载 Outlook 日历失败"
 
 #: src/task/resource-view.tsx
 msgid "Failed to load pull request"
-msgstr ""
+msgstr "加载拉取请求失败"
 
 #: src/templates/details.tsx
 msgid "Favorite template"
-msgstr ""
+msgstr "收藏模板"
 
 #: src/session/components/outer-header/overflow/export-modal.tsx
 msgid "File format"
-msgstr ""
+msgstr "文件格式"
 
 #. placeholder {0}: (config.filterLabel ?? "repository").toLowerCase()
 #: src/settings/todo/provider-content.tsx
 msgid "Filter synced items by {0}."
-msgstr ""
+msgstr "按 {0} 过滤同步的项目。"
 
 #: src/shared/open-note-dialog.tsx
 msgid "Find a note..."
-msgstr ""
+msgstr "查找笔记…"
 
 #: src/instruction/index.tsx
 msgid "Finish checkout in your browser, then return to Anarlog."
-msgstr ""
+msgstr "在浏览器中完成结账，然后返回 Anarlog。"
 
 #: src/settings/general/account.tsx
 msgid "Finish sign-in"
-msgstr ""
+msgstr "完成登录"
 
 #: src/settings/general/week-start.tsx
 msgid "First day of the week in the calendar view"
-msgstr ""
+msgstr "日历视图中的每周第一天"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Flags"
-msgstr ""
+msgstr "标志"
 
 #: src/chat/components/toolbar-controls.tsx
 msgid "Float chat"
-msgstr ""
+msgstr "浮动聊天"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Food & Drink"
-msgstr ""
+msgstr "食物与饮料"
 
 #: src/settings/general/notification.tsx
 msgid "For enabled notifications"
-msgstr ""
+msgstr "用于已启用的通知"
 
 #: src/settings/general/storage/index.tsx
 msgid "Forever"
-msgstr ""
+msgstr "永久"
 
 #: src/settings/general/account.tsx
 msgid "Free"
-msgstr ""
+msgstr "免费"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Frequently used"
-msgstr ""
+msgstr "常用"
 
 #: src/sidebar/settings.tsx
 msgid "General"
-msgstr ""
+msgstr "通用"
 
 #: src/session/components/note-input/enhanced/streaming.tsx
 #: src/session/components/title-input.tsx
 msgid "Generating title..."
-msgstr ""
+msgstr "正在生成标题…"
 
 #: src/settings/general/notification.tsx
 msgid "Get notified 5 minutes before calendar events start"
-msgstr ""
+msgstr "在日历事件开始前 5 分钟收到通知"
 
 #: src/session/components/note-input/enhanced/config-error.tsx
 msgid "Get Pro"
-msgstr ""
+msgstr "获取 Pro"
 
 #: src/settings/general/account.tsx
 msgid "Get started"
-msgstr ""
+msgstr "开始使用"
 
 #: src/onboarding/account/before-login.tsx
 msgid "Get started for free"
-msgstr ""
+msgstr "免费开始"
 
 #: src/sidebar/timeline/index.tsx
 msgid "Go back to now"
-msgstr ""
+msgstr "回到当前时间"
 
 #: src/sidebar/custom-sidebar-header.tsx
 msgid "Go home"
-msgstr ""
+msgstr "返回首页"
 
 #: src/onboarding/shared.tsx
 msgid "Go to next section"
-msgstr ""
+msgstr "转到下一节"
 
 #: src/onboarding/shared.tsx
 msgid "Go to previous section"
-msgstr ""
+msgstr "转到上一节"
 
 #: src/chat/components/body/index.tsx
 msgid "Go to recent"
-msgstr ""
+msgstr "转到最近"
 
 #: src/settings/ai/stt/select.tsx
 msgid "Got it"
-msgstr ""
+msgstr "知道了"
 
 #: src/calendar/components/apple/permission.tsx
 msgid "Having trouble?"
-msgstr ""
+msgstr "遇到问题？"
 
 #: src/onboarding/permissions.tsx
 msgid "Help Anarlog listen to others"
-msgstr ""
+msgstr "帮助 Anarlog 听到他人"
 
 #: src/onboarding/permissions.tsx
 msgid "Help Anarlog listen to you"
-msgstr ""
+msgstr "帮助 Anarlog 听到您"
 
 #: src/sidebar/timeline/index.tsx
 msgid "Hide Deleted Events"
-msgstr ""
+msgstr "隐藏已删除事件"
 
 #: src/settings/general/notification.tsx
 msgid "How long the mic must be active before triggering"
-msgstr ""
+msgstr "麦克风在触发前必须保持活跃的时长"
 
 #: src/contacts/humans.tsx
 msgid "Human"
-msgstr ""
+msgstr "人员"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Icons"
-msgstr ""
+msgstr "图标"
+
+#: src/settings/ai/stt/select.tsx
+msgid "Identify who spoke when using speaker embedding models"
+msgstr "使用说话人嵌入模型识别谁在何时说话"
 
 #: src/settings/general/account.tsx
 msgid "If the browser does not reopen Anarlog, use the paste-link fallback in the sign-in instruction window."
-msgstr ""
+msgstr "如果浏览器没有重新打开 Anarlog，请在登录说明窗口中使用粘贴链接的备用方式。"
 
 #: src/sidebar/timeline/upcoming-meeting.ts
 msgid "In {minutes}m {seconds}s"
-msgstr ""
+msgstr "在 {minutes} 分 {seconds} 秒内"
 
 #: src/sidebar/timeline/upcoming-meeting.ts
 msgid "In {totalSeconds}s"
-msgstr ""
+msgstr "在 {totalSeconds} 秒内"
 
 #: src/session/components/outer-header/overflow/export-modal.tsx
 msgid "Include"
-msgstr ""
+msgstr "包含"
 
 #: src/templates/sections-editor.tsx
 msgid "Insert above"
-msgstr ""
+msgstr "在上方插入"
 
 #: src/templates/sections-editor.tsx
 msgid "Insert below"
-msgstr ""
+msgstr "在下方插入"
 
 #: src/settings/ai/llm/index.tsx
 #: src/sidebar/settings.tsx
 msgid "Intelligence"
-msgstr ""
+msgstr "智能"
 
 #: src/contacts/details.tsx
 msgid "Job Title"
-msgstr ""
+msgstr "职位"
 
 #: src/session/components/outer-header/index.tsx
 msgid "Join & record"
-msgstr ""
+msgstr "加入并录制"
 
 #: src/session/components/outer-header/index.tsx
 msgid "Join meeting and record"
-msgstr ""
+msgstr "加入会议并录制"
 
 #: src/onboarding/final.tsx
 msgid "Join our community and stay updated:"
-msgstr ""
+msgstr "加入我们的社区并保持更新："
 
 #: src/settings/general/app-settings.tsx
 msgid "Keep Anarlog available from the menu bar."
-msgstr ""
+msgstr "让 Anarlog 在菜单栏中保持可用。"
 
 #: src/settings/general/index.tsx
 msgid "Language & Region"
@@ -849,44 +869,44 @@ msgstr "摘要、聊天和 AI 生成回复使用的语言"
 
 #: src/settings/ai/llm/select.tsx
 msgid "Language model is needed to make Anarlog summarize and chat about your conversations."
-msgstr ""
+msgstr "需要语言模型才能让 Anarlog 总结和聊您的对话。"
 
 #: src/chat/components/message/error.tsx
 msgid "Learn how to fix this"
-msgstr ""
+msgstr "了解如何修复此问题"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Legacy JSON and Markdown files were removed"
-msgstr ""
+msgstr "旧版 JSON 和 Markdown 文件已移除"
 
 #: src/settings/general/theme.tsx
 msgid "Light"
-msgstr ""
+msgstr "浅色"
 
 #: src/contacts/details.tsx
 msgid "LinkedIn"
-msgstr ""
+msgstr "LinkedIn"
 
 #: src/settings/ai/stt/select.tsx
 msgid "Live"
-msgstr ""
+msgstr "实时"
 
 #: src/calendar/components/calendar-selection.tsx
 msgid "Loading calendars..."
-msgstr ""
+msgstr "正在加载日历…"
 
 #: src/settings/ai/shared/model-combobox.tsx
 msgid "Loading models..."
-msgstr ""
+msgstr "正在加载模型…"
 
 #: src/changelog/index.tsx
 #: src/task/resource-view.tsx
 msgid "Loading..."
-msgstr ""
+msgstr "正在加载…"
 
 #: src/onboarding/account/before-login.tsx
 msgid "Login with existing account"
-msgstr ""
+msgstr "使用现有账户登录"
 
 #: src/settings/general/main-language.tsx
 msgid "Main language"
@@ -894,23 +914,23 @@ msgstr "主要语言"
 
 #: src/onboarding/permissions.tsx
 msgid "Manage"
-msgstr ""
+msgstr "管理"
 
 #: src/settings/general/account.tsx
 msgid "Manage billing"
-msgstr ""
+msgstr "管理账单"
 
 #: src/session/components/note-input/search/bar.tsx
 msgid "Match case"
-msgstr ""
+msgstr "区分大小写"
 
 #: src/session/components/note-input/search/bar.tsx
 msgid "Match whole word"
-msgstr ""
+msgstr "全词匹配"
 
 #: src/sidebar/timeline/index.tsx
 msgid "Meeting"
-msgstr ""
+msgstr "会议"
 
 #: src/settings/general/app-settings.tsx
 msgid "Meetings"
@@ -918,138 +938,146 @@ msgstr "会议"
 
 #: src/contacts/organization-details.tsx
 msgid "member"
-msgstr ""
+msgstr "成员"
 
 #: src/contacts/organization-details.tsx
 msgid "members"
-msgstr ""
+msgstr "成员"
 
 #: src/session/components/outer-header/overflow/export-modal.tsx
 msgid "Memo"
-msgstr ""
+msgstr "备忘"
 
 #: src/session/components/note-input/header.tsx
 msgid "Memos"
-msgstr ""
+msgstr "备忘"
 
 #: src/task/resource-view.tsx
 msgid "Merged"
-msgstr ""
+msgstr "已合并"
 
 #: src/session/components/outer-header/overflow/export-modal.tsx
 msgid "Metadata"
-msgstr ""
+msgstr "元数据"
 
 #: src/onboarding/permissions.tsx
 #: src/settings/general/permissions.tsx
 msgid "Microphone"
-msgstr ""
+msgstr "麦克风"
 
 #: src/onboarding/permissions.tsx
 msgid "Microphone access turned on"
-msgstr ""
+msgstr "麦克风访问已开启"
 
 #: src/settings/general/notification.tsx
 msgid "Microphone detection"
-msgstr ""
+msgstr "麦克风检测"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Migration complete"
-msgstr ""
+msgstr "迁移完成"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Migration needs attention"
-msgstr ""
+msgstr "迁移需要关注"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Migration status unavailable"
-msgstr ""
+msgstr "迁移状态不可用"
+
+#: src/settings/ai/stt/select.tsx
+msgid "Mode"
+msgstr "模式"
+
+#: src/settings/ai/stt/select.tsx
+msgid "Model"
+msgstr "模型"
 
 #: src/settings/ai/llm/select.tsx
 #: src/settings/ai/stt/select.tsx
 msgid "Model being used"
-msgstr ""
+msgstr "正在使用的模型"
 
 #: src/settings/general/week-start.tsx
 msgid "Monday"
-msgstr ""
+msgstr "星期一"
 
 #: src/session/components/floating/options-menu.tsx
 msgid "More options"
-msgstr ""
+msgstr "更多选项"
 
 #: src/templates/sections-editor.tsx
 msgid "Move down"
-msgstr ""
+msgstr "下移"
 
 #: src/templates/sections-editor.tsx
 msgid "Move up"
-msgstr ""
+msgstr "上移"
 
 #: src/contacts/details.tsx
 #: src/contacts/organization-details.tsx
 msgid "Name"
-msgstr ""
+msgstr "名称"
 
 #: src/chat/components/toolbar-controls.tsx
 msgid "New chat"
-msgstr ""
+msgstr "新聊天"
 
 #: src/main/empty.tsx
 msgid "New Note"
-msgstr ""
+msgstr "新笔记"
 
 #: src/contacts/shared.tsx
 msgid "Newest"
-msgstr ""
+msgstr "最新"
 
 #: src/session/components/note-input/search/bar.tsx
 msgid "Next match"
-msgstr ""
+msgstr "下一个匹配"
 
 #: src/settings/general/notification.tsx
 msgid "No apps found."
-msgstr ""
+msgstr "未找到应用。"
 
 #: src/calendar/components/calendar-selection.tsx
 msgid "No calendars found"
-msgstr ""
+msgstr "未找到日历"
 
 #: src/changelog/index.tsx
 msgid "No changelog available for this version."
-msgstr ""
+msgstr "此版本没有可用的更新日志。"
 
 #: src/templates/details.tsx
 msgid "No community templates available"
-msgstr ""
+msgstr "没有可用的社区模板"
 
 #: src/task/resource-view.tsx
 msgid "No content."
-msgstr ""
+msgstr "没有内容。"
 
 #: src/task/resource-view.tsx
 msgid "No description provided."
-msgstr ""
+msgstr "未提供描述。"
 
 #: src/templates/template-icon-picker.tsx
 msgid "No emoji found"
-msgstr ""
+msgstr "未找到表情符号"
 
 #: src/templates/template-icon-picker.tsx
 msgid "No icons found"
-msgstr ""
+msgstr "未找到图标"
 
 #: src/sidebar/timeline/index.tsx
 msgid "No items today"
-msgstr ""
+msgstr "今天没有项目"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "No legacy JSON or Markdown files remain"
-msgstr ""
+msgstr "没有剩余的旧版 JSON 或 Markdown 文件"
 
 #: src/settings/personalization/index.tsx
 msgid "No match"
-msgstr ""
+msgstr "无匹配"
 
 #: src/settings/general/main-language.tsx
 #: src/settings/general/spoken-languages.tsx
@@ -1058,52 +1086,52 @@ msgstr "未找到匹配的语言"
 
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
 msgid "No matching people"
-msgstr ""
+msgstr "没有匹配的人员"
 
 #: src/settings/ai/shared/model-combobox.tsx
 msgid "No models available."
-msgstr ""
+msgstr "没有可用的模型。"
 
 #: src/settings/ai/shared/model-combobox.tsx
 msgid "No models ready to use."
-msgstr ""
+msgstr "没有可用的模型。"
 
 #: src/shared/open-note-dialog.tsx
 msgid "No notes found."
-msgstr ""
+msgstr "未找到笔记。"
 
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
 msgid "No people"
-msgstr ""
+msgstr "没有人员"
 
 #: src/contacts/organization-details.tsx
 msgid "No people in this organization"
-msgstr ""
+msgstr "此组织中没有人员"
 
 #: src/chat/components/toolbar-controls.tsx
 msgid "No recent chats"
-msgstr ""
+msgstr "没有最近的聊天"
 
 #: src/contacts/details.tsx
 msgid "No related notes found"
-msgstr ""
+msgstr "未找到相关笔记"
 
 #: src/settings/ai/shared/model-combobox.tsx
 #: src/settings/general/searchable-select.tsx
 msgid "No results found."
-msgstr ""
+msgstr "未找到结果。"
 
 #: src/templates/details.tsx
 msgid "No templates yet"
-msgstr ""
+msgstr "还没有模板"
 
 #: src/session/components/title-breadcrumb.tsx
 msgid "Note breadcrumb"
-msgstr ""
+msgstr "笔记导航"
 
 #: src/contacts/details.tsx
 msgid "Notes"
-msgstr ""
+msgstr "笔记"
 
 #: src/settings/general/index.tsx
 #: src/sidebar/settings.tsx
@@ -1113,24 +1141,24 @@ msgstr "通知"
 #: src/sidebar/timeline/index.tsx
 #: src/sidebar/timeline/upcoming-meeting.ts
 msgid "Now"
-msgstr ""
+msgstr "现在"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Objects"
-msgstr ""
+msgstr "对象"
 
 #: src/contacts/shared.tsx
 msgid "Oldest"
-msgstr ""
+msgstr "最早"
 
 #: src/settings/todo/github.tsx
 msgid "Only public repositories are supported."
-msgstr ""
+msgstr "仅支持公共仓库。"
 
 #: src/calendar/components/apple/permission.tsx
 #: src/task/resource-view.tsx
 msgid "Open"
-msgstr ""
+msgstr "打开"
 
 #. placeholder {0}: permissionName.toLowerCase()
 #. placeholder {0}: title.toLowerCase()
@@ -1138,286 +1166,290 @@ msgstr ""
 #: src/onboarding/permissions.tsx
 #: src/settings/general/permissions.tsx
 msgid "Open {0} settings"
-msgstr ""
+msgstr "打开 {0} 设置"
 
 #: src/onboarding/final.tsx
 msgid "Open Anarlog"
-msgstr ""
+msgstr "打开 Anarlog"
 
 #: src/sidebar/timeline/index.tsx
 msgid "Open calendar"
-msgstr ""
+msgstr "打开日历"
 
 #: src/calendar/components/calendar-selection.tsx
 msgid "Open calendar account actions"
-msgstr ""
+msgstr "打开日历账户操作"
 
 #: src/session/components/outer-header/overflow/index.tsx
 msgid "Open floating panel"
-msgstr ""
+msgstr "打开浮动面板"
 
 #: src/session/components/outer-header/overflow/index.tsx
 #: src/sidebar/timeline/item.tsx
 msgid "Open in New Window"
-msgstr ""
+msgstr "在新窗口中打开"
 
 #: src/chat/components/toolbar-controls.tsx
 msgid "Open in right panel"
-msgstr ""
+msgstr "在右侧面板中打开"
 
 #: src/task/resource-view.tsx
 msgid "Open on GitHub"
-msgstr ""
+msgstr "在 GitHub 上打开"
 
 #: src/settings/todo/github.tsx
 msgid "Open repository on GitHub"
-msgstr ""
+msgstr "在 GitHub 上打开仓库"
 
 #: src/onboarding/permissions.tsx
 msgid "Open settings"
-msgstr ""
+msgstr "打开设置"
 
 #: src/calendar/components/apple/permission.tsx
 #: src/settings/todo/provider-content.tsx
 msgid "or"
-msgstr ""
+msgstr "或"
 
 #: src/contacts/details.tsx
 msgid "Organization"
-msgstr ""
+msgstr "组织"
 
 #: src/contacts/organization-details.tsx
 msgid "Organization name"
-msgstr ""
+msgstr "组织名称"
 
 #: src/settings/general/permissions.tsx
 msgid "Others"
-msgstr ""
+msgstr "其他"
 
 #: src/settings/general/timezone.tsx
 msgid "Override the timezone used for the sidebar timeline"
-msgstr ""
+msgstr "覆盖侧边栏时间轴使用的时区"
 
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
 #: src/session/components/outer-header/overflow/export-modal.tsx
 msgid "Participants"
-msgstr ""
+msgstr "参与者"
 
 #: src/instruction/index.tsx
 msgid "Paste the browser URL here if the browser button did not reopen Anarlog."
-msgstr ""
+msgstr "如果浏览器按钮没有重新打开 Anarlog，请将浏览器 URL 粘贴到这里。"
 
 #: src/contacts/organization-details.tsx
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
 msgid "People"
-msgstr ""
+msgstr "人员"
 
 #: src/calendar/components/apple/permission.tsx
 msgid "permission panel."
-msgstr ""
+msgstr "权限面板。"
 
 #: src/settings/general/index.tsx
 #: src/sidebar/settings.tsx
 msgid "Permissions"
-msgstr ""
+msgstr "权限"
 
 #: src/onboarding/index.tsx
 msgid "Permissions granted"
-msgstr ""
+msgstr "已授予权限"
 
 #: src/settings/personalization/index.tsx
 #: src/sidebar/settings.tsx
 msgid "Personalization"
-msgstr ""
+msgstr "个性化"
 
 #: src/contacts/details.tsx
 msgid "Phone"
-msgstr ""
+msgstr "电话"
 
 #: src/settings/general/account.tsx
 msgid "Plan & Billing"
-msgstr ""
+msgstr "套餐与账单"
 
 #: src/settings/general/account.tsx
 msgid "Plans"
-msgstr ""
+msgstr "套餐"
 
 #: src/session/components/outer-header/overflow/export-modal.tsx
 msgid "Preparing transcript..."
-msgstr ""
+msgstr "正在准备转录稿…"
 
 #: src/session/components/note-input/search/bar.tsx
 msgid "Previous match"
-msgstr ""
+msgstr "上一个匹配"
 
 #: src/settings/ai/stt/select.tsx
 msgid "Pro"
-msgstr ""
+msgstr "Pro"
 
 #: src/settings/general/account.tsx
 msgid "Pro trial"
-msgstr ""
+msgstr "Pro 试用"
+
+#: src/settings/ai/stt/select.tsx
+msgid "Progressive"
+msgstr "渐进式"
 
 #: src/onboarding/index.tsx
 msgid "Ready to go"
-msgstr ""
+msgstr "准备就绪"
 
 #: src/shared/open-note-dialog.tsx
 msgid "Recent"
-msgstr ""
+msgstr "最近"
 
 #: src/calendar/components/oauth/status.tsx
 #: src/settings/todo/provider-content.tsx
 msgid "Reconnect required"
-msgstr ""
+msgstr "需要重新连接"
 
 #: src/session/components/outer-header/index.tsx
 msgid "Record"
-msgstr ""
+msgstr "录制"
 
 #: src/settings/general/account.tsx
 msgid "Refresh billing status"
-msgstr ""
+msgstr "刷新账单状态"
 
 #: src/calendar/components/calendar-selection.tsx
 msgid "Refresh calendars"
-msgstr ""
+msgstr "刷新日历"
 
 #: src/chat/components/message/normal.tsx
 msgid "Regenerate message"
-msgstr ""
+msgstr "重新生成消息"
 
 #: src/contacts/details.tsx
 msgid "Related Notes"
-msgstr ""
+msgstr "相关笔记"
 
 #: src/settings/todo/provider-content.tsx
 msgid "Reminders"
-msgstr ""
+msgstr "提醒"
 
 #: src/settings/personalization/index.tsx
 msgid "Remove {term}"
-msgstr ""
+msgstr "移除 {term}"
 
 #: src/settings/todo/github.tsx
 msgid "Remove repository"
-msgstr ""
+msgstr "移除仓库"
 
 #: src/instruction/index.tsx
 msgid "Reopen checkout page"
-msgstr ""
+msgstr "重新打开结账页面"
 
 #: src/instruction/index.tsx
 msgid "Reopen in browser"
-msgstr ""
+msgstr "在浏览器中重新打开"
 
 #: src/settings/general/account.tsx
 msgid "Reopen sign-in page"
-msgstr ""
+msgstr "重新打开登录页面"
 
 #: src/session/components/note-input/search/bar.tsx
 msgid "Replace"
-msgstr ""
+msgstr "替换"
 
 #: src/session/components/note-input/search/bar.tsx
 msgid "Replace all"
-msgstr ""
+msgstr "全部替换"
 
 #: src/settings/todo/github.tsx
 msgid "Replace repository"
-msgstr ""
+msgstr "替换仓库"
 
 #: src/session/components/note-input/search/bar.tsx
 msgid "Replace with..."
-msgstr ""
+msgstr "替换为…"
 
 #: src/calendar/components/apple/permission.tsx
 msgid "Request"
-msgstr ""
+msgstr "请求"
 
 #. placeholder {0}: title.toLowerCase()
 #: src/calendar/components/apple/permission.tsx
 msgid "Request {0}"
-msgstr ""
+msgstr "请求 {0}"
 
 #. placeholder {0}: title.toLowerCase()
 #: src/settings/general/permissions.tsx
 msgid "Request {0} permission"
-msgstr ""
+msgstr "请求 {0} 权限"
 
 #: src/settings/general/permissions.tsx
 msgid "Required to capture other participants' voices in meetings"
-msgstr ""
+msgstr "用于在会议中捕捉其他参与者的声音"
 
 #: src/settings/general/permissions.tsx
 msgid "Required to detect meeting apps and sync mute status"
-msgstr ""
+msgstr "用于检测会议应用并同步静音状态"
 
 #: src/settings/general/permissions.tsx
 msgid "Required to record your voice during meetings and calls"
-msgstr ""
+msgstr "用于在会议和通话中录制您的声音"
 
 #: src/settings/general/permissions.tsx
 msgid "Required to sync Apple Calendar events into Anarlog"
-msgstr ""
+msgstr "用于将 Apple 日历事件同步到 Anarlog"
 
 #: src/calendar/components/apple/permission.tsx
 msgid "Reset"
-msgstr ""
+msgstr "重置"
 
 #: src/settings/personalization/index.tsx
 msgid "Reset to default"
-msgstr ""
+msgstr "重置为默认"
 
 #: src/settings/general/notification.tsx
 msgid "Respect Do-Not-Disturb mode"
-msgstr ""
+msgstr "遵守勿扰模式"
 
 #: src/session/components/outer-header/index.tsx
 msgid "Resume"
-msgstr ""
+msgstr "继续"
 
 #: src/session/components/outer-header/index.tsx
 msgid "Resume listening"
-msgstr ""
+msgstr "继续聆听"
 
 #: src/chat/components/message/error.tsx
 #: src/session/components/note-input/enhanced/enhance-error.tsx
 msgid "Retry"
-msgstr ""
+msgstr "重试"
 
 #: src/settings/ai/shared/index.tsx
 #: src/settings/ai/stt/select.tsx
 msgid "Runs after the recording finishes, not during the meeting."
-msgstr ""
+msgstr "在录音结束后运行，而非会议进行中。"
 
 #: src/settings/personalization/index.tsx
 msgid "Save"
-msgstr ""
+msgstr "保存"
 
 #: src/session/components/outer-header/metadata/date.tsx
 msgid "Save date"
-msgstr ""
+msgstr "保存日期"
 
 #: src/contacts/shared.tsx
 msgid "Search contacts..."
-msgstr ""
+msgstr "搜索联系人…"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Search emoji..."
-msgstr ""
+msgstr "搜索表情符号…"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Search icons..."
-msgstr ""
+msgstr "搜索图标…"
 
 #: src/settings/general/notification.tsx
 msgid "Search installed apps to exclude them. Click an excluded app to include it again."
-msgstr ""
+msgstr "搜索已安装的应用以将其排除。点击已排除的应用可重新包含。"
 
 #: src/settings/general/notification.tsx
 msgid "Search installed apps..."
-msgstr ""
+msgstr "搜索已安装的应用…"
 
 #: src/settings/general/main-language.tsx
 msgid "Search language..."
@@ -1425,67 +1457,71 @@ msgstr "搜索语言..."
 
 #: src/contacts/details.tsx
 msgid "Search or add company"
-msgstr ""
+msgstr "搜索或添加公司"
 
 #: src/settings/ai/shared/model-combobox.tsx
 msgid "Search or create new"
-msgstr ""
+msgstr "搜索或创建新的"
 
 #: src/settings/todo/github.tsx
 msgid "Search or type owner/repo"
-msgstr ""
+msgstr "搜索或输入所有者/仓库"
 
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
 msgid "Search people"
-msgstr ""
+msgstr "搜索人员"
 
 #: src/session/components/note-input/header.tsx
 #: src/templates/template-sidebar.tsx
 msgid "Search templates..."
-msgstr ""
+msgstr "搜索模板…"
 
 #: src/settings/general/timezone.tsx
 msgid "Search timezone..."
-msgstr ""
+msgstr "搜索时区…"
 
 #: src/session/components/note-input/search/bar.tsx
 #: src/settings/general/searchable-select.tsx
 msgid "Search..."
-msgstr ""
+msgstr "搜索…"
 
 #: src/templates/sections-editor.tsx
 msgid "Section actions"
-msgstr ""
+msgstr "分区操作"
 
 #: src/session/components/note-input/header.tsx
 msgid "See all templates"
-msgstr ""
+msgstr "查看全部模板"
+
+#: src/settings/ai/stt/select.tsx
+msgid "Segment"
+msgstr "分段"
 
 #: src/settings/ai/shared/model-combobox.tsx
 #: src/settings/ai/stt/select.tsx
 msgid "Select a model"
-msgstr ""
+msgstr "选择模型"
 
 #: src/contacts/details.tsx
 msgid "Select a person to view details"
-msgstr ""
+msgstr "选择人员以查看详情"
 
 #: src/settings/ai/llm/select.tsx
 #: src/settings/ai/stt/select.tsx
 msgid "Select a provider"
-msgstr ""
+msgstr "选择服务商"
 
 #: src/contacts/organization-details.tsx
 msgid "Select an organization to view details"
-msgstr ""
+msgstr "选择组织以查看详情"
 
 #: src/settings/general/theme.tsx
 msgid "Select appearance"
-msgstr ""
+msgstr "选择外观"
 
 #: src/settings/general/week-start.tsx
 msgid "Select day"
-msgstr ""
+msgstr "选择日期"
 
 #: src/settings/general/main-language.tsx
 msgid "Select language"
@@ -1493,11 +1529,11 @@ msgstr "选择语言"
 
 #: src/settings/general/timezone.tsx
 msgid "Select timezone"
-msgstr ""
+msgstr "选择时区"
 
 #: src/settings/general/searchable-select.tsx
 msgid "Select..."
-msgstr ""
+msgstr "选择…"
 
 #: src/settings/general/app-settings.tsx
 msgid "Send anonymous usage analytics to help improve Anarlog."
@@ -1505,32 +1541,32 @@ msgstr "发送匿名使用分析，帮助改进 Anarlog。"
 
 #: src/contacts/organization-details.tsx
 msgid "Send email"
-msgstr ""
+msgstr "发送电子邮件"
 
 #: src/chat/components/input/index.tsx
 msgid "Send message"
-msgstr ""
+msgstr "发送消息"
 
 #: src/session/components/note-input/header.tsx
 msgid "Session note views"
-msgstr ""
+msgstr "会话笔记视图"
 
 #: src/session/components/title-input.tsx
 msgid "Session title"
-msgstr ""
+msgstr "会话标题"
 
 #: src/templates/details.tsx
 msgid "Set as default"
-msgstr ""
+msgstr "设为默认"
 
 #: src/session/components/note-input/enhanced/config-error.tsx
 msgid "Set up AI summaries"
-msgstr ""
+msgstr "设置 AI 摘要"
 
 #: src/main/empty.tsx
 #: src/sidebar/settings.tsx
 msgid "Settings"
-msgstr ""
+msgstr "设置"
 
 #: src/settings/general/app-settings.tsx
 msgid "Share usage data"
@@ -1538,32 +1574,32 @@ msgstr "分享使用数据"
 
 #: src/sidebar/timeline/item.tsx
 msgid "Show All Recurring Events"
-msgstr ""
+msgstr "显示所有重复事件"
 
 #: src/settings/general/app-settings.tsx
 msgid "Show Anarlog in the Dock and app switcher."
-msgstr ""
+msgstr "在程序坞和应用切换器中显示 Anarlog。"
 
 #: src/settings/general/app-settings.tsx
 msgid "Show app in Dock"
-msgstr ""
+msgstr "在程序坞中显示应用"
 
 #: src/sidebar/timeline/index.tsx
 msgid "Show Deleted Events"
-msgstr ""
+msgstr "显示已删除事件"
 
 #: src/sidebar/timeline/item.tsx
 msgid "Show Event"
-msgstr ""
+msgstr "显示事件"
 
 #: src/settings/general/app-settings.tsx
 msgid "Show floating bar"
-msgstr ""
+msgstr "显示浮动栏"
 
 #: src/settings/ai/stt/select.tsx
 #: src/sidebar/timeline/item.tsx
 msgid "Show in Finder"
-msgstr ""
+msgstr "在访达中显示"
 
 #: src/settings/general/app-settings.tsx
 msgid "Show the compact floating control while listening."
@@ -1571,94 +1607,98 @@ msgstr "聆听时显示紧凑的浮动控件。"
 
 #: src/sidebar/timeline/item.tsx
 msgid "Show This Event"
-msgstr ""
+msgstr "显示此事件"
 
 #: src/settings/general/app-settings.tsx
 msgid "Show tray icon"
-msgstr ""
+msgstr "显示托盘图标"
 
 #: src/settings/general/account.tsx
 msgid "Sign in"
-msgstr ""
+msgstr "登录"
 
 #: src/settings/todo/github.tsx
 msgid "Sign in for private repo access."
-msgstr ""
+msgstr "登录以访问私有仓库。"
 
 #: src/settings/general/account.tsx
 msgid "Sign in for Pro"
-msgstr ""
+msgstr "登录 Pro"
 
 #: src/settings/general/account.tsx
 msgid "Sign in to Anarlog"
-msgstr ""
+msgstr "登录 Anarlog"
 
 #: src/onboarding/calendar.tsx
 msgid "Sign in to connect"
-msgstr ""
+msgstr "登录以连接"
 
 #. placeholder {0}: config.displayName
 #: src/settings/todo/provider-content.tsx
 msgid "Sign in to connect {0}"
-msgstr ""
+msgstr "登录以连接 {0}"
 
 #: src/settings/general/account.tsx
 msgid "Sign in to unlock cloud transcription and AI models, plus Pro features like sharing."
-msgstr ""
+msgstr "登录以解锁云端转写和 AI 模型，以及分享等 Pro 功能。"
 
 #: src/onboarding/index.tsx
 msgid "Sign in to unlock powerful AI models, sync across devices, and personalization."
-msgstr ""
+msgstr "登录以解锁强大的 AI 模型、跨设备同步和个性化功能。"
 
 #: src/instruction/index.tsx
 msgid "Sign in to your account"
-msgstr ""
+msgstr "登录到您的账户"
 
 #: src/settings/general/account.tsx
 msgid "Sign out"
-msgstr ""
+msgstr "退出登录"
 
 #: src/onboarding/account/after-login.tsx
 #: src/onboarding/index.tsx
 #: src/settings/general/account.tsx
 msgid "Signed in"
-msgstr ""
+msgstr "已登录"
 
 #: src/settings/general/account.tsx
 msgid "Signing out..."
-msgstr ""
+msgstr "正在退出登录…"
 
 #: src/onboarding/shared.tsx
 msgid "Skip"
-msgstr ""
+msgstr "跳过"
 
 #: src/onboarding/index.tsx
 msgid "Skipped"
-msgstr ""
+msgstr "已跳过"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Smileys & People"
-msgstr ""
+msgstr "笑脸与人"
 
 #: src/contacts/details.tsx
 msgid "Software Engineer"
-msgstr ""
+msgstr "软件工程师"
 
 #: src/session/components/note-input/enhanced/enhance-error.tsx
 msgid "Something went wrong while generating the summary."
-msgstr ""
+msgstr "生成摘要时出错了。"
 
 #: src/contacts/shared.tsx
 msgid "Sort options"
-msgstr ""
+msgstr "排序选项"
+
+#: src/settings/ai/stt/select.tsx
+msgid "Speaker diarization"
+msgstr "说话人分离"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "SQLite migration verification is incomplete"
-msgstr ""
+msgstr "SQLite 迁移验证不完整"
 
 #: src/session/components/note-input/enhanced/config-error.tsx
 msgid "Start a Pro trial or add your own LLM API key to generate a summary from this transcript."
-msgstr ""
+msgstr "开始 Pro 试用或添加您自己的 LLM API 密钥，以便从此转录稿生成摘要。"
 
 #: src/settings/general/app-settings.tsx
 msgid "Start Anarlog at login"
@@ -1666,7 +1706,7 @@ msgstr "登录时启动 Anarlog"
 
 #: src/main/empty.tsx
 msgid "Start Recording"
-msgstr ""
+msgstr "开始录制"
 
 #: src/settings/general/app-settings.tsx
 msgid "Start when meeting begins"
@@ -1674,28 +1714,28 @@ msgstr "会议开始时启动"
 
 #: src/onboarding/index.tsx
 msgid "Start with permissions"
-msgstr ""
+msgstr "从权限开始"
 
 #: src/onboarding/account/after-login.tsx
 msgid "Starting your trial..."
-msgstr ""
+msgstr "正在开始试用…"
 
 #: src/session/components/outer-header/index.tsx
 msgid "Stop"
-msgstr ""
+msgstr "停止"
 
 #: src/session/components/outer-header/index.tsx
 #: src/sidebar/timeline/item.tsx
 msgid "Stop listening"
-msgstr ""
+msgstr "停止聆听"
 
 #: src/chat/components/input/index.tsx
 msgid "Stop response"
-msgstr ""
+msgstr "停止响应"
 
 #: src/session/components/outer-header/index.tsx
 msgid "Stop transcription"
-msgstr ""
+msgstr "停止转写"
 
 #: src/settings/general/app-settings.tsx
 msgid "Stop when meeting ends"
@@ -1704,71 +1744,71 @@ msgstr "会议结束时停止"
 #: src/onboarding/index.tsx
 #: src/settings/general/storage/index.tsx
 msgid "Storage"
-msgstr ""
+msgstr "存储"
 
 #: src/onboarding/index.tsx
 msgid "Storage configured"
-msgstr ""
+msgstr "存储已配置"
 
 #: src/onboarding/folder-location.tsx
 msgid "Storage Updated"
-msgstr ""
+msgstr "存储已更新"
 
 #: src/instruction/index.tsx
 msgid "Submit callback URL"
-msgstr ""
+msgstr "提交回调 URL"
 
 #: src/contacts/details.tsx
 #: src/session/components/outer-header/overflow/export-modal.tsx
 msgid "Summary"
-msgstr ""
+msgstr "摘要"
 
 #: src/settings/personalization/index.tsx
 msgid "Summary instructions"
-msgstr ""
+msgstr "摘要指令"
 
 #: src/settings/general/week-start.tsx
 msgid "Sunday"
-msgstr ""
+msgstr "星期日"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Symbols"
-msgstr ""
+msgstr "符号"
 
 #: src/settings/general/account.tsx
 msgid "Sync your changes before signing out."
-msgstr ""
+msgstr "退出登录前请同步您的更改。"
 
 #: src/settings/general/theme.tsx
 msgid "System"
-msgstr ""
+msgstr "系统"
 
 #: src/onboarding/permissions.tsx
 #: src/settings/general/permissions.tsx
 msgid "System audio"
-msgstr ""
+msgstr "系统音频"
 
 #: src/onboarding/permissions.tsx
 msgid "System audio enabled"
-msgstr ""
+msgstr "系统音频已启用"
 
 #: src/templates/details.tsx
 #: src/templates/template-form.tsx
 msgid "Template actions"
-msgstr ""
+msgstr "模板操作"
 
 #: src/templates/sections-editor.tsx
 msgid "Template content with Jinja2: {{ variable }}, {% if condition %}"
-msgstr ""
+msgstr "使用 Jinja2 的模板内容：{{ variable }}、{% if condition %}"
 
 #: src/sidebar/settings.tsx
 #: src/templates/template-sidebar.tsx
 msgid "Templates"
-msgstr ""
+msgstr "模板"
 
 #: src/onboarding/folder-location.tsx
 msgid "The app will restart after onboarding to apply your storage changes"
-msgstr ""
+msgstr "应用将在引导完成后重启以应用您的存储更改"
 
 #: src/settings/general/spoken-languages.tsx
 msgid "The main language is always included for transcription"
@@ -1776,67 +1816,71 @@ msgstr "主要语言始终包含在转录中"
 
 #: src/settings/personalization/index.tsx
 msgid "These instructions take priority over the selected template when they conflict. Clear them to use templates as written."
-msgstr ""
+msgstr "当与所选模板冲突时，这些指令优先。清空它们以按原样使用模板。"
 
 #: src/chat/components/message/loading.tsx
 msgid "Thinking..."
-msgstr ""
+msgstr "正在思考…"
 
 #. placeholder {0}: status.fileCount
 #. placeholder {1}: formatBytes(status.totalBytes)
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "This will remove {0} legacy files and free {1}. Your app data will not be affected because the migration to SQLite is complete."
-msgstr ""
+msgstr "这将移除 {0} 个旧版文件并释放 {1}。您的应用数据不会受影响，因为迁移到 SQLite 已完成。"
+
+#: src/settings/ai/stt/select.tsx
+msgid "Threshold"
+msgstr "阈值"
 
 #: src/settings/todo/index.tsx
 msgid "Ticket"
-msgstr ""
+msgstr "工单"
 
 #: src/settings/general/timezone.tsx
 msgid "Timezone"
-msgstr ""
+msgstr "时区"
 
 #: src/session/components/note-input/enhanced/streaming.tsx
 msgid "Tip: The Anarlog team loves our users!"
-msgstr ""
+msgstr "提示：Anarlog 团队热爱我们的用户！"
 
 #: src/session/components/note-input/header.tsx
 #: src/session/components/outer-header/overflow/export-modal.tsx
 msgid "Transcript"
-msgstr ""
+msgstr "转录稿"
 
 #: src/settings/ai/stt/index.tsx
 #: src/sidebar/settings.tsx
 msgid "Transcription"
-msgstr ""
+msgstr "转写"
 
 #: src/settings/ai/stt/select.tsx
 msgid "Transcription model is needed to make Anarlog listen to your conversations."
-msgstr ""
+msgstr "需要转写模型才能让 Anarlog 聆听您的对话。"
 
 #: src/templates/template-icon-picker.tsx
 msgid "Travel & Places"
-msgstr ""
+msgstr "旅行与地点"
 
 #: src/settings/general/account.tsx
 msgid "Trial"
-msgstr ""
+msgstr "试用"
 
 #: src/onboarding/account/after-login.tsx
 msgid "Trial activated - 14 days of Pro"
-msgstr ""
+msgstr "试用已激活 — Pro 14 天"
 
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
 msgid "Unknown"
-msgstr ""
+msgstr "未知"
 
 #: src/session/components/outer-header/metadata/date.tsx
 msgid "Unknown date"
-msgstr ""
+msgstr "未知日期"
 
 #: src/contacts/organization-details.tsx
 msgid "Unnamed"
-msgstr ""
+msgstr "未命名"
 
 #: src/session/components/outer-header/overflow/export-modal.tsx
 #: src/session/components/title-input.tsx
@@ -1846,96 +1890,96 @@ msgstr ""
 #: src/templates/details.tsx
 #: src/templates/sections-editor.tsx
 msgid "Untitled"
-msgstr ""
+msgstr "无标题"
 
 #: src/contacts/details.tsx
 msgid "Untitled Note"
-msgstr ""
+msgstr "无标题笔记"
 
 #: src/settings/todo/github.tsx
 msgid "Upgrade for private repos."
-msgstr ""
+msgstr "升级以访问私有仓库。"
 
 #: src/settings/todo/provider-content.tsx
 msgid "Upgrade to connect"
-msgstr ""
+msgstr "升级以连接"
 
 #: src/calendar/components/sidebar.tsx
 msgid "Upgrade to Pro"
-msgstr ""
+msgstr "升级到 Pro"
 
 #. placeholder {0}: provider.displayName
 #: src/calendar/components/sidebar.tsx
 msgid "Upgrade to Pro for {0}"
-msgstr ""
+msgstr "升级到 Pro，价格 {0}"
 
 #: src/settings/ai/llm/select.tsx
 #: src/settings/ai/stt/select.tsx
 msgid "Upgrade to Pro to use this provider."
-msgstr ""
+msgstr "升级到 Pro 才能使用此服务商。"
 
 #: src/settings/ai/stt/select.tsx
 msgid "Upgrade to use"
-msgstr ""
+msgstr "升级以使用"
 
 #: src/session/components/floating/options-menu.tsx
 #: src/session/components/outer-header/overflow/index.tsx
 msgid "Upload audio"
-msgstr ""
+msgstr "上传音频"
 
 #: src/session/components/floating/options-menu.tsx
 #: src/session/components/outer-header/overflow/index.tsx
 msgid "Upload transcript"
-msgstr ""
+msgstr "上传转录稿"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Verifying the SQLite migration status"
-msgstr ""
+msgstr "正在验证 SQLite 迁移状态"
 
 #: src/contacts/organization-details.tsx
 msgid "View LinkedIn profile"
-msgstr ""
+msgstr "查看 LinkedIn 个人资料"
 
 #: src/settings/general/week-start.tsx
 msgid "Week starts on"
-msgstr ""
+msgstr "一周开始于"
 
 #: src/onboarding/index.tsx
 msgid "Welcome to Anarlog"
-msgstr ""
+msgstr "欢迎使用 Anarlog"
 
 #: src/changelog/index.tsx
 msgid "What's new in {version}?"
-msgstr ""
+msgstr "{version} 有什么新功能？"
 
 #: src/onboarding/index.tsx
 msgid "Where your notes and recordings are stored"
-msgstr ""
+msgstr "您的笔记和录音的存储位置"
 
 #: src/task/tab-content.tsx
 msgid "Work on this task"
-msgstr ""
+msgstr "处理此任务"
 
 #: src/calendar/components/apple/permission.tsx
 msgid "You can"
-msgstr ""
+msgstr "您可以"
 
 #: src/onboarding/account/after-login.tsx
 msgid "You have an active plan"
-msgstr ""
+msgstr "您有一个有效的套餐"
 
 #: src/onboarding/account/after-login.tsx
 msgid "You're on a Pro trial"
-msgstr ""
+msgstr "您正在使用 Pro 试用"
 
 #: src/settings/general/account.tsx
 msgid "You're on the <0>{planLabel}</0> plan"
-msgstr ""
+msgstr "您正在使用 <0>{planLabel}</0> 套餐"
 
 #: src/settings/general/account.tsx
 msgid "Your Account"
-msgstr ""
+msgstr "您的账户"
 
 #: src/templates/template-sidebar.tsx
 msgid "Z to A"
-msgstr ""
+msgstr "Z 到 A"

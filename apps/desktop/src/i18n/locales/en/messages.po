@@ -206,6 +206,10 @@ msgstr "Appearance"
 msgid "Applied to every generated or regenerated meeting summary."
 msgstr "Applied to every generated or regenerated meeting summary."
 
+#: src/settings/ai/stt/select.tsx
+msgid "Apply jieba segmentation and acoustic word grouping to Chinese transcription results"
+msgstr "Apply jieba segmentation and acoustic word grouping to Chinese transcription results"
+
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
 msgid "Apply to all"
 msgstr "Apply to all"
@@ -260,6 +264,10 @@ msgstr "Back"
 #: src/settings/ai/shared/index.tsx
 msgid "Base URL"
 msgstr "Base URL"
+
+#: src/settings/ai/stt/select.tsx
+msgid "Batch"
+msgstr "Batch"
 
 #: src/instruction/index.tsx
 msgid "Browser handoff not working? Paste the callback link instead"
@@ -325,6 +333,14 @@ msgstr "Choose storage location"
 #: src/templates/template-icon-picker.tsx
 msgid "Choose template icon"
 msgstr "Choose template icon"
+
+#: src/settings/ai/stt/select.tsx
+msgid "CJK (Server)"
+msgstr "CJK (Server)"
+
+#: src/settings/ai/stt/select.tsx
+msgid "CJK post-processing (Local)"
+msgstr "CJK post-processing (Local)"
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Clean Up"
@@ -790,6 +806,10 @@ msgstr "Human"
 msgid "Icons"
 msgstr "Icons"
 
+#: src/settings/ai/stt/select.tsx
+msgid "Identify who spoke when using speaker embedding models"
+msgstr "Identify who spoke when using speaker embedding models"
+
 #: src/settings/general/account.tsx
 msgid "If the browser does not reopen Anarlog, use the paste-link fallback in the sign-in instruction window."
 msgstr "If the browser does not reopen Anarlog, use the paste-link fallback in the sign-in instruction window."
@@ -964,6 +984,14 @@ msgstr "Migration needs attention"
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Migration status unavailable"
 msgstr "Migration status unavailable"
+
+#: src/settings/ai/stt/select.tsx
+msgid "Mode"
+msgstr "Mode"
+
+#: src/settings/ai/stt/select.tsx
+msgid "Model"
+msgstr "Model"
 
 #: src/settings/ai/llm/select.tsx
 #: src/settings/ai/stt/select.tsx
@@ -1258,6 +1286,10 @@ msgstr "Pro"
 msgid "Pro trial"
 msgstr "Pro trial"
 
+#: src/settings/ai/stt/select.tsx
+msgid "Progressive"
+msgstr "Progressive"
+
 #: src/onboarding/index.tsx
 msgid "Ready to go"
 msgstr "Ready to go"
@@ -1461,6 +1493,10 @@ msgstr "Section actions"
 msgid "See all templates"
 msgstr "See all templates"
 
+#: src/settings/ai/stt/select.tsx
+msgid "Segment"
+msgstr "Segment"
+
 #: src/settings/ai/shared/model-combobox.tsx
 #: src/settings/ai/stt/select.tsx
 msgid "Select a model"
@@ -1652,6 +1688,10 @@ msgstr "Something went wrong while generating the summary."
 msgid "Sort options"
 msgstr "Sort options"
 
+#: src/settings/ai/stt/select.tsx
+msgid "Speaker diarization"
+msgstr "Speaker diarization"
+
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "SQLite migration verification is incomplete"
 msgstr "SQLite migration verification is incomplete"
@@ -1787,6 +1827,10 @@ msgstr "Thinking..."
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "This will remove {0} legacy files and free {1}. Your app data will not be affected because the migration to SQLite is complete."
 msgstr "This will remove {0} legacy files and free {1}. Your app data will not be affected because the migration to SQLite is complete."
+
+#: src/settings/ai/stt/select.tsx
+msgid "Threshold"
+msgstr "Threshold"
 
 #: src/settings/todo/index.tsx
 msgid "Ticket"

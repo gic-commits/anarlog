@@ -206,6 +206,10 @@ msgstr ""
 msgid "Applied to every generated or regenerated meeting summary."
 msgstr ""
 
+#: src/settings/ai/stt/select.tsx
+msgid "Apply jieba segmentation and acoustic word grouping to Chinese transcription results"
+msgstr ""
+
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
 msgid "Apply to all"
 msgstr ""
@@ -259,6 +263,10 @@ msgstr ""
 
 #: src/settings/ai/shared/index.tsx
 msgid "Base URL"
+msgstr ""
+
+#: src/settings/ai/stt/select.tsx
+msgid "Batch"
 msgstr ""
 
 #: src/instruction/index.tsx
@@ -324,6 +332,14 @@ msgstr ""
 
 #: src/templates/template-icon-picker.tsx
 msgid "Choose template icon"
+msgstr ""
+
+#: src/settings/ai/stt/select.tsx
+msgid "CJK (Server)"
+msgstr ""
+
+#: src/settings/ai/stt/select.tsx
+msgid "CJK post-processing (Local)"
 msgstr ""
 
 #: src/settings/general/storage/legacy-cleanup.tsx
@@ -790,6 +806,10 @@ msgstr ""
 msgid "Icons"
 msgstr ""
 
+#: src/settings/ai/stt/select.tsx
+msgid "Identify who spoke when using speaker embedding models"
+msgstr ""
+
 #: src/settings/general/account.tsx
 msgid "If the browser does not reopen Anarlog, use the paste-link fallback in the sign-in instruction window."
 msgstr ""
@@ -963,6 +983,14 @@ msgstr ""
 
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "Migration status unavailable"
+msgstr ""
+
+#: src/settings/ai/stt/select.tsx
+msgid "Mode"
+msgstr ""
+
+#: src/settings/ai/stt/select.tsx
+msgid "Model"
 msgstr ""
 
 #: src/settings/ai/llm/select.tsx
@@ -1258,6 +1286,10 @@ msgstr ""
 msgid "Pro trial"
 msgstr ""
 
+#: src/settings/ai/stt/select.tsx
+msgid "Progressive"
+msgstr ""
+
 #: src/onboarding/index.tsx
 msgid "Ready to go"
 msgstr ""
@@ -1461,6 +1493,10 @@ msgstr ""
 msgid "See all templates"
 msgstr ""
 
+#: src/settings/ai/stt/select.tsx
+msgid "Segment"
+msgstr ""
+
 #: src/settings/ai/shared/model-combobox.tsx
 #: src/settings/ai/stt/select.tsx
 msgid "Select a model"
@@ -1652,6 +1688,10 @@ msgstr ""
 msgid "Sort options"
 msgstr ""
 
+#: src/settings/ai/stt/select.tsx
+msgid "Speaker diarization"
+msgstr ""
+
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "SQLite migration verification is incomplete"
 msgstr ""
@@ -1786,6 +1826,10 @@ msgstr ""
 #. placeholder {1}: formatBytes(status.totalBytes)
 #: src/settings/general/storage/legacy-cleanup.tsx
 msgid "This will remove {0} legacy files and free {1}. Your app data will not be affected because the migration to SQLite is complete."
+msgstr ""
+
+#: src/settings/ai/stt/select.tsx
+msgid "Threshold"
 msgstr ""
 
 #: src/settings/todo/index.tsx
