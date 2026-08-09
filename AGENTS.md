@@ -918,6 +918,73 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 - **live 录音**：单人录音（session e5829425，153s），VAD 7 组 idle-emit 全部成功提交，无 400/retry，stitch 7/7 → 458 words，diarization 1 speaker ✅
 - **修复**：live 路径 provider 硬编码 `BatchProvider::OpenAI`（`runtime.rs:33`）导致 Groq 被当 OpenAI 提交 `audio.raw` → 400。已贯通 provider 到 `ProgressiveBatchParams`（`a8bd99c02`）
 
+## Aug 9 — 麦克风设备选择 + transcript 性能 + gap 自动重试 + 导出 speaker 修复
+
+### ① Long transcript 界面卡住（10 分钟白屏）修复 ✅
+
+84min re-transcribe（12758 words / 109 segments）完成后界面白屏 10 分钟。**根因**：虚拟化阈值只看 `segments.length > 200`，109 segments 未触发 → 渲染**全部 12758 word DOM** + 完成瞬间 CPU 被 diarization 占用 + React Scan 拖慢 → 主线程卡死。
+
+| 改动 | 文件 |
+|------|------|
+| 虚拟化阈值 `segments > 200 \|\| words > 1500` | `transcript.tsx` |
+| `getRenderTranscriptRequestKey` 去掉逐 word `JSON.stringify(metadata)`（hash 数百 ms → ~5ms）| `render-transcript.ts` |
+| 模块级 `renderSegmentCache`（同数据二次进入秒开，免 1.9s IPC）| `render-transcript.ts` |
+
+验证：12758 words 首次 render 1.9s → 二次秒开；216+221 测试通过。
+
+### ② 导出 speaker 修复 ✅
+
+- **根因**：batch 转录 words 全在 channel 0（DirectMic），`channel_assignments_for_participants` 整体 assign 给 self → Rust `render_speaker_label` 对 assigned-but-nameless 落到 "You"；而 UI `SegmentKeyUtils.renderLabel` 走 `Speaker N`。导出与 UI 不一致。
+- **修复**：`label.rs` `speaker_human_id` 存在但名字空时 `else if` 落到 `Speaker N`（"You" 仅限未分配 DirectMic）。用户定义名称（"程睿"等）仍优先。
+- **加时间戳**：导出 markdown 输出 `Speaker N [0:19 – 0:42]: text`（`export-data.ts` `formatTranscriptExportSegments` + `export-modal.tsx`）。
+
+### ③ 麦克风输入设备选择（新功能，运行期不落盘）
+
+**设计**：全局保持跟随系统默认；用户可在录音前/录音中选择设备；选择仅当前进程有效（临时设备，不持久化）。入口：floating `ListenButton` + outer-header `Record/Stop` 按钮旁的 mic 图标 Popover。
+
+| 层 | 改动 |
+|------|------|
+| 贯通 | `CaptureParams`/`SessionParams` 加 `mic_device: Option<String>` → `children.rs` spawn_source 用 `ctx.params.mic_device`（原硬编码 None）|
+| 热切换 | `SourceMsg::SetMicDevice` → source 内取消旧 stream → 重建 `CaptureStream`（AEC 随 stream 重建），session/listener/pipeline 不动，时间轴连续 |
+| 命令 | `set_mic_device`（ext/commands/lib.rs）+ **build.rs COMMANDS** + **permissions/default.toml `allow-set-mic-device`**（⚠️ 必须三处同步，否则 `generate_context!` ACL 报 `SetPermissionNotFound`）|
+| 运行期 store | `live.selectedMicDevice`（null=跟随默认，不落盘）→ `useStartListening` 传 `mic_device` |
+| DeviceChangeWatcher | 用户显式选择后 `DefaultInputChanged` 不再重启 source |
+| 录音计时器 | `RecordingTimer`（读 `live.seconds`，mm:ss）显示在录音按钮 + mic 选项前 |
+
+**待真机验证**：录音中切换（本次因权限缺失未真正切换，修复后需重测）。PCM 中断 ~几百 ms + AEC 重新收敛。
+
+### ④ Continue 菜单不显示根因 + 修复 ✅
+
+`INSERT OR IGNORE INTO progressive_batch_jobs` 里 `overlap_ms` 等前端未传（None）→ bind `NULL` → STRICT 表 `NOT NULL` 违反 → **被 `OR IGNORE` 静默吞掉**（execute 返回 Ok 无错误）→ job 从未创建 → `useContinuableBatchJob` 查不到 → Continue 不显示。**修复**：bind 加默认值 `unwrap_or(30000/1000/2)`。
+
+### ⑤ gap 段自动重试一次（file re-transcribe）✅
+
+`start_transcription` task 里 `run_batch` 返回后检测 `response.metadata.gap_segments` 非空 → `auto_retry_gap_segments`（listener2/ext.rs）：
+- 先 reset gap 段为 `failed`（幂等，避免与异步 persist 竞争）
+- 读 DB completed 段 → `continue_from_file` **只重提交 gap 段**（非全量）
+- 二次 emit `BatchResponse` 覆盖 partial；若重试后仍有 gap → job 保持 `partial` + Continue 菜单（④ 修复后可见）
+
+### ⑥ warning 清理 ✅
+`incremental_diarization.rs:244` / `integration.rs:132` / `runtime.rs` 2 处 / `GUARD_SECS` 全部 unused_mut/dead_code 清理，`cargo check` 0 warning（仅 soniqo 平台提示）。
+
+### ⑦ 麦克风热切换真机验证 ✅（Aug 9）
+重新编译（补 `build.rs COMMANDS` + `permissions/default.toml allow-set-mic-device`，否则 `generate_context!` ACL 报 `SetPermissionNotFound`）后真机录音切换验证：
+- Built-in → "qingqiu的iPhone" → 切回默认：**热切换成功**（`switching_input_device` + 新设备 `mic_input_initialized`，session/listener 未中断）
+- 附带修复：① 未录音时切换设备不应调后端（`actor not found source` warn → 前端只在 active/finalizing 时调 `setMicDevice`）；② `speaker_at_time` 泄漏 HDBSCAN 噪声 sentinel（`usize::MAX - i`）→ 加 `valid` + 噪声过滤，防 word 出现垃圾 speaker
+
+### ⑧ 三个 QA 问题修复 ✅（Aug 9）
+
+| # | 问题 | 根因 | 修复 |
+|---|------|------|------|
+| 1 | **Resume 增补录音后旧 transcript 消失** | `createBatchTranscriptPersist` persist 用 `createTranscript({ replaceSession: true })` 软删旧 transcript + 只写本次增量（audio 已合并 320s→336s，但增量 words 时间从 0 开始无 offset）| **方案 B**：`existingTranscript` 传旧 transcript 的 `{transcriptId, offsetMs(旧 last word end_ms), maxSpeakerIndex}` → persist 增量 words 加 offset + speaker 编号偏移（+旧 max+1）后 `appendTranscriptWordsAndHints` 追加，不 replace |
+| 2 | **计时器停止后仍显示** | `RecordingTimer` 只看 `live.seconds > 0`，停止后未归零 | 加 `live.status === "active"` 才显示（finalizing/inactive 隐藏）|
+| 3 | **re-transcribe 后 speaker 只剩 1 个**（bdae8fa2，173s）| 音频 < `segment_duration_ms`(180s) 走 `submit_file_direct`（单段直接提交），**该路径不跑 diarization** → 0 speaker hint | `submit_file_direct` 加 `annotate_diarization`（解码→16k 重采样→`feed_pcm`→`finalize`→`speaker_at_time` 标注 + `propagate_speaker_to_none`）。与删除 speaker 别名无关（diarization 是本地聚类）|
+
+验证：前端 useStartListening/useRunBatch 34/34、typecheck ✅；Rust listener2-core 137/137、pyannote-local 33/33 ✅
+
+### 验证
+`cargo check`（listener-core/listener2-core/tauri-plugin-transcription/db-app/pyannote-local）✅ · `cargo test -p transcript` 73/73、`-p listener-core` 60/60、`-p tauri-plugin-transcription` 36/36 ✅ · 前端 typecheck + transcript 221 / outer-header 19 ✅（overflow 16 + general 1 为 pre-existing）
+
 ### 未解决问题清单（截至 Aug 2 PM 提交后）
 
 | # | 问题 | 状态 | 后续动作 |

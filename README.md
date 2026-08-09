@@ -23,9 +23,10 @@ diarization, and self-hosted, OpenAI-compatible STT providers**:
   Long recordings transcribe while you record, with results appearing
   incrementally.
 - **Local speaker diarization** — a fully on-device pipeline (pyannote
-  segmentation ONNX + Wespeaker speaker embeddings + cosine clustering
-  + adaptive threshold) that labels who spoke when, without sending
-  audio anywhere.
+  segmentation ONNX + speaker embeddings + HDBSCAN density clustering)
+  that labels who spoke when, without sending audio anywhere. Defaults
+  to the fast Cam++ model (~2× faster than Wespeaker with better
+  separation); handles 80+ minute meetings without over-clustering.
 - **Streaming VAD (Min-Cut + Merge)** — speech-segment grouping with
   energy-based turn chunking, idle-triggered emit, and pause-driven
   submission.
@@ -39,11 +40,20 @@ diarization, and self-hosted, OpenAI-compatible STT providers**:
 - **Groq STT support** — batch transcription with client-side
   segmentation, WAV container wrapping, and 429 rate-limit backoff.
   Whisper-large-v3(-turbo) at up to 216× realtime.
+- **Automatic gap retry** — when provider word-timestamp drift leaves
+  content holes, the affected segments are automatically re-submitted
+  once (and a Continue action remains available if gaps persist).
+- **Microphone input device selection** — pick a different input
+  device before or even *during* a recording, from the record button
+  or the header, with a live recording timer.
 - **Local Whisper fallback** — ggml Whisper (tiny/small) runs fully
   offline as a no-network fallback.
 - **Realtime (WebSocket) transcription** — OpenAI
   Realtime-API-compatible streaming with VAD, keepalive,
   auto-reconnect, and `samples_dropped` instrumentation.
+- **Long-transcript performance** — multi-hour transcripts are
+  virtualized (only viewport segments mount), with cached render
+  results so revisiting a meeting opens instantly.
 
 ## How to use it
 
