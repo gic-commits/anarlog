@@ -304,6 +304,7 @@ impl Whisper {
         }
     }
 
+    #[cfg(debug_assertions)]
     fn debug(&mut self, audio: &[f32]) {
         if let Ok(v) = std::env::var("HYPR_WHISPER_DEBUG")
             && v == "1"
