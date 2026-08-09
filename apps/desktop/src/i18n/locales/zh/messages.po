@@ -267,7 +267,7 @@ msgstr "基础 URL"
 
 #: src/settings/ai/stt/select.tsx
 msgid "Batch"
-msgstr "批量"
+msgstr "文件式（一次性批处理）"
 
 #: src/instruction/index.tsx
 msgid "Browser handoff not working? Paste the callback link instead"
