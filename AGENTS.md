@@ -982,6 +982,21 @@ live 路径（`plugins/transcription/src/listener/runtime.rs`）不再用 `Incre
 
 验证：前端 useStartListening/useRunBatch 34/34、typecheck ✅；Rust listener2-core 137/137、pyannote-local 33/33 ✅
 
+### ⑨ release 构建修复 ✅（Aug 9）
+
+| 问题 | 修复 |
+|------|------|
+| `POSTHOG_API_KEY` 编译时报错（release 用 `env!` 强要求）| 改 `option_env!`：有 key 启用 PostHog、无 key 跳过（`0f08ba57a`）|
+| updater 签名缺私钥（`.app.tar.gz` 生成失败）| 生成 signer keypair → `.env` 配 `TAURI_SIGNING_PRIVATE_KEY`（内容）+ 空密码；`tauri.conf.json` pubkey 更新；`.signing/` 加 `.gitignore` |
+| release warning（`whisper-local` `debug` 方法、`local-stt` unused `mut`）| `debug` 加 `#[cfg(debug_assertions)]`；`cmd` 改 shadowing（`406c65986`）|
+| **macOS Keychain 反复弹窗**（`com.anarlog.dev.secure-store`）| **根因**：未签名应用访问 Keychain，ACL 绑定签名，dev 每次重编译签名变 → 反复弹。缓解：`security delete-generic-password -s "com.anarlog.dev.secure-store"`；根治需 Developer ID 证书签名（非代码 bug）|
+
+### ⑩ i18n 补全 + 设置项布局 ✅（Aug 9）
+
+- **新增配置项显示 hash id**（`zz_Wd10bfC3`/`RqGEko`/`scu3wk`/`qU8EmP` 等）→ 根因：这些 STT/diarization 设置项字符串**从未 `lingui extract`**。`extract` 加入 11 条（Mode/Model/Segment/Threshold/Batch/Progressive/Speaker diarization/CJK 选项）→ zh 补翻译 → `compile`（`3bc031f22`）
+- **zh catalog 448 条未翻译全部补全**（Add/Cancel/Settings 等通用 UI 词），zh 基本 100% 翻译
+- **Diarization 设置**：Model + Threshold 合并为一行（grid 两列，`a66bfa7f1`）
+
 ### 验证
 `cargo check`（listener-core/listener2-core/tauri-plugin-transcription/db-app/pyannote-local）✅ · `cargo test -p transcript` 73/73、`-p listener-core` 60/60、`-p tauri-plugin-transcription` 36/36 ✅ · 前端 typecheck + transcript 221 / outer-header 19 ✅（overflow 16 + general 1 为 pre-existing）
 
