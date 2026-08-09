@@ -15,6 +15,7 @@ const {
   useSessionMock,
   useSessionHasTranscriptMock,
   useSessionParticipantHumanIdsMock,
+  useSessionTranscriptsMock,
   createLiveTranscriptMock,
   applyLiveTranscriptDeltaToDatabaseMock,
   softDeleteTranscriptMock,
@@ -40,6 +41,7 @@ const {
   useSessionMock: vi.fn(),
   useSessionHasTranscriptMock: vi.fn(),
   useSessionParticipantHumanIdsMock: vi.fn(),
+  useSessionTranscriptsMock: vi.fn(),
   createLiveTranscriptMock: vi.fn(),
   applyLiveTranscriptDeltaToDatabaseMock: vi.fn(),
   softDeleteTranscriptMock: vi.fn(),
@@ -137,6 +139,7 @@ vi.mock("~/stt/queries", () => ({
   createLiveTranscript: createLiveTranscriptMock,
   softDeleteTranscript: softDeleteTranscriptMock,
   useSessionParticipantHumanIds: useSessionParticipantHumanIdsMock,
+  useSessionTranscripts: useSessionTranscriptsMock,
 }));
 
 describe("getPostCaptureAction", () => {
@@ -205,6 +208,7 @@ describe("useStartListening", () => {
     });
     useSessionHasTranscriptMock.mockReturnValue(false);
     useSessionParticipantHumanIdsMock.mockReturnValue([]);
+    useSessionTranscriptsMock.mockReturnValue([]);
     createLiveTranscriptMock.mockResolvedValue(undefined);
     applyLiveTranscriptDeltaToDatabaseMock.mockResolvedValue(undefined);
     softDeleteTranscriptMock.mockResolvedValue(undefined);
@@ -348,6 +352,7 @@ describe("useStartListening", () => {
       },
       provider: "hyprnote",
       model: "am-test",
+      existingTranscript: null,
     });
     expect(setBatchPersistMock).toHaveBeenCalledWith(
       "session-1",

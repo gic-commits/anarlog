@@ -161,7 +161,13 @@ const SegmentsList = memo(
 
     // Window very long transcripts so we only mount segments near the
     // viewport instead of rendering every word of a multi-hour meeting.
-    const windowing = segments.length > 200;
+    // Segment count alone is a poor signal: a meeting can be ~100 segments
+    // but 10k+ words, which would still mount every word's DOM at once.
+    const totalWordCount = segments.reduce(
+      (total, segment) => total + segment.words.length,
+      0,
+    );
+    const windowing = segments.length > 200 || totalWordCount > 1500;
 
     const virtualizer = useVirtualizer({
       count: segments.length,

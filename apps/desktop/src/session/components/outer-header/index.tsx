@@ -10,6 +10,8 @@ import { useCallback } from "react";
 import { commands as openerCommands } from "@hypr/plugin-opener2";
 import { cn, safeParseDate } from "@hypr/utils";
 
+import { MicDevicePicker } from "../floating/mic-device-picker";
+import { RecordingTimer } from "../floating/recording-timer";
 import { RecordingIcon, useHasTranscript } from "../shared";
 import { MetadataButton } from "./metadata";
 import { OverflowButton } from "./overflow";
@@ -225,6 +227,7 @@ function HeaderMeetingActionPill({
           {countdown.label}
         </div>
       ) : null}
+      <RecordingTimer />
       <div className="border-border bg-card text-foreground flex h-7 max-w-56 shrink-0 items-center overflow-hidden rounded-full border">
         <button
           type="button"
@@ -262,6 +265,7 @@ function HeaderMeetingActionPill({
           )}
         />
       </div>
+      <MicDevicePicker compact />
     </div>
   );
 }

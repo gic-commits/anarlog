@@ -38,6 +38,9 @@ export type GeneralState = {
     muted: boolean;
     lastError: string | null;
     device: string | null;
+    /** User's explicitly chosen input device for this process run. null = follow
+     *  the OS default input device. Never persisted. */
+    selectedMicDevice: string | null;
     degraded: DegradedError | null;
     requestedLiveTranscription: boolean | null;
     liveTranscriptionActive: boolean | null;
@@ -62,6 +65,7 @@ const initialLiveState: LiveState = {
   muted: false,
   lastError: null,
   device: null,
+  selectedMicDevice: null,
   degraded: null,
   requestedLiveTranscription: null,
   liveTranscriptionActive: null,

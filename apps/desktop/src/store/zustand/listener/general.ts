@@ -44,6 +44,7 @@ export type GeneralActions = {
   stop: () => void;
   attachLiveSession: (sessionId: string) => Promise<void>;
   setMuted: (value: boolean) => void;
+  setSelectedMicDevice: (device: string | null) => void;
   setTriggerAppIds: (appIds: string[] | null) => void;
   updateCaptureConfig: (
     update: Pick<
@@ -134,6 +135,21 @@ export const createGeneralSlice = <
         void listenerCommands.setMicMuted(value);
       }),
     );
+  },
+  setSelectedMicDevice: (device) => {
+    setLiveState(set, (live) => {
+      live.selectedMicDevice = device;
+    });
+    // Only hot-swap while a session is capturing; otherwise the choice is
+    // stored in memory and picked up by useStartListening on the next run.
+    const status = get().live.status;
+    if (status === "active" || status === "finalizing") {
+      void listenerCommands.setMicDevice(device).then((result) => {
+        if (result.status === "error") {
+          console.warn("[listener] setMicDevice failed", result.error);
+        }
+      });
+    }
   },
   setTriggerAppIds: (appIds) => {
     setLiveState(set, (live) => {

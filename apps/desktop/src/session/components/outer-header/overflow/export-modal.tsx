@@ -17,7 +17,10 @@ import { cn } from "@hypr/utils";
 
 import { formatDate, formatDuration } from "./export-utils";
 
-import { useTranscriptExportSegments } from "~/session/components/note-input/transcript/export-data";
+import {
+  formatSegmentTime,
+  useTranscriptExportSegments,
+} from "~/session/components/note-input/transcript/export-data";
 import {
   useEnhancedNote,
   useSession,
@@ -143,8 +146,8 @@ export function ExportModal({
     if (transcriptItems.length === 0) return "";
     return transcriptItems
       .map((item) => {
-        const speaker = item.speaker ? `${item.speaker}: ` : "";
-        return `${speaker}${item.text}`;
+        const speaker = item.speaker ? `${item.speaker} ` : "Speaker ";
+        return `${speaker}[${formatSegmentTime(item.start_ms)} – ${formatSegmentTime(item.end_ms)}]: ${item.text}`;
       })
       .join("\n\n");
   };

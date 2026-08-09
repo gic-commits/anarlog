@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 import { commands as analyticsCommands } from "@hypr/plugin-analytics";
 
@@ -36,6 +36,7 @@ import {
   createLiveTranscript,
   softDeleteTranscript,
   useSessionParticipantHumanIds,
+  useSessionTranscripts,
 } from "~/stt/queries";
 
 export function getPostCaptureAction(
@@ -60,6 +61,48 @@ export function useStartListening(sessionId: string) {
   const session = useSession(sessionId);
   const hadTranscriptBeforeStart = useSessionHasTranscript(sessionId);
   const participantHumanIds = useSessionParticipantHumanIds(sessionId);
+  const existingTranscripts = useSessionTranscripts(sessionId);
+
+  // When resuming an existing recording, the incremental batch words use a
+  // fresh timeline (starting at 0). Shift them by the latest prior
+  // transcript's end time and append instead of replacing. Also offset the
+  // incremental speaker indices past the prior max so labels don't collide.
+  const existingTranscript = useMemo(() => {
+    if (!hadTranscriptBeforeStart) {
+      return null;
+    }
+    const latest = existingTranscripts[existingTranscripts.length - 1];
+    if (!latest || latest.words.length === 0) {
+      return null;
+    }
+    const lastWord = latest.words[latest.words.length - 1];
+    if (typeof lastWord?.end_ms !== "number") {
+      return null;
+    }
+
+    let maxSpeakerIndex = -1;
+    for (const hint of latest.speakerHints ?? []) {
+      if (hint.type !== "provider_speaker_index") {
+        continue;
+      }
+      try {
+        const value = JSON.parse(String(hint.value)) as {
+          speaker_index?: number;
+        };
+        if (typeof value.speaker_index === "number") {
+          maxSpeakerIndex = Math.max(maxSpeakerIndex, value.speaker_index);
+        }
+      } catch {
+        // ignore malformed hint values
+      }
+    }
+
+    return {
+      transcriptId: latest.id,
+      offsetMs: lastWord.end_ms,
+      maxSpeakerIndex,
+    };
+  }, [existingTranscripts, hadTranscriptBeforeStart]);
 
   const aiLanguage = useConfigValue("ai_language");
   const spokenLanguages = useConfigValue("spoken_languages");
@@ -74,6 +117,9 @@ export function useStartListening(sessionId: string) {
   );
 
   const start = useListener((state) => state.start);
+  const selectedMicDevice = useListener(
+    (state) => state.live?.selectedMicDevice ?? null,
+  );
   const setBatchPersist = useListener((state) => state.setBatchPersist);
   const clearBatchPersist = useListener((state) => state.clearBatchPersist);
   const clearBatchSegments = useListener((state) => state.clearBatchSegments);
@@ -207,6 +253,7 @@ export function useStartListening(sessionId: string) {
           session,
           provider: conn?.provider ?? "",
           model: conn?.model ?? "",
+          existingTranscript,
         })
       : null;
 
@@ -231,6 +278,7 @@ export function useStartListening(sessionId: string) {
       diarization_enabled: diarizationEnabled,
       diarization_model: diarizationModel,
       diarization_threshold: diarizationThreshold,
+      mic_device: selectedMicDevice,
     };
 
     console.log(
@@ -291,6 +339,8 @@ export function useStartListening(sessionId: string) {
     diarizationEnabled,
     diarizationModel,
     diarizationThreshold,
+    selectedMicDevice,
+    existingTranscript,
     setLeftSidebarExpanded,
   ]);
 

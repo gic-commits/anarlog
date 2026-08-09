@@ -173,11 +173,20 @@ export function createBatchTranscriptPersist({
   session,
   provider,
   model,
+  existingTranscript,
 }: {
   sessionId: string;
   session: { user_id: string; raw_md: string } | null;
   provider: string;
   model: string;
+  /** Set when resuming an existing recording: append the incremental words
+   *  (time-shifted by the prior transcript's duration) to this transcript
+   *  instead of replacing it. */
+  existingTranscript?: {
+    transcriptId: string;
+    offsetMs: number;
+    maxSpeakerIndex: number;
+  } | null;
 }): { persist: BatchPersistCallback; awaitPending: () => Promise<void> } {
   let transcriptId: string | null = null;
   const createdAt = new Date().toISOString();
@@ -215,6 +224,10 @@ export function createBatchTranscriptPersist({
 
     const newHints: SpeakerHintWithId[] = [];
 
+    const speakerIndexOffset = existingTranscript
+      ? existingTranscript.maxSpeakerIndex + 1
+      : 0;
+
     hints.forEach((hint) => {
       if (hint.data.type !== "provider_speaker_index") {
         return;
@@ -234,29 +247,47 @@ export function createBatchTranscriptPersist({
         value: JSON.stringify({
           provider: hint.data.provider ?? provider,
           channel: hint.data.channel ?? word.channel,
-          speaker_index: hint.data.speaker_index,
+          speaker_index: (hint.data.speaker_index ?? 0) + speakerIndexOffset,
         }),
       });
     });
 
     if (!transcriptId) {
-      transcriptId = id();
-      trackTranscriptWrite(
-        createTranscript({
-          id: transcriptId,
-          sessionId,
-          ownerUserId: session?.user_id ?? "",
-          createdAt,
-          startedAt: Date.now(),
-          memo: session?.raw_md ?? "",
-          source: "batch_transcription",
-          provider,
-          model,
-          words: newWords,
-          speakerHints: newHints,
-          replaceSession: true,
-        }),
-      );
+      if (existingTranscript) {
+        // Resumed recording: the incremental words use a fresh timeline
+        // (starting at 0), so shift them by the prior transcript's duration
+        // and append to the existing transcript instead of replacing it.
+        const offsetWords = newWords.map((word) => ({
+          ...word,
+          start_ms: (word.start_ms ?? 0) + existingTranscript.offsetMs,
+          end_ms: (word.end_ms ?? 0) + existingTranscript.offsetMs,
+        }));
+        trackTranscriptWrite(
+          appendTranscriptWordsAndHints(
+            existingTranscript.transcriptId,
+            offsetWords,
+            newHints,
+          ),
+        );
+      } else {
+        transcriptId = id();
+        trackTranscriptWrite(
+          createTranscript({
+            id: transcriptId,
+            sessionId,
+            ownerUserId: session?.user_id ?? "",
+            createdAt,
+            startedAt: Date.now(),
+            memo: session?.raw_md ?? "",
+            source: "batch_transcription",
+            provider,
+            model,
+            words: newWords,
+            speakerHints: newHints,
+            replaceSession: true,
+          }),
+        );
+      }
     } else {
       trackTranscriptWrite(
         appendTranscriptWordsAndHints(

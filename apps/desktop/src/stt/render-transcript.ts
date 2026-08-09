@@ -43,14 +43,35 @@ export async function renderTranscriptSegments(
 ): Promise<RenderedTranscriptSegmentWithWordMetadata[]> {
   const normalizedRequest = normalizeRenderTranscriptRequest(request);
   const metadataByWordId = collectWordMetadataById(normalizedRequest);
-  const result =
-    await listenerCommands.renderTranscriptSegments(normalizedRequest);
-  if (result.status === "error") {
-    throw new Error(result.error);
+  const cacheKey = getRenderTranscriptRequestKey(normalizedRequest);
+
+  const cached = renderSegmentCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
 
-  return attachWordMetadata(result.data, metadataByWordId);
+  const pending = listenerCommands
+    .renderTranscriptSegments(normalizedRequest)
+    .then((result) => {
+      if (result.status === "error") {
+        throw new Error(result.error);
+      }
+
+      return attachWordMetadata(result.data, metadataByWordId);
+    })
+    .catch((error) => {
+      renderSegmentCache.delete(cacheKey);
+      throw error;
+    });
+
+  renderSegmentCache.set(cacheKey, pending);
+  return pending;
 }
+
+const renderSegmentCache = new Map<
+  string,
+  Promise<RenderedTranscriptSegmentWithWordMetadata[]>
+>();
 
 export function getRenderTranscriptRequestKey(
   request: RenderTranscriptRequest | null | undefined,
@@ -65,69 +86,54 @@ export function getRenderTranscriptRequestKey(
 
   const writeString = (value: string) => {
     for (let index = 0; index < value.length; index += 1) {
-      hash = Math.imul(hash ^ value.charCodeAt(index), 16_777_619) >>> 0;
+      hash =
+        (Math.imul(hash ^ value.charCodeAt(index), 16_777_619) >>> 0) + index;
     }
-    hash = Math.imul(hash ^ 31, 16_777_619) >>> 0;
+    hash = (Math.imul(hash ^ 31, 16_777_619) >>> 0) + value.length;
   };
 
-  const writeValue = (value: unknown) => {
+  const writeScalar = (value: number | null | undefined) => {
     if (value == null) {
-      writeString("");
+      writeString("n");
       return;
     }
-
-    if (typeof value === "object") {
-      try {
-        writeString(JSON.stringify(value));
-      } catch {
-        writeString("[object]");
-      }
-      return;
-    }
-
     writeString(String(value));
   };
 
-  writeValue(request.self_human_id);
+  writeString(request.self_human_id ?? "");
 
   for (const humanId of request.participant_human_ids) {
-    writeValue(humanId);
+    writeString(humanId);
   }
 
   for (const human of request.humans) {
-    writeValue(human.human_id);
-    writeValue(human.name);
+    writeString(human.human_id);
+    writeString(human.name);
   }
 
   for (const transcript of request.transcripts) {
-    writeValue(transcript.started_at);
+    writeScalar(transcript.started_at);
     wordCount += transcript.words.length;
     assignmentCount += transcript.assignments.length;
 
     for (const word of transcript.words) {
-      writeValue(word.id);
-      writeValue(word.text);
-      writeValue(word.start_ms);
-      writeValue(word.end_ms);
-      writeValue(word.channel);
-      writeValue(word.speaker_index);
-      writeValue((word as { metadata?: unknown }).metadata);
+      writeString(word.id);
+      writeString(word.text);
+      writeScalar(word.start_ms);
+      writeScalar(word.end_ms);
+      writeScalar(word.channel);
+      writeScalar(word.speaker_index);
+      // Keep the expensive part out of the hash: only the scalar field that
+      // actually changes segmentation needs to be sensitive.
+      writeScalar(
+        (word as { metadata?: { provider_segment_index?: number } }).metadata
+          ?.provider_segment_index,
+      );
     }
 
     for (const assignment of transcript.assignments) {
-      writeValue(assignment.human_id);
-      writeValue(assignment.scope.kind);
-      writeValue(
-        "channel" in assignment.scope ? assignment.scope.channel : null,
-      );
-      writeValue(
-        "speaker_index" in assignment.scope
-          ? assignment.scope.speaker_index
-          : null,
-      );
-      writeValue(
-        "word_ids" in assignment.scope ? assignment.scope.word_ids : null,
-      );
+      writeString(assignment.human_id);
+      writeString(JSON.stringify(assignment.scope));
     }
   }
 
@@ -201,9 +207,10 @@ function buildRenderTranscriptRequest(
 
       wordIndexById.set(word.id, words.length);
       const metadata = normalizeWordMetadata(word.metadata);
-      const provider_segment_index = typeof metadata?.provider_segment_index === "number"
-        ? metadata.provider_segment_index
-        : undefined;
+      const provider_segment_index =
+        typeof metadata?.provider_segment_index === "number"
+          ? metadata.provider_segment_index
+          : undefined;
       const renderWord: RenderTranscriptInput["words"][number] & {
         metadata?: TranscriptWordMetadata;
       } = {
@@ -213,7 +220,9 @@ function buildRenderTranscriptRequest(
         end_ms: word.end_ms,
         channel: typeof word.channel === "number" ? word.channel : 0,
         speaker_index: null,
-        ...(provider_segment_index !== undefined ? { provider_segment_index } : {}),
+        ...(provider_segment_index !== undefined
+          ? { provider_segment_index }
+          : {}),
         ...(metadata ? { metadata } : {}),
       };
       words.push(renderWord);

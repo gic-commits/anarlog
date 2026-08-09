@@ -58,9 +58,24 @@ export function useTranscriptExportSegments(sessionId: string): {
 }
 
 export function formatTranscriptExportSegments(
-  segments: Array<{ speaker: string | null; text: string }>,
+  segments: Array<{
+    speaker: string | null;
+    text: string;
+    start_ms: number;
+    end_ms: number;
+  }>,
 ) {
   return segments
-    .map((segment) => `${segment.speaker ?? "Speaker"}: ${segment.text}`)
+    .map(
+      (segment) =>
+        `${segment.speaker ?? "Speaker"} [${formatSegmentTime(segment.start_ms)} – ${formatSegmentTime(segment.end_ms)}]: ${segment.text}`,
+    )
     .join("\n\n");
+}
+
+export function formatSegmentTime(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
 }

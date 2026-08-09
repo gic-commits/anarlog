@@ -2,7 +2,9 @@ import { useCallback } from "react";
 
 import { Spinner } from "@hypr/ui/components/ui/spinner";
 
+import { MicDevicePicker } from "./floating/mic-device-picker";
 import { OptionsMenu } from "./floating/options-menu";
+import { RecordingTimer } from "./floating/recording-timer";
 import { ActionableTooltipContent, FloatingButton } from "./floating/shared";
 import {
   RecordingIcon,
@@ -22,7 +24,13 @@ export function ListenActionButton({ sessionId }: { sessionId: string }) {
   );
 
   if (loading) {
-    return <StopListeningButton />;
+    return (
+      <div className="flex items-center gap-1.5">
+        <RecordingTimer />
+        <StopListeningButton />
+        <MicDevicePicker compact />
+      </div>
+    );
   }
 
   if (!shouldRender) {
@@ -30,11 +38,15 @@ export function ListenActionButton({ sessionId }: { sessionId: string }) {
   }
 
   return (
-    <StartListeningButton
-      sessionId={sessionId}
-      isDisabled={isDisabled}
-      warningMessage={warningMessage}
-    />
+    <div className="flex items-center gap-1.5">
+      <RecordingTimer />
+      <StartListeningButton
+        sessionId={sessionId}
+        isDisabled={isDisabled}
+        warningMessage={warningMessage}
+      />
+      <MicDevicePicker compact />
+    </div>
   );
 }
 
